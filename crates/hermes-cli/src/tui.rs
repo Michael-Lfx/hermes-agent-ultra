@@ -458,6 +458,10 @@ pub struct TuiState {
     stream_char_count: usize,
     /// Whether first response token has been observed in this cycle.
     saw_first_token: bool,
+    /// Whether the current cycle used fallback/remediation paths.
+    processing_degraded: bool,
+    /// Degraded lifecycle notes captured during current cycle.
+    degraded_notes: Vec<String>,
 }
 
 /// A section of tool output that can be folded/expanded.
@@ -542,6 +546,8 @@ impl Default for TuiState {
             stream_chunk_count: 0,
             stream_char_count: 0,
             saw_first_token: false,
+            processing_degraded: false,
+            degraded_notes: Vec::new(),
         }
     }
 }
@@ -608,6 +614,11 @@ impl TuiState {
         self.stream_chunk_count = 0;
         self.stream_char_count = 0;
         self.saw_first_token = false;
+        self.processing_degraded = false;
+        self.degraded_notes.clear();
+        self.stream_buffer.clear();
+        self.stream_muted = false;
+        self.stream_needs_break = false;
         self.active_tools.clear();
         self.live_thinking.clear();
         self.push_activity(format!("⟳ dispatching request to {model}"));
@@ -617,20 +628,34 @@ impl TuiState {
         if !self.processing {
             return;
         }
+        let resolved_label = if self.processing_degraded && label.starts_with('✔') {
+            "⚠ completed with fallback in"
+        } else {
+            label
+        };
         let elapsed = self
             .processing_started_at
             .map(|t| t.elapsed().as_secs_f64())
             .unwrap_or_default();
         self.push_activity(format!(
             "{} {:.2}s • {} chunks • {} chars",
-            label, elapsed, self.stream_chunk_count, self.stream_char_count
+            resolved_label, elapsed, self.stream_chunk_count, self.stream_char_count
         ));
+        if self.processing_degraded && !self.degraded_notes.is_empty() {
+            self.push_activity(format!(
+                "fallback notes: {}",
+                truncate_chars(&self.degraded_notes.join(" | "), 220)
+            ));
+        }
         self.processing = false;
         self.processing_started_at = None;
         self.last_progress_pulse_at = None;
         self.stream_chunk_count = 0;
         self.stream_char_count = 0;
         self.saw_first_token = false;
+        self.processing_degraded = false;
+        self.degraded_notes.clear();
+        self.jump_to_latest();
     }
 
     fn maybe_emit_progress_pulse(&mut self) {
@@ -1299,6 +1324,7 @@ impl TuiState {
 // ---------------------------------------------------------------------------
 
 const TRANSCRIPT_HARD_WRAP_COLS: u16 = 80;
+const TRANSCRIPT_CONTENT_WRAP_COLS: usize = 76;
 
 fn transcript_wrap_width(viewport_width: u16) -> u16 {
     viewport_width.min(TRANSCRIPT_HARD_WRAP_COLS).max(1)
@@ -1469,6 +1495,17 @@ fn render_live_details(
             ),
             Style::default().fg(colors.accent).bg(colors.background),
         )]));
+        if state.processing_degraded {
+            rows.push(Line::from(vec![Span::styled(
+                format!(
+                    " ⚠ fallback active: {}",
+                    truncate_chars(&state.degraded_notes.join(" | "), 120)
+                ),
+                Style::default()
+                    .fg(colors.status_bar_warn)
+                    .bg(colors.background),
+            )]));
+        }
     }
 
     if !state.active_tools.is_empty() {
@@ -1832,6 +1869,11 @@ fn transcript_fingerprint(messages: &[hermes_core::Message], state: &TuiState, w
     state.stream_buffer.hash(&mut hasher);
     state.show_timestamps.hash(&mut hasher);
     state.view_density.hash(&mut hasher);
+    let mut expanded = state.expanded_tool_cards.iter().collect::<Vec<_>>();
+    expanded.sort();
+    for key in expanded {
+        key.hash(&mut hasher);
+    }
     for msg in messages {
         message_fingerprint(msg).hash(&mut hasher);
     }
@@ -1856,6 +1898,17 @@ fn looks_like_internal_scaffold_line(line: &str) -> bool {
         || trimmed.starts_with("to=memory.")
         || trimmed.starts_with("->functions.")
         || trimmed.contains(" to=functions.")
+        || trimmed.starts_with("<tool_call")
+        || trimmed.starts_with("</tool_call")
+        || trimmed.starts_with("<tool_use")
+        || trimmed.starts_with("</tool_use")
+        || trimmed.starts_with("<name>")
+        || trimmed.starts_with("</name>")
+        || trimmed.starts_with("<arguments>")
+        || trimmed.starts_with("</arguments>")
+        || trimmed.starts_with("<assistant(")
+        || trimmed.starts_with("</assistant(")
+        || trimmed.contains("(INVOKN_RESULT")
 }
 
 fn strict_default_language_output_enabled() -> bool {
@@ -1917,6 +1970,7 @@ fn render_assistant_markdown_lines(
     let mut rendered: Vec<Line<'static>> = Vec::new();
     let mut in_code_block = false;
     let mut code_lang = String::new();
+    let mut hidden_scaffold_lines = 0usize;
     let code_frame_style = Style::default()
         .fg(colors.status_bar_dim)
         .bg(colors.background);
@@ -1950,6 +2004,10 @@ fn render_assistant_markdown_lines(
             continue;
         }
         let raw = normalized.as_str();
+        if looks_like_internal_scaffold_line(raw) {
+            hidden_scaffold_lines = hidden_scaffold_lines.saturating_add(1);
+            continue;
+        }
         let trimmed = raw.trim_start();
         let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
         if is_fence {
@@ -2088,18 +2146,32 @@ fn render_assistant_markdown_lines(
             continue;
         }
 
-        rendered.push(render_inline_with_code(
-            "    ",
-            trimmed,
-            styles.assistant_response,
-            inline_code_style,
-        ));
+        for segment in hard_wrap_segments(trimmed, TRANSCRIPT_CONTENT_WRAP_COLS) {
+            rendered.push(render_inline_with_code(
+                "    ",
+                &segment,
+                styles.assistant_response,
+                inline_code_style,
+            ));
+        }
     }
 
     if in_code_block {
         rendered.push(Line::from(vec![Span::styled(
             "    └─ end code",
             code_frame_style,
+        )]));
+    }
+    if hidden_scaffold_lines > 0 {
+        rendered.push(Line::from(vec![Span::styled(
+            format!(
+                "    [internal orchestration scaffold hidden: {} lines]",
+                hidden_scaffold_lines
+            ),
+            Style::default()
+                .fg(colors.status_bar_dim)
+                .bg(colors.background)
+                .add_modifier(Modifier::ITALIC),
         )]));
     }
     rendered
@@ -2242,10 +2314,9 @@ fn append_transcript_message_lines(
             hermes_core::MessageRole::Tool => {
                 let card_key = format!("tool:{msg_idx}");
                 let expanded = state.expanded_tool_cards.contains(&card_key)
-                    || state.expanded_tool_cards.contains("__all__")
-                    || matches!(state.view_density, ViewDensity::Detailed);
+                    || state.expanded_tool_cards.contains("__all__");
                 let all_lines = format_tool_message_lines(content);
-                let shown = if expanded { 32 } else { 5 };
+                let shown = if expanded { 20 } else { 4 };
                 lines.push(Line::from(vec![Span::styled(
                     format!(
                         "    [tool card: {} | {} lines | Ctrl+E toggles]",
@@ -2257,14 +2328,16 @@ fn append_transcript_message_lines(
                         .bg(colors.background),
                 )]));
                 for line in all_lines.iter().take(shown) {
-                    lines.push(render_inline_with_code(
-                        "    ",
-                        line,
-                        styles.tool_result,
-                        Style::default()
-                            .fg(colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    for segment in hard_wrap_segments(line, TRANSCRIPT_CONTENT_WRAP_COLS) {
+                        lines.push(render_inline_with_code(
+                            "    ",
+                            &segment,
+                            styles.tool_result,
+                            Style::default()
+                                .fg(colors.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
                 }
                 if all_lines.len() > shown {
                     lines.push(Line::from(vec![Span::styled(
@@ -2277,14 +2350,16 @@ fn append_transcript_message_lines(
             }
             _ => {
                 for line in content.lines() {
-                    lines.push(render_inline_with_code(
-                        "    ",
-                        line,
-                        body_style,
-                        Style::default()
-                            .fg(colors.accent)
-                            .add_modifier(Modifier::BOLD),
-                    ));
+                    for segment in hard_wrap_segments(line, TRANSCRIPT_CONTENT_WRAP_COLS) {
+                        lines.push(render_inline_with_code(
+                            "    ",
+                            &segment,
+                            body_style,
+                            Style::default()
+                                .fg(colors.accent)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    }
                 }
             }
         }
@@ -2426,7 +2501,7 @@ fn build_transcript_lines(
             " ║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗███████║           ║",
             " ║   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝           ║",
             " ║                                                                  ║",
-            " ║        AGENT ULTRA • RETRO NEON OPS • READY FOR EXECUTION       ║",
+            " ║              AGENT ULTRA • READY FOR EXECUTION                  ║",
             " ║                                                                  ║",
             " ╚══════════════════════════════════════════════════════════════════╝",
         ];
@@ -3182,6 +3257,31 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn hard_wrap_segments(text: &str, max_chars: usize) -> Vec<String> {
+    let width = max_chars.max(1);
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut count = 0usize;
+    for ch in text.chars() {
+        current.push(ch);
+        count += 1;
+        if count >= width {
+            segments.push(std::mem::take(&mut current));
+            count = 0;
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current);
+    }
+    if segments.is_empty() {
+        segments.push(String::new());
+    }
+    segments
+}
+
 fn fuzzy_subsequence_score(needle: &str, haystack: &str) -> i32 {
     if needle.is_empty() || haystack.is_empty() {
         return 0;
@@ -3876,6 +3976,20 @@ fn process_stream_lane_event(app: &mut App, state: &mut TuiState, event: Event) 
                                     .trim();
                                 if !message.is_empty() {
                                     state.push_activity(format!("⟡ {}", message));
+                                    let lower = message.to_ascii_lowercase();
+                                    if lower.contains("mismatch")
+                                        || lower.contains("remediation")
+                                        || lower.contains("auto-refresh")
+                                        || lower.contains("retrying")
+                                        || lower.contains("fallback")
+                                    {
+                                        state.processing_degraded = true;
+                                        state.degraded_notes.push(truncate_chars(message, 120));
+                                        if state.degraded_notes.len() > 4 {
+                                            let drop_count = state.degraded_notes.len() - 4;
+                                            state.degraded_notes.drain(0..drop_count);
+                                        }
+                                    }
                                 }
                             }
                             "thinking" => {
@@ -4783,6 +4897,22 @@ mod tests {
     }
 
     #[test]
+    fn test_transcript_fingerprint_tracks_toolcard_expand_state() {
+        let messages = vec![Message::tool_result("call-1", "{}")];
+        let mut state_a = TuiState::default();
+        let mut state_b = TuiState::default();
+        state_b.expanded_tool_cards.insert("__all__".to_string());
+
+        let fp_a = transcript_fingerprint(&messages, &state_a, 80);
+        let fp_b = transcript_fingerprint(&messages, &state_b, 80);
+        assert_ne!(fp_a, fp_b);
+
+        // keep borrow-checker happy and ensure states are still usable
+        state_a.stream_buffer.clear();
+        state_b.stream_buffer.clear();
+    }
+
+    #[test]
     fn test_default_language_sanitizer_strips_non_ascii() {
         let raw = "to=functions.memory 大安快些 json ... But I can in one message as seen in logs.";
         let sanitized = sanitize_line_to_default_language_ascii(raw, true).expect("sanitized");
@@ -4804,7 +4934,7 @@ mod tests {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("to=functions.memory"));
+        assert!(joined.contains("internal orchestration scaffold hidden"));
         assert!(!joined.contains('天'));
         assert!(!joined.contains('大'));
         assert!(joined.contains("regular line"));
