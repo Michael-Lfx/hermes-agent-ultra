@@ -147,6 +147,11 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/graph", "Show graph-memory/context status"),
     ("/image", "Attach an image path for next prompt"),
     ("/config", "Show or modify configuration"),
+    (
+        "/autocompact",
+        "Show auto-compaction status (`/autocompact status|now`)",
+    ),
+    ("/autocompress", "Alias for /autocompact"),
     ("/compress", "Trigger context compression"),
     ("/compact", "Alias for /compress"),
     ("/clear-queue", "Clear queued background jobs"),
@@ -2883,6 +2888,7 @@ fn canonical_command(cmd: &str) -> &str {
         "/q" => "/queue",
         "/goal" => "/objective",
         "/question" => "/ask",
+        "/autocompress" => "/autocompact",
         "/skins" => "/skin",
         "/sb" => "/statusbar",
         "/exit" => "/quit",
@@ -2950,6 +2956,7 @@ pub async fn handle_slash_command(
             handle_capability_surface_command(app, canonical_command(cmd), args)
         }
         "/config" => handle_config_command(app, args),
+        "/autocompact" => handle_autocompact_command(app, args),
         "/compress" => handle_compress_command(app),
         "/clear-queue" => handle_clear_queue_command(app),
         "/usage" => handle_usage_command(app),
@@ -4077,6 +4084,45 @@ fn handle_compress_command(app: &mut App) -> Result<CommandResult, AgentError> {
         ),
     );
     Ok(CommandResult::Handled)
+}
+
+fn handle_autocompact_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+    let action = args
+        .first()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .unwrap_or_else(|| "status".to_string());
+    match action.as_str() {
+        "status" | "show" => {
+            emit_command_output(
+                app,
+                "Auto-compaction: enabled.\n\
+                 Trigger policy: when context exceeds 80% of budget.\n\
+                 Runs: once before first LLM call and after each turn.\n\
+                 Manual override: `/autocompact now` or `/compress`.",
+            );
+            Ok(CommandResult::Handled)
+        }
+        "now" | "run" => handle_compress_command(app),
+        "help" => {
+            emit_command_output(
+                app,
+                "Usage: `/autocompact [status|now]`\n\
+                 - `status`: show current auto-compaction behavior\n\
+                 - `now`: run immediate compaction pass",
+            );
+            Ok(CommandResult::Handled)
+        }
+        other => {
+            emit_command_output(
+                app,
+                format!(
+                    "Unknown /autocompact action '{}'. Use `status`, `now`, or `help`.",
+                    other
+                ),
+            );
+            Ok(CommandResult::Handled)
+        }
+    }
 }
 
 fn handle_usage_command(app: &mut App) -> Result<CommandResult, AgentError> {
