@@ -24,7 +24,7 @@ use hermes_agent::sub_agent_orchestrator::SubAgentOrchestrator;
 use hermes_agent::{
     AgentCallbacks, AgentConfig, AgentLoop, InterruptController, SessionPersistence,
 };
-use hermes_config::{cron_dir, hermes_home as hermes_home_dir, load_config, GatewayConfig};
+use hermes_config::{hermes_home as hermes_home_dir, load_config, state_dir, GatewayConfig};
 use hermes_core::ToolSchema;
 use hermes_core::{AgentError, LlmProvider};
 use hermes_cron::cron_scheduler_for_data_dir;
@@ -121,6 +121,9 @@ impl PetSettings {
 
 /// Top-level application state for an interactive Hermes session.
 pub struct App {
+    /// Resolved Hermes state root (respects `-C/--config-dir`).
+    pub state_root: PathBuf,
+
     /// Loaded gateway configuration.
     pub config: Arc<GatewayConfig>,
 
@@ -178,6 +181,7 @@ pub struct App {
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
+            .field("state_root", &self.state_root)
             .field("session_id", &self.session_id)
             .field("running", &self.running)
             .field("current_model", &self.current_model)
@@ -441,6 +445,7 @@ impl App {
     /// registry with the configured tools, constructs an LLM provider,
     /// and initializes the agent loop.
     pub async fn new(cli: Cli) -> Result<Self, AgentError> {
+        let state_root = state_dir(cli.config_dir.as_deref().map(std::path::Path::new));
         let config = load_config(cli.config_dir.as_deref())
             .map_err(|e| AgentError::Config(e.to_string()))?;
 
@@ -501,7 +506,7 @@ impl App {
             Arc::new(SkillManager::new(skill_store));
         hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
         wire_stdio_clarify_backend(&tool_registry);
-        let cron_data_dir = cron_dir();
+        let cron_data_dir = state_root.join("cron");
         std::fs::create_dir_all(&cron_data_dir)
             .map_err(|e| AgentError::Io(format!("cron dir {}: {}", cron_data_dir.display(), e)))?;
         let cron_scheduler = Arc::new(cron_scheduler_for_data_dir(cron_data_dir));
@@ -520,8 +525,10 @@ impl App {
 
         let agent_inner = AgentLoop::new(agent_config, agent_tool_registry, provider)
             .with_callbacks(Self::stream_callbacks(stream_handle_shared.clone()));
-        let hermes_home = hermes_home_dir();
-        let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(&agent_inner, hermes_home));
+        let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(
+            &agent_inner,
+            state_root.clone(),
+        ));
         let agent = Arc::new(agent_inner.with_sub_agent_orchestrator(orchestrator));
 
         let recovered_background_jobs = recover_queued_background_jobs(8);
@@ -533,6 +540,7 @@ impl App {
         }
 
         Ok(Self {
+            state_root,
             config: Arc::new(config),
             agent,
             tool_registry,
@@ -787,8 +795,10 @@ impl App {
 
         let agent_inner = AgentLoop::new(agent_config, agent_tool_registry, provider)
             .with_callbacks(Self::stream_callbacks(self.stream_handle_shared.clone()));
-        let hermes_home = hermes_home_dir();
-        let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(&agent_inner, hermes_home));
+        let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(
+            &agent_inner,
+            self.state_root.clone(),
+        ));
         self.agent = Arc::new(agent_inner.with_sub_agent_orchestrator(orchestrator));
 
         tracing::info!("Switched model to: {}", provider_model);
@@ -1024,7 +1034,7 @@ impl App {
         }
     }
 
-    /// Persist a JSON session snapshot to `~/.hermes-agent-ultra/sessions`.
+    /// Persist a JSON session snapshot to `<state_root>/sessions`.
     ///
     /// When `name_override` is provided, that value is used as the file stem.
     /// Otherwise the active `session_id` is used.
@@ -1032,7 +1042,7 @@ impl App {
         &self,
         name_override: Option<&str>,
     ) -> Result<PathBuf, AgentError> {
-        let sessions_dir = hermes_home_dir().join("sessions");
+        let sessions_dir = self.state_root.join("sessions");
         std::fs::create_dir_all(&sessions_dir).map_err(|e| {
             AgentError::Io(format!(
                 "Failed to create sessions dir {}: {}",
@@ -1219,6 +1229,7 @@ mod tests {
         let agent = Arc::new(agent_inner.with_sub_agent_orchestrator(orchestrator));
 
         App {
+            state_root: hermes_home_dir(),
             config,
             agent,
             tool_registry,
@@ -1297,6 +1308,25 @@ mod tests {
             Some(val) => std::env::set_var("HERMES_HOME", val),
             None => std::env::remove_var("HERMES_HOME"),
         }
+    }
+
+    #[test]
+    fn test_persist_session_snapshot_respects_app_state_root() {
+        let _guard = env_test_lock();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = build_minimal_test_app();
+        app.state_root = tmp.path().join("custom-state-root");
+        app.session_id = "state-root-test".to_string();
+        app.messages = vec![hermes_core::Message::user("ping")];
+
+        let path = app
+            .persist_session_snapshot(None)
+            .expect("persist session snapshot");
+        assert_eq!(
+            path,
+            app.state_root.join("sessions").join("state-root-test.json")
+        );
+        assert!(path.exists());
     }
 
     #[test]

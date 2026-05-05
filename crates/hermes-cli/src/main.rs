@@ -777,8 +777,13 @@ async fn run_model(cli: Cli, provider_model: Option<String>) -> Result<(), Agent
     match provider_model {
         Some(pm) => {
             let normalized = normalize_provider_model(&pm)?;
+            let cfg_path = hermes_state_root(&cli).join("config.yaml");
+            let mut disk =
+                load_user_config_file(&cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
+            disk.model = Some(normalized.clone());
+            save_config_yaml(&cfg_path, &disk).map_err(|e| AgentError::Config(e.to_string()))?;
             println!("Model switched to: {}", normalized);
-            println!("(To persist, run: hermes config set model {})", normalized);
+            println!("Persisted default model in {}.", cfg_path.display());
         }
         None => {
             let current = config.model.as_deref().unwrap_or("gpt-4o");
@@ -12570,6 +12575,21 @@ mod tests {
             DmManager::with_pair_behavior(),
             hermes_gateway::gateway::GatewayConfig::default(),
         ))
+    }
+
+    #[tokio::test]
+    async fn run_model_persists_default_model_to_config_yaml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = cli_for_temp_state_root(tmp.path());
+        run_model(
+            cli.clone(),
+            Some("nous:nousresearch/hermes-4-70b".to_string()),
+        )
+        .await
+        .expect("run model");
+
+        let cfg = load_user_config_file(&tmp.path().join("config.yaml")).expect("load config");
+        assert_eq!(cfg.model.as_deref(), Some("nous:nousresearch/hermes-4-70b"));
     }
 
     #[test]

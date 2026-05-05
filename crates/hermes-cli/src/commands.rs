@@ -3485,6 +3485,26 @@ fn run_model_picker_select(
     }
 }
 
+fn persist_current_model_selection(app: &App) -> Result<PathBuf, AgentError> {
+    let cfg_path = app.state_root.join("config.yaml");
+    let mut disk = hermes_config::load_user_config_file(&cfg_path)
+        .map_err(|e| AgentError::Config(e.to_string()))?;
+    disk.model = Some(app.current_model.clone());
+    hermes_config::save_config_yaml(&cfg_path, &disk)
+        .map_err(|e| AgentError::Config(e.to_string()))?;
+    Ok(cfg_path)
+}
+
+fn format_model_persistence_note(app: &App) -> String {
+    match persist_current_model_selection(app) {
+        Ok(path) => format!("Persisted default model in {}.", path.display()),
+        Err(err) => format!(
+            "Warning: switched for this session, but failed to persist default model: {}",
+            err
+        ),
+    }
+}
+
 async fn pick_model_for_provider(
     app: &mut App,
     provider: &str,
@@ -3549,6 +3569,8 @@ async fn pick_model_for_provider(
         msg.push_str("\n");
         msg.push_str(&n);
     }
+    msg.push_str("\n");
+    msg.push_str(&format_model_persistence_note(app));
     emit_command_output(app, msg);
     Ok(true)
 }
@@ -3610,6 +3632,8 @@ async fn handle_model_command(app: &mut App, args: &[&str]) -> Result<CommandRes
                     requirements.summary()
                 ));
             }
+            msg.push_str("\n");
+            msg.push_str(&format_model_persistence_note(app));
             emit_command_output(app, msg);
         }
         ModelSwitchRequest::PickModelFromProvider(provider) => {
