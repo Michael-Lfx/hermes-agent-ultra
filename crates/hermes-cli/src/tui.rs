@@ -107,6 +107,7 @@ enum PickerKind {
     ModelForProvider { provider: String },
     Personality,
     Skin,
+    InteractiveQuestion { prompt: String },
 }
 
 #[derive(Debug, Clone)]
@@ -721,6 +722,7 @@ impl TuiState {
         let Some(modal) = self.modal.as_mut() else {
             return ModalAction::None;
         };
+        let is_interactive_question = matches!(modal.kind, PickerKind::InteractiveQuestion { .. });
         match key.code {
             KeyCode::Esc => ModalAction::Close,
             KeyCode::Enter => ModalAction::Confirm,
@@ -754,12 +756,14 @@ impl TuiState {
                 modal.toggle_selected();
                 ModalAction::None
             }
-            KeyCode::Backspace => {
+            KeyCode::Backspace if !is_interactive_question => {
                 modal.query.pop();
                 modal.refresh_filter();
                 ModalAction::None
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && !is_interactive_question =>
+            {
                 modal.query.clear();
                 modal.refresh_filter();
                 ModalAction::None
@@ -789,7 +793,8 @@ impl TuiState {
                 }
             }
             KeyCode::Char(ch)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                if (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT)
+                    && !is_interactive_question =>
             {
                 modal.query.push(ch);
                 modal.refresh_filter();
@@ -2889,14 +2894,19 @@ fn render_picker_modal(
         rows_area,
     );
 
-    let query_line = format!(
-        "Search: {}",
-        if modal.query.is_empty() {
-            "(type to filter)"
-        } else {
-            modal.query.as_str()
+    let query_line = match &modal.kind {
+        PickerKind::InteractiveQuestion { prompt } => {
+            format!("Question: {}", truncate_chars(prompt, 200))
         }
-    );
+        _ => format!(
+            "Search: {}",
+            if modal.query.is_empty() {
+                "(type to filter)"
+            } else {
+                modal.query.as_str()
+            }
+        ),
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
             truncate_chars(&query_line, query_area.width as usize),
@@ -2908,7 +2918,9 @@ fn render_picker_modal(
         query_area,
     );
 
-    let footer = if modal.allow_multi {
+    let footer = if matches!(modal.kind, PickerKind::InteractiveQuestion { .. }) {
+        "↑↓ choose • Enter insert answer • Esc close"
+    } else if modal.allow_multi {
         "↑↓ move • PgUp/PgDn page • Space toggle • Enter confirm • Esc close"
     } else if matches!(modal.kind, PickerKind::ModelProvider) {
         "↑↓ move • 1-9/0 quick-pick • d disconnect • Enter select • Esc close"
@@ -3284,6 +3296,132 @@ fn parse_slash_parts(input: &str) -> Option<(String, Vec<String>)> {
     Some((cmd, args))
 }
 
+#[derive(Debug, Clone)]
+struct InteractiveQuestionRequest {
+    prompt: String,
+    options: Vec<PickerItem>,
+}
+
+fn strip_question_option_marker(line: &str) -> String {
+    let trimmed = line.trim();
+    if let Some(body) = trimmed.strip_prefix("- ") {
+        return body.trim().to_string();
+    }
+    if let Some(body) = trimmed.strip_prefix("* ") {
+        return body.trim().to_string();
+    }
+    if let Some(body) = trimmed.strip_prefix("+ ") {
+        return body.trim().to_string();
+    }
+    if let Some((_marker, body)) = parse_markdown_numbered_marker(trimmed) {
+        return body.trim().to_string();
+    }
+    trimmed.to_string()
+}
+
+fn parse_question_option(value: &str) -> PickerItem {
+    let raw = value.trim();
+    if let Some((label, detail)) = raw.split_once("::") {
+        return PickerItem {
+            label: label.trim().to_string(),
+            detail: detail.trim().to_string(),
+            value: label.trim().to_string(),
+        };
+    }
+    PickerItem {
+        label: raw.to_string(),
+        detail: String::new(),
+        value: raw.to_string(),
+    }
+}
+
+fn parse_interactive_question_request(input: &str) -> Result<InteractiveQuestionRequest, String> {
+    let trimmed = input.trim();
+    if !(trimmed.starts_with("/ask") || trimmed.starts_with("/question")) {
+        return Err("not an interactive question command".to_string());
+    }
+    let cmd = trimmed
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| "missing command".to_string())?;
+    let rest = trimmed.strip_prefix(cmd).unwrap_or("").trim();
+    if rest.is_empty() || rest.eq_ignore_ascii_case("help") {
+        return Err("Usage: `/ask <question> | <option 1> | <option 2> [| <option 3> ...]`\nAlternative multiline format:\n`/ask\\n<question>\\n- <option 1>\\n- <option 2>`".to_string());
+    }
+
+    if rest.eq_ignore_ascii_case("demo") {
+        return Ok(InteractiveQuestionRequest {
+            prompt: "How should we proceed?".to_string(),
+            options: vec![
+                PickerItem {
+                    label: "Continue implementation (Recommended)".to_string(),
+                    detail: "Keep shipping patches now.".to_string(),
+                    value: "Continue implementation".to_string(),
+                },
+                PickerItem {
+                    label: "Pause for diagnosis".to_string(),
+                    detail: "Inspect logs and root-cause first.".to_string(),
+                    value: "Pause for diagnosis".to_string(),
+                },
+                PickerItem {
+                    label: "Switch model/provider".to_string(),
+                    detail: "Try a different runtime profile.".to_string(),
+                    value: "Switch model/provider".to_string(),
+                },
+            ],
+        });
+    }
+
+    let mut prompt = String::new();
+    let mut raw_options: Vec<String> = Vec::new();
+    if rest.contains('|') {
+        let pieces: Vec<String> = rest
+            .split('|')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if let Some(first) = pieces.first() {
+            prompt = first.clone();
+        }
+        for piece in pieces.iter().skip(1) {
+            raw_options.push(strip_question_option_marker(piece));
+        }
+    } else {
+        let lines: Vec<String> = rest
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(ToString::to_string)
+            .collect();
+        if let Some(first) = lines.first() {
+            prompt = first.clone();
+        }
+        for line in lines.iter().skip(1) {
+            raw_options.push(strip_question_option_marker(line));
+        }
+    }
+
+    raw_options.retain(|o| !o.trim().is_empty());
+    if prompt.trim().is_empty() {
+        return Err("Question prompt is empty. Provide a question before the options.".to_string());
+    }
+    if raw_options.len() < 2 {
+        return Err(
+            "Provide at least 2 options. Example: `/ask Pick mode | safe | fast`".to_string(),
+        );
+    }
+    if raw_options.len() > 12 {
+        raw_options.truncate(12);
+    }
+    let options = raw_options
+        .iter()
+        .map(|value| parse_question_option(value))
+        .collect();
+
+    Ok(InteractiveQuestionRequest { prompt, options })
+}
+
 fn provider_env_key_hints(provider: &str) -> &'static [&'static str] {
     match provider.trim().to_ascii_lowercase().as_str() {
         "openai" => &["HERMES_OPENAI_API_KEY", "OPENAI_API_KEY"],
@@ -3504,6 +3642,19 @@ fn open_skin_modal(state: &mut TuiState) {
     state.open_modal(modal);
 }
 
+fn open_interactive_question_modal(state: &mut TuiState, request: InteractiveQuestionRequest) {
+    let mut modal = PickerModal::new(
+        PickerKind::InteractiveQuestion {
+            prompt: request.prompt,
+        },
+        "Interactive Question",
+        request.options,
+    );
+    modal.page_size = 8;
+    modal.refresh_filter();
+    state.open_modal(modal);
+}
+
 async fn process_modal_disconnect(state: &mut TuiState, app: &mut App) -> Result<(), AgentError> {
     let Some(modal) = state.modal.clone() else {
         return Ok(());
@@ -3576,6 +3727,14 @@ async fn process_modal_confirm(state: &mut TuiState, app: &mut App) -> Result<()
             app.push_ui_assistant(format!("Switched skin to `{}`.", skin));
             state.close_modal();
             state.status_message = format!("Skin: {}", skin);
+        }
+        PickerKind::InteractiveQuestion { prompt } => {
+            let chosen = item.value.trim().to_string();
+            state.input = format!("{prompt}\nAnswer: {chosen}");
+            state.cursor_position = state.input.len();
+            state.close_modal();
+            state.status_message = "Interactive answer inserted. Press Enter to send.".to_string();
+            state.refresh_completions();
         }
     }
     Ok(())
@@ -3904,7 +4063,24 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                             if !input.is_empty() {
                                 let mut handled_by_tui = false;
                                 if let Some((cmd, args)) = parse_slash_parts(&input) {
-                                    if cmd.eq_ignore_ascii_case("/model") {
+                                    if cmd.eq_ignore_ascii_case("/ask")
+                                        || cmd.eq_ignore_ascii_case("/question")
+                                    {
+                                        match parse_interactive_question_request(&input) {
+                                            Ok(request) => {
+                                                open_interactive_question_modal(
+                                                    &mut state,
+                                                    request,
+                                                );
+                                                state.status_message = "Interactive question ready. Choose an answer.".to_string();
+                                            }
+                                            Err(message) => {
+                                                state.status_message = message.clone();
+                                                app.push_ui_assistant(message);
+                                            }
+                                        }
+                                        handled_by_tui = true;
+                                    } else if cmd.eq_ignore_ascii_case("/model") {
                                         if args.is_empty() || (args.len() == 1 && args[0].eq_ignore_ascii_case("list")) {
                                             open_model_provider_modal(&mut state, &app).await;
                                             state.status_message = "Choose provider, then model".to_string();
@@ -4415,6 +4591,37 @@ mod tests {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let plain_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
         assert!(is_submit_shortcut(&plain_enter, "/model\nlist"));
+    }
+
+    #[test]
+    fn test_parse_interactive_question_request_pipe_syntax() {
+        let request = parse_interactive_question_request(
+            "/ask Proceed with deploy? | yes (recommended)::ship now | no::pause and inspect",
+        )
+        .expect("parse request");
+        assert_eq!(request.prompt, "Proceed with deploy?");
+        assert_eq!(request.options.len(), 2);
+        assert_eq!(request.options[0].label, "yes (recommended)");
+        assert_eq!(request.options[0].detail, "ship now");
+        assert_eq!(request.options[1].label, "no");
+    }
+
+    #[test]
+    fn test_parse_interactive_question_request_multiline_syntax() {
+        let request = parse_interactive_question_request(
+            "/question\nWhat path should we take?\n- continue implementation\n- pause for diagnosis",
+        )
+        .expect("parse request");
+        assert_eq!(request.prompt, "What path should we take?");
+        assert_eq!(request.options.len(), 2);
+        assert_eq!(request.options[0].label, "continue implementation");
+    }
+
+    #[test]
+    fn test_parse_interactive_question_request_requires_two_options() {
+        let err = parse_interactive_question_request("/ask choose one | only-one-option")
+            .expect_err("expected parse error");
+        assert!(err.contains("at least 2 options"));
     }
 
     #[test]

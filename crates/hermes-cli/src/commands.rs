@@ -135,6 +135,11 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
         "Set/show/clear a durable session objective injected as system context",
     ),
     ("/goal", "Alias for /objective"),
+    (
+        "/ask",
+        "Open interactive question picker (`/ask <question> | <option 1> | <option 2> ...`)",
+    ),
+    ("/question", "Alias for /ask"),
     ("/steer", "Inject non-interrupt steering instruction"),
     ("/btw", "Run an ephemeral side-question"),
     ("/plan", "Show planning helper status"),
@@ -2877,6 +2882,7 @@ fn canonical_command(cmd: &str) -> &str {
         "/set-home" => "/sethome",
         "/q" => "/queue",
         "/goal" => "/objective",
+        "/question" => "/ask",
         "/skins" => "/skin",
         "/sb" => "/statusbar",
         "/exit" => "/quit",
@@ -2922,6 +2928,7 @@ pub async fn handle_slash_command(
         | "/sethome" => handle_session_compat_command(app, canonical_command(cmd), args),
         "/evolve" => handle_ops_evolve_command(app, args).await,
         "/objective" => handle_objective_command(app, args),
+        "/ask" => handle_interactive_question_command(app, args),
         "/model" => handle_model_command(app, args).await,
         "/provider" => handle_provider_command(app).await,
         "/personality" => handle_personality_command(app, args),
@@ -6766,6 +6773,29 @@ fn handle_objective_command(app: &mut App, args: &[&str]) -> Result<CommandResul
             "Session objective set:\n{}\n\nThis objective is now injected as system context for future turns.",
             objective
         ),
+    );
+    Ok(CommandResult::Handled)
+}
+
+fn handle_interactive_question_command(
+    app: &mut App,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
+    if args.is_empty() {
+        emit_command_output(
+            app,
+            "Interactive question picker:\n\
+             Usage: `/ask <question> | <option 1> | <option 2> [| <option 3> ...]`\n\
+             Example: `/ask Proceed with deploy? | yes (recommended)::deploy now | no::pause and inspect logs`\n\
+             In TUI mode this opens a native selection UI.\n\
+             In non-TUI mode, provide your answer inline as normal text.",
+        );
+        return Ok(CommandResult::Handled);
+    }
+
+    emit_command_output(
+        app,
+        "Interactive picker is available in TUI mode. Launch `hermes-ultra` and run `/ask ...` there.",
     );
     Ok(CommandResult::Handled)
 }
