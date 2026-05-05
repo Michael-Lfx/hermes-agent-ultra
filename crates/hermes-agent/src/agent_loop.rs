@@ -226,6 +226,7 @@ const OBJECTIVE_DEEP_AUDIT_MAX_RETRIES: u32 = 4;
 const OBJECTIVE_DEEP_AUDIT_MIN_PATCH_ITEMS: usize = 2;
 const OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_FILES: usize = 5;
 const OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_COMMANDS: usize = 3;
+const OBJECTIVE_DEEP_AUDIT_MIN_WORKSTREAMS: usize = 3;
 
 // Python `AIAgent._MEMORY_REVIEW_PROMPT` / `_SKILL_REVIEW_PROMPT` / `_COMBINED_REVIEW_PROMPT` (v2026.4.13)
 const MEMORY_REVIEW_PROMPT: &str = "Review the conversation above and consider saving to memory if appropriate.\n\n\
@@ -6847,7 +6848,7 @@ fn objective_mode_system_hint(messages: &[Message]) -> Option<String> {
     };
     let deep_audit_line = if deep_audit_required {
         format!(
-            "3) {OBJECTIVE_DEEP_AUDIT_TAG} include `scope_complete=true|false`, at least {OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_FILES} unique `file=<path>` lines, at least {OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_COMMANDS} unique `cmd=<command>` lines, and explicit `unknowns=` + `blockers=` fields."
+            "3) {OBJECTIVE_DEEP_AUDIT_TAG} include `scope_complete=true|false`, at least {OBJECTIVE_DEEP_AUDIT_MIN_WORKSTREAMS} `workstream=<name> status=<complete|blocked|unproven> evidence(file=...|cmd=...)` lines, plus breadth evidence (>= {OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_FILES} unique files and >= {OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_COMMANDS} unique commands), and explicit `unknowns=` + `blockers=` fields."
         )
     } else {
         String::new()
@@ -6897,6 +6898,49 @@ fn unique_values_for_markers(section: &str, markers: &[&str]) -> HashSet<String>
     values
 }
 
+fn deep_audit_workstream_lines(section: &str) -> Vec<String> {
+    section
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.contains("workstream=")
+                || line.contains("workstream:")
+                || line.contains("stream=")
+                || line.contains("stream:")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+fn workstream_line_has_terminal_status(line: &str) -> bool {
+    line.contains("status=complete")
+        || line.contains("status: complete")
+        || line.contains("status=done")
+        || line.contains("status: done")
+        || line.contains("status=blocked")
+        || line.contains("status: blocked")
+        || line.contains("status=unproven")
+        || line.contains("status: unproven")
+}
+
+fn workstream_line_is_complete(line: &str) -> bool {
+    line.contains("status=complete")
+        || line.contains("status: complete")
+        || line.contains("status=done")
+        || line.contains("status: done")
+}
+
+fn workstream_line_has_evidence(line: &str) -> bool {
+    line.contains("file=")
+        || line.contains("file:")
+        || line.contains("path=")
+        || line.contains("path:")
+        || line.contains("cmd=")
+        || line.contains("cmd:")
+        || line.contains("command=")
+        || line.contains("command:")
+}
+
 fn deep_audit_verified_patch_items(lower: &str) -> usize {
     let path_hits = ["path=", "path:"]
         .iter()
@@ -6926,6 +6970,32 @@ fn objective_deep_audit_satisfied(lower: &str) -> bool {
         return false;
     }
     let section = section_after_tag(lower, OBJECTIVE_DEEP_AUDIT_TAG).unwrap_or_default();
+
+    let workstream_lines = deep_audit_workstream_lines(section);
+    if workstream_lines.len() < OBJECTIVE_DEEP_AUDIT_MIN_WORKSTREAMS {
+        return false;
+    }
+    if workstream_lines.iter().any(|line| {
+        !workstream_line_has_terminal_status(line) || !workstream_line_has_evidence(line)
+    }) {
+        return false;
+    }
+
+    let scope_complete_true =
+        lower.contains("scope_complete=true") || lower.contains("scope_complete: true");
+    let scope_complete_false =
+        lower.contains("scope_complete=false") || lower.contains("scope_complete: false");
+    if !(scope_complete_true || scope_complete_false) {
+        return false;
+    }
+    if scope_complete_true
+        && workstream_lines
+            .iter()
+            .any(|line| !workstream_line_is_complete(line))
+    {
+        return false;
+    }
+
     let unique_files = unique_values_for_markers(section, &["file=", "file:", "path=", "path:"]);
     if unique_files.len() < OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_FILES {
         return false;
@@ -6935,13 +7005,9 @@ fn objective_deep_audit_satisfied(lower: &str) -> bool {
     if unique_commands.len() < OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_COMMANDS {
         return false;
     }
-    let has_scope_field = lower.contains("scope_complete=true")
-        || lower.contains("scope_complete=false")
-        || lower.contains("scope_complete: true")
-        || lower.contains("scope_complete: false");
     let has_unknowns_field = lower.contains("unknowns=") || lower.contains("unknowns:");
     let has_blockers_field = lower.contains("blockers=") || lower.contains("blockers:");
-    has_scope_field && has_unknowns_field && has_blockers_field
+    has_unknowns_field && has_blockers_field
 }
 
 fn objective_guard_satisfied(
@@ -6984,6 +7050,8 @@ fn objective_guard_retry_prompt(requires_analytics: bool, deep_audit_required: b
         format!(
             "{OBJECTIVE_DEEP_AUDIT_TAG}\n\
              - scope_complete=true|false\n\
+             - workstream=<name> status=<complete|blocked|unproven> evidence(file=<path>|cmd=<command>)\n\
+             - add at least {OBJECTIVE_DEEP_AUDIT_MIN_WORKSTREAMS} workstream lines\n\
              - file=<verified_path_1>\n\
              - file=<verified_path_2> ... (at least {OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_FILES} unique file lines)\n\
              - cmd=<command_1>\n\
@@ -11009,7 +11077,7 @@ mod tests {
         let numeric_only = "PATCH_VERIFIED:\n- path=/tmp/a.rs exists_now=true\n- path=/tmp/b.rs exists_now=true\nANALYTICS_VERIFIED:\n- objective_state=flat metric=+0.00 SOL\nDEEP_AUDIT_VERIFIED:\n- scope_complete=true\n- verified_files=8\n- commands_run=5\n- unknowns=1\n- blockers=none";
         assert!(!objective_guard_satisfied(numeric_only, true, true));
 
-        let deep = "PATCH_VERIFIED:\n- path=/tmp/a.rs exists_now=true\n- path=/tmp/b.rs exists_now=true\nANALYTICS_VERIFIED:\n- objective_state=flat metric=+0.00 SOL\nDEEP_AUDIT_VERIFIED:\n- scope_complete=true\n- file=/tmp/a.rs\n- file=/tmp/b.rs\n- file=/tmp/c.rs\n- file=/tmp/d.rs\n- file=/tmp/e.rs\n- cmd=rg -n objective src\n- cmd=sed -n 1,220p src/main.rs\n- cmd=cargo test -p hermes-agent objective_guard\n- unknowns=1\n- blockers=none";
+        let deep = "PATCH_VERIFIED:\n- path=/tmp/a.rs exists_now=true\n- path=/tmp/b.rs exists_now=true\nANALYTICS_VERIFIED:\n- objective_state=flat metric=+0.00 SOL\nDEEP_AUDIT_VERIFIED:\n- scope_complete=true\n- workstream=ingestion status=complete evidence(file=/tmp/a.rs cmd=rg -n ingest src)\n- workstream=strategy status=complete evidence(file=/tmp/b.rs cmd=sed -n 1,220p src/strategy.rs)\n- workstream=execution status=complete evidence(file=/tmp/c.rs cmd=cargo test -p hermes-agent objective_guard)\n- file=/tmp/a.rs\n- file=/tmp/b.rs\n- file=/tmp/c.rs\n- file=/tmp/d.rs\n- file=/tmp/e.rs\n- cmd=rg -n objective src\n- cmd=sed -n 1,220p src/main.rs\n- cmd=cargo test -p hermes-agent objective_guard\n- unknowns=1\n- blockers=none";
         assert!(objective_guard_satisfied(deep, true, true));
     }
 
@@ -11019,6 +11087,13 @@ mod tests {
         assert!(prompt.contains(OBJECTIVE_DEEP_AUDIT_TAG));
         assert!(prompt.contains("file=<verified_path_1>"));
         assert!(prompt.contains("cmd=<command_1>"));
+        assert!(prompt.contains("workstream=<name> status=<complete|blocked|unproven>"));
+    }
+
+    #[test]
+    fn test_deep_objective_scope_complete_rejects_non_complete_streams() {
+        let text = "PATCH_VERIFIED:\n- path=/tmp/a.rs exists_now=true\n- path=/tmp/b.rs exists_now=true\nANALYTICS_VERIFIED:\n- objective_state=flat metric=+0.00 SOL\nDEEP_AUDIT_VERIFIED:\n- scope_complete=true\n- workstream=ingestion status=complete evidence(file=/tmp/a.rs cmd=rg -n ingest src)\n- workstream=strategy status=blocked evidence(file=/tmp/b.rs cmd=rg -n strategy src)\n- workstream=execution status=complete evidence(file=/tmp/c.rs cmd=cargo test)\n- file=/tmp/a.rs\n- file=/tmp/b.rs\n- file=/tmp/c.rs\n- file=/tmp/d.rs\n- file=/tmp/e.rs\n- cmd=rg -n objective src\n- cmd=sed -n 1,220p src/main.rs\n- cmd=cargo test -p hermes-agent objective_guard\n- unknowns=1\n- blockers=rpc unavailable";
+        assert!(!objective_guard_satisfied(text, true, true));
     }
 
     #[test]
