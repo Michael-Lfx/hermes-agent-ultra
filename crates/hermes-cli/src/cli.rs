@@ -296,7 +296,7 @@ pub enum CliCommand {
 
     /// Authentication management.
     Auth {
-        /// Action: "login", "logout", "status", "add", "list", "remove", or "reset".
+        /// Action: "login", "logout", "status", "verify", "add", "list", "remove", or "reset".
         action: Option<String>,
         /// Provider: openai/anthropic/... / `telegram` / `weixin|wechat|wx` (write platform token to config.yaml) / `copilot`.
         /// If omitted, uses `HERMES_AUTH_DEFAULT_PROVIDER`, config model provider, or `nous`.
