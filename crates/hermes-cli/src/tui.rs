@@ -3551,6 +3551,43 @@ async fn process_modal_confirm(state: &mut TuiState, app: &mut App) -> Result<()
     Ok(())
 }
 
+fn handle_agent_run_complete(
+    app: &mut App,
+    state: &mut TuiState,
+    result: Result<AgentResult, String>,
+    elapsed_secs: f64,
+) {
+    match result {
+        Ok(agent_result) => {
+            let total_turns = agent_result.total_turns;
+            let interrupted = agent_result.interrupted;
+            let finished_naturally = agent_result.finished_naturally;
+            app.apply_agent_result(agent_result);
+            state.finish_processing_cycle("✔ completed in");
+            state.status_message.clear();
+            state.push_activity(format!(
+                "run finished in {:.2}s (total_turns={})",
+                elapsed_secs, total_turns
+            ));
+            if interrupted {
+                app.push_ui_assistant("[Agent execution interrupted]");
+            } else if !finished_naturally {
+                state.push_activity("run stopped before natural finish".to_string());
+            }
+        }
+        Err(err) => {
+            state.finish_processing_cycle("✖ failed after");
+            state.status_message = format!("Error: {}", err);
+            state.push_activity(format!("✖ {}", err));
+            app.push_ui_assistant(format!("Error: {}", err));
+        }
+    }
+    state.stream_buffer.clear();
+    state.stream_muted = false;
+    state.stream_needs_break = false;
+    state.active_tools.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Main TUI run loop
 // ---------------------------------------------------------------------------
@@ -3752,7 +3789,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                         state.begin_processing_cycle(&app.current_model);
                                         state.status_message = "Processing...".to_string();
 
-                                        let event_tx = tui.event_sender();
+                                        let stream_tx = tui.stream_sender();
                                         let agent = app.agent.clone();
                                         let stream_enabled = app.config.streaming.enabled;
                                         let tool_schemas = app.tool_schemas.clone();
@@ -3789,7 +3826,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                             } else {
                                                 agent.run(messages, Some(tool_schemas)).await
                                             };
-                                            let _ = event_tx.send(Event::AgentRunComplete {
+                                            let _ = stream_tx.send(Event::AgentRunComplete {
                                                 result: result.map_err(|e| e.to_string()),
                                                 elapsed_secs: started.elapsed().as_secs_f64(),
                                             });
@@ -3827,37 +3864,12 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         result,
                         elapsed_secs,
                     }) => {
-                        match result {
-                            Ok(agent_result) => {
-                                let total_turns = agent_result.total_turns;
-                                let interrupted = agent_result.interrupted;
-                                let finished_naturally = agent_result.finished_naturally;
-                                app.apply_agent_result(agent_result);
-                                state.finish_processing_cycle("✔ completed in");
-                                state.status_message.clear();
-                                state.push_activity(format!(
-                                    "run finished in {:.2}s (total_turns={})",
-                                    elapsed_secs, total_turns
-                                ));
-                                if interrupted {
-                                    app.push_ui_assistant("[Agent execution interrupted]");
-                                } else if !finished_naturally {
-                                    state.push_activity(
-                                        "run stopped before natural finish".to_string(),
-                                    );
-                                }
-                            }
-                            Err(err) => {
-                                state.finish_processing_cycle("✖ failed after");
-                                state.status_message = format!("Error: {}", err);
-                                state.push_activity(format!("✖ {}", err));
-                                app.push_ui_assistant(format!("Error: {}", err));
-                            }
-                        }
-                        state.stream_buffer.clear();
-                        state.stream_muted = false;
-                        state.stream_needs_break = false;
-                        state.active_tools.clear();
+                        handle_agent_run_complete(
+                            &mut app,
+                            &mut state,
+                            result,
+                            elapsed_secs,
+                        );
                         needs_redraw = true;
                     }
                     Some(Event::Interrupt) => {
@@ -4036,6 +4048,18 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         state.stream_needs_break = false;
                         state.active_tools.clear();
                         state.status_message.clear();
+                        needs_redraw = true;
+                    }
+                    Some(Event::AgentRunComplete {
+                        result,
+                        elapsed_secs,
+                    }) => {
+                        handle_agent_run_complete(
+                            &mut app,
+                            &mut state,
+                            result,
+                            elapsed_secs,
+                        );
                         needs_redraw = true;
                     }
                     Some(_) => {}
