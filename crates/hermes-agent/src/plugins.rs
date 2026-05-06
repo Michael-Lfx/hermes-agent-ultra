@@ -102,6 +102,30 @@ pub struct PluginManifest {
     pub dependencies: Vec<String>,
 }
 
+/// Plugin source used during discovery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginDiscoverySource {
+    User,
+    Project,
+}
+
+impl PluginDiscoverySource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PluginDiscoverySource::User => "user",
+            PluginDiscoverySource::Project => "project",
+        }
+    }
+}
+
+/// A discovered plugin bundle with source metadata.
+#[derive(Debug, Clone)]
+pub struct DiscoveredPlugin {
+    pub manifest: PluginManifest,
+    pub path: std::path::PathBuf,
+    pub source: PluginDiscoverySource,
+}
+
 // ---------------------------------------------------------------------------
 // PluginCliCommand
 // ---------------------------------------------------------------------------
@@ -310,94 +334,157 @@ impl PluginManager {
         disabled_list.iter().any(|d| d == name)
     }
 
-    /// Discover plugins in the given hermes directory by scanning for `plugin.yaml` files.
+    /// Discover plugins in the given Hermes directory by scanning `plugins/`.
+    ///
+    /// Backwards-compatible wrapper that preserves the historical return type
+    /// and only scans the user plugin directory.
     pub fn discover_plugins(hermes_dir: &Path) -> Vec<(PluginManifest, std::path::PathBuf)> {
-        let plugins_dir = hermes_dir.join("plugins");
+        Self::discover_plugins_with_options(hermes_dir, None, false)
+            .into_iter()
+            .map(|entry| (entry.manifest, entry.path))
+            .collect()
+    }
+
+    /// Discover plugins with explicit source controls.
+    ///
+    /// - Always scans user plugins at `<hermes_dir>/plugins`.
+    /// - Optionally scans project plugins at `<cwd>/.hermes/plugins` when
+    ///   `enable_project_plugins` is true.
+    pub fn discover_plugins_with_options(
+        hermes_dir: &Path,
+        cwd: Option<&Path>,
+        enable_project_plugins: bool,
+    ) -> Vec<DiscoveredPlugin> {
         let mut discovered = Vec::new();
+        let user_plugins_dir = hermes_dir.join("plugins");
+        scan_plugin_root(
+            &user_plugins_dir,
+            PluginDiscoverySource::User,
+            &mut discovered,
+        );
 
-        if !plugins_dir.exists() {
-            return discovered;
-        }
-
-        let Ok(entries) = std::fs::read_dir(&plugins_dir) else {
-            return discovered;
-        };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let manifest_path = path.join("plugin.yaml");
-            if !manifest_path.exists() {
-                continue;
-            }
-
-            let disabled_marker = path.join(".disabled");
-            if disabled_marker.exists() {
-                tracing::debug!("Skipping disabled plugin: {}", path.display());
-                continue;
-            }
-
-            match std::fs::read_to_string(&manifest_path) {
-                Ok(content) => match serde_yaml::from_str::<PluginManifest>(&content) {
-                    Ok(mut manifest) => {
-                        // If the manifest doesn't explicitly declare a plugin kind,
-                        // detect Python memory-provider plugins and auto-coerce them
-                        // to `exclusive` so they can be routed away from generic
-                        // plugin loading.
-                        let explicit_kind = manifest
-                            .kind
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty());
-                        if explicit_kind.is_none() {
-                            let init_file = path.join("__init__.py");
-                            if let Ok(source) = std::fs::read_to_string(&init_file) {
-                                let probe = if source.len() > 8192 {
-                                    &source[..8192]
-                                } else {
-                                    source.as_str()
-                                };
-                                if probe.contains("register_memory_provider")
-                                    || probe.contains("MemoryProvider")
-                                {
-                                    manifest.kind = Some("exclusive".to_string());
-                                    tracing::debug!(
-                                        "Plugin {} auto-coerced to kind=exclusive (memory provider heuristic)",
-                                        manifest.name
-                                    );
-                                }
-                            }
-                        }
-                        tracing::debug!(
-                            "Discovered plugin: {} v{} at {}",
-                            manifest.name,
-                            manifest.version,
-                            path.display()
-                        );
-                        discovered.push((manifest, path));
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse plugin.yaml at {}: {}",
-                            manifest_path.display(),
-                            e
-                        );
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to read plugin.yaml at {}: {}",
-                        manifest_path.display(),
-                        e
-                    );
-                }
+        if enable_project_plugins {
+            if let Some(workdir) = cwd {
+                let project_plugins_dir = workdir.join(".hermes").join("plugins");
+                scan_plugin_root(
+                    &project_plugins_dir,
+                    PluginDiscoverySource::Project,
+                    &mut discovered,
+                );
             }
         }
 
         discovered
+    }
+
+    /// Discover plugins using runtime defaults.
+    ///
+    /// Project-local plugins are included when
+    /// `HERMES_ENABLE_PROJECT_PLUGINS` is enabled.
+    pub fn discover_plugins_runtime_default(hermes_dir: &Path) -> Vec<DiscoveredPlugin> {
+        let enable_project_plugins = std::env::var("HERMES_ENABLE_PROJECT_PLUGINS")
+            .ok()
+            .is_some_and(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            });
+        let cwd = std::env::current_dir().ok();
+        Self::discover_plugins_with_options(hermes_dir, cwd.as_deref(), enable_project_plugins)
+    }
+}
+
+fn scan_plugin_root(
+    plugins_dir: &Path,
+    source: PluginDiscoverySource,
+    discovered: &mut Vec<DiscoveredPlugin>,
+) {
+    if !plugins_dir.exists() {
+        return;
+    }
+
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
+        return;
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let manifest_path = path.join("plugin.yaml");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let disabled_marker = path.join(".disabled");
+        if disabled_marker.exists() {
+            tracing::debug!("Skipping disabled plugin: {}", path.display());
+            continue;
+        }
+
+        match std::fs::read_to_string(&manifest_path) {
+            Ok(content) => match serde_yaml::from_str::<PluginManifest>(&content) {
+                Ok(mut manifest) => {
+                    // If the manifest doesn't explicitly declare a plugin kind,
+                    // detect Python memory-provider plugins and auto-coerce them
+                    // to `exclusive` so they can be routed away from generic
+                    // plugin loading.
+                    let explicit_kind = manifest
+                        .kind
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    if explicit_kind.is_none() {
+                        let init_file = path.join("__init__.py");
+                        if let Ok(source_text) = std::fs::read_to_string(&init_file) {
+                            let probe = if source_text.len() > 8192 {
+                                &source_text[..8192]
+                            } else {
+                                source_text.as_str()
+                            };
+                            if probe.contains("register_memory_provider")
+                                || probe.contains("MemoryProvider")
+                            {
+                                manifest.kind = Some("exclusive".to_string());
+                                tracing::debug!(
+                                    "Plugin {} auto-coerced to kind=exclusive (memory provider heuristic)",
+                                    manifest.name
+                                );
+                            }
+                        }
+                    }
+                    tracing::debug!(
+                        "Discovered plugin: {} v{} at {} (source={})",
+                        manifest.name,
+                        manifest.version,
+                        path.display(),
+                        source.as_str()
+                    );
+                    discovered.push(DiscoveredPlugin {
+                        manifest,
+                        path,
+                        source,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse plugin.yaml at {}: {}",
+                        manifest_path.display(),
+                        e
+                    );
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to read plugin.yaml at {}: {}",
+                    manifest_path.display(),
+                    e
+                );
+            }
+        }
     }
 }
 
@@ -577,5 +664,74 @@ dependencies:
         let discovered = PluginManager::discover_plugins(tmp.path());
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].0.kind.as_deref(), Some("standalone"));
+    }
+
+    #[test]
+    fn test_discover_plugins_with_options_includes_project_when_enabled() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+
+        let user_plugin = home.path().join("plugins").join("user_bundle");
+        std::fs::create_dir_all(&user_plugin).unwrap();
+        std::fs::write(
+            user_plugin.join("plugin.yaml"),
+            "name: user_bundle\nversion: \"0.1.0\"\ndescription: User plugin\n",
+        )
+        .unwrap();
+
+        let project_plugin = cwd
+            .path()
+            .join(".hermes")
+            .join("plugins")
+            .join("project_bundle");
+        std::fs::create_dir_all(&project_plugin).unwrap();
+        std::fs::write(
+            project_plugin.join("plugin.yaml"),
+            "name: project_bundle\nversion: \"0.1.0\"\ndescription: Project plugin\n",
+        )
+        .unwrap();
+
+        let discovered =
+            PluginManager::discover_plugins_with_options(home.path(), Some(cwd.path()), true);
+        assert_eq!(discovered.len(), 2);
+        assert!(discovered
+            .iter()
+            .any(|d| d.manifest.name == "user_bundle" && d.source == PluginDiscoverySource::User));
+        assert!(discovered
+            .iter()
+            .any(|d| d.manifest.name == "project_bundle"
+                && d.source == PluginDiscoverySource::Project));
+    }
+
+    #[test]
+    fn test_discover_plugins_with_options_excludes_project_when_disabled() {
+        let home = tempfile::tempdir().unwrap();
+        let cwd = tempfile::tempdir().unwrap();
+
+        let user_plugin = home.path().join("plugins").join("user_bundle");
+        std::fs::create_dir_all(&user_plugin).unwrap();
+        std::fs::write(
+            user_plugin.join("plugin.yaml"),
+            "name: user_bundle\nversion: \"0.1.0\"\ndescription: User plugin\n",
+        )
+        .unwrap();
+
+        let project_plugin = cwd
+            .path()
+            .join(".hermes")
+            .join("plugins")
+            .join("project_bundle");
+        std::fs::create_dir_all(&project_plugin).unwrap();
+        std::fs::write(
+            project_plugin.join("plugin.yaml"),
+            "name: project_bundle\nversion: \"0.1.0\"\ndescription: Project plugin\n",
+        )
+        .unwrap();
+
+        let discovered =
+            PluginManager::discover_plugins_with_options(home.path(), Some(cwd.path()), false);
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(discovered[0].manifest.name, "user_bundle");
+        assert_eq!(discovered[0].source, PluginDiscoverySource::User);
     }
 }
