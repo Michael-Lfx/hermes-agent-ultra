@@ -439,6 +439,9 @@ async fn main() {
         CliCommand::Completion { shell } => run_completion(shell),
         CliCommand::Uninstall { yes } => run_uninstall(yes).await,
         CliCommand::Lumio { action, model } => run_lumio(action, model).await,
+        CliCommand::PluginExternal(raw) => {
+            hermes_cli::commands::handle_cli_external_plugin_subcommand(raw).await
+        }
     };
 
     if let Err(e) = result {

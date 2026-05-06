@@ -442,7 +442,7 @@ pub enum CliCommand {
 
     /// Plugin management.
     Plugins {
-        /// Action: install/update/remove/list/enable/disable
+        /// Action: install/update/remove/list/enable/disable/inspect
         action: Option<String>,
         /// Plugin name.
         name: Option<String>,
@@ -599,6 +599,13 @@ pub enum CliCommand {
         #[arg(short, long)]
         model: Option<String>,
     },
+
+    /// Plugin-provided external command surface (dynamic dispatch).
+    ///
+    /// Used to mirror upstream behavior where active plugins can contribute
+    /// top-level CLI commands (for example, memory-provider command shims).
+    #[command(external_subcommand)]
+    PluginExternal(Vec<String>),
 }
 
 // ---------------------------------------------------------------------------
