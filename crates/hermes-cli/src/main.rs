@@ -61,6 +61,7 @@ use hermes_cron::{
 };
 use hermes_gateway::gateway::GatewayConfig as RuntimeGatewayConfig;
 use hermes_gateway::gateway::IncomingMessage as GatewayIncomingMessage;
+use hermes_gateway::gateway::{GroupAccessMode, PlatformAccessPolicy};
 use hermes_gateway::hooks::HookRegistry;
 use hermes_gateway::platforms::api_server::{ApiInboundRequest, ApiServerAdapter, ApiServerConfig};
 use hermes_gateway::platforms::bluebubbles::{BlueBubblesAdapter, BlueBubblesConfig};
@@ -1925,12 +1926,15 @@ async fn run_gateway(
                 ..RuntimeGatewayConfig::default()
             };
             let session_manager = Arc::new(SessionManager::new(config.session.clone()));
-            let dm_manager = DmManager::with_pair_behavior();
+            let dm_manager = build_gateway_dm_manager(&config);
             let gateway = Arc::new(Gateway::new(
                 session_manager,
                 dm_manager,
                 runtime_gateway_config,
             ));
+            gateway
+                .set_platform_access_policies(build_gateway_platform_access_policies(&config))
+                .await;
             let mut hook_registry = HookRegistry::new();
             hook_registry.register_builtins();
             hook_registry.discover_and_load(&hermes_home().join("hooks"));
@@ -3264,6 +3268,97 @@ fn extra_u16(platform_cfg: &PlatformConfig, key: &str, default: u16) -> u16 {
         .and_then(|v| v.as_u64())
         .and_then(|v| u16::try_from(v).ok())
         .unwrap_or(default)
+}
+
+fn extra_bool_loose(platform_cfg: &PlatformConfig, key: &str) -> Option<bool> {
+    let raw = platform_cfg.extra.get(key)?;
+    if let Some(v) = raw.as_bool() {
+        return Some(v);
+    }
+    raw.as_str().and_then(|v| {
+        let normalized = v.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "1" | "true" | "yes" | "y" | "on" | "enable" | "enabled" => Some(true),
+            "0" | "false" | "no" | "n" | "off" | "disable" | "disabled" => Some(false),
+            _ => None,
+        }
+    })
+}
+
+fn build_gateway_dm_manager(config: &hermes_config::GatewayConfig) -> DmManager {
+    let mut dm_manager = DmManager::with_pair_behavior();
+    for platform_cfg in config.platforms.values().filter(|p| p.enabled) {
+        for user in &platform_cfg.allowed_users {
+            let trimmed = user.trim();
+            if !trimmed.is_empty() {
+                dm_manager.authorize_user(trimmed.to_string());
+            }
+        }
+        for admin in &platform_cfg.admin_users {
+            let trimmed = admin.trim();
+            if !trimmed.is_empty() {
+                dm_manager.add_admin(trimmed.to_string());
+            }
+        }
+    }
+    dm_manager
+}
+
+fn parse_group_access_mode(platform_cfg: &PlatformConfig) -> GroupAccessMode {
+    let explicit = extra_string(platform_cfg, "group_policy")
+        .or_else(|| extra_string(platform_cfg, "group_access"));
+    if let Some(policy) = explicit {
+        match policy.trim().to_ascii_lowercase().as_str() {
+            "disabled" | "deny" | "off" | "none" => return GroupAccessMode::Disabled,
+            "allowlist" | "restricted" | "whitelist" => return GroupAccessMode::Allowlist,
+            "open" | "all" | "enabled" => return GroupAccessMode::Open,
+            _ => {}
+        }
+    }
+    if !platform_cfg.allowed_users.is_empty() || !platform_cfg.admin_users.is_empty() {
+        GroupAccessMode::Allowlist
+    } else {
+        GroupAccessMode::Open
+    }
+}
+
+fn build_gateway_platform_access_policies(
+    config: &hermes_config::GatewayConfig,
+) -> std::collections::HashMap<String, PlatformAccessPolicy> {
+    let mut policies = std::collections::HashMap::new();
+    for (platform, platform_cfg) in config.platforms.iter().filter(|(_, cfg)| cfg.enabled) {
+        let mut allowed_users = HashSet::new();
+        let mut admin_users = HashSet::new();
+        for user in &platform_cfg.allowed_users {
+            let trimmed = user.trim();
+            if !trimmed.is_empty() {
+                allowed_users.insert(trimmed.to_string());
+            }
+        }
+        for admin in &platform_cfg.admin_users {
+            let trimmed = admin.trim();
+            if !trimmed.is_empty() {
+                admin_users.insert(trimmed.to_string());
+            }
+        }
+
+        let group_mode = parse_group_access_mode(platform_cfg);
+        let has_allowlist = !allowed_users.is_empty() || !admin_users.is_empty();
+        let slash_requires_allowlist = extra_bool_loose(platform_cfg, "slash_requires_allowlist")
+            .or_else(|| extra_bool_loose(platform_cfg, "require_allowlist_for_slash"))
+            .unwrap_or_else(|| platform.eq_ignore_ascii_case("discord") && has_allowlist);
+
+        policies.insert(
+            platform.to_ascii_lowercase(),
+            PlatformAccessPolicy {
+                allowed_users,
+                admin_users,
+                group_mode,
+                slash_requires_allowlist,
+            },
+        );
+    }
+    policies
 }
 
 fn gateway_requirement_issues(config: &hermes_config::GatewayConfig) -> Vec<String> {

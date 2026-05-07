@@ -10,7 +10,7 @@
 //! Also integrates `StreamManager` for progressive message editing.
 
 use chrono::{DateTime, Utc};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::RwLock;
@@ -255,6 +255,59 @@ pub struct Gateway {
     mcp_reload_generation: RwLock<u64>,
     /// Optional hook registry for runtime event emission.
     hook_registry: RwLock<Option<Arc<HookRegistry>>>,
+    /// Per-platform allowlist policy for group and slash-command traffic.
+    platform_access_policies: RwLock<HashMap<String, PlatformAccessPolicy>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupAccessMode {
+    Open,
+    Allowlist,
+    Disabled,
+}
+
+impl Default for GroupAccessMode {
+    fn default() -> Self {
+        Self::Open
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PlatformAccessPolicy {
+    pub allowed_users: HashSet<String>,
+    pub admin_users: HashSet<String>,
+    pub group_mode: GroupAccessMode,
+    pub slash_requires_allowlist: bool,
+}
+
+impl PlatformAccessPolicy {
+    fn has_allowlist(&self) -> bool {
+        !self.allowed_users.is_empty() || !self.admin_users.is_empty()
+    }
+
+    fn user_matches_any(user_id: &str, set: &HashSet<String>) -> bool {
+        let candidate = user_id.trim();
+        if candidate.is_empty() {
+            return false;
+        }
+        let candidate_no_at = candidate.strip_prefix('@').unwrap_or(candidate);
+        set.iter().any(|entry| {
+            let allowed = entry.trim();
+            if allowed.is_empty() {
+                return false;
+            }
+            let allowed_no_at = allowed.strip_prefix('@').unwrap_or(allowed);
+            allowed.eq_ignore_ascii_case(candidate)
+                || allowed.eq_ignore_ascii_case(candidate_no_at)
+                || allowed_no_at.eq_ignore_ascii_case(candidate)
+                || allowed_no_at.eq_ignore_ascii_case(candidate_no_at)
+        })
+    }
+
+    pub fn is_user_allowed(&self, user_id: &str) -> bool {
+        Self::user_matches_any(user_id, &self.admin_users)
+            || Self::user_matches_any(user_id, &self.allowed_users)
+    }
 }
 
 impl Gateway {
@@ -281,6 +334,7 @@ impl Gateway {
             background_tasks: Arc::new(BackgroundTaskManager::new(8)),
             mcp_reload_generation: RwLock::new(0),
             hook_registry: RwLock::new(None),
+            platform_access_policies: RwLock::new(HashMap::new()),
         }
     }
 
@@ -390,6 +444,26 @@ impl Gateway {
         *self.hook_registry.write().await = Some(registry);
     }
 
+    /// Set per-platform access policies for non-DM and slash-command traffic.
+    pub async fn set_platform_access_policies(
+        &self,
+        policies: HashMap<String, PlatformAccessPolicy>,
+    ) {
+        *self.platform_access_policies.write().await = policies
+            .into_iter()
+            .map(|(platform, policy)| (platform.to_ascii_lowercase(), policy))
+            .collect();
+    }
+
+    async fn platform_access_policy(&self, platform: &str) -> Option<PlatformAccessPolicy> {
+        let key = platform.trim().to_ascii_lowercase();
+        self.platform_access_policies
+            .read()
+            .await
+            .get(&key)
+            .cloned()
+    }
+
     /// Emit one hook event if a registry is configured.
     pub async fn emit_hook_event(&self, event_type: &str, context: serde_json::Value) {
         let registry = self.hook_registry.read().await.clone();
@@ -448,6 +522,46 @@ impl Gateway {
     /// Route an incoming message through the full pipeline:
     /// DM check → session lookup → agent loop → response.
     pub async fn route_message(&self, incoming: &IncomingMessage) -> Result<(), GatewayError> {
+        let access_policy = self.platform_access_policy(&incoming.platform).await;
+        let is_slash_command = incoming.text.trim_start().starts_with('/');
+        if let Some(policy) = access_policy.as_ref() {
+            if !incoming.is_dm {
+                match policy.group_mode {
+                    GroupAccessMode::Disabled => {
+                        debug!(
+                            platform = incoming.platform,
+                            user_id = incoming.user_id,
+                            "Group traffic denied by platform policy"
+                        );
+                        return Ok(());
+                    }
+                    GroupAccessMode::Allowlist => {
+                        if !policy.is_user_allowed(&incoming.user_id) {
+                            debug!(
+                                platform = incoming.platform,
+                                user_id = incoming.user_id,
+                                "Group message denied: user not in allowlist"
+                            );
+                            return Ok(());
+                        }
+                    }
+                    GroupAccessMode::Open => {}
+                }
+            }
+            if is_slash_command
+                && policy.slash_requires_allowlist
+                && policy.has_allowlist()
+                && !policy.is_user_allowed(&incoming.user_id)
+            {
+                debug!(
+                    platform = incoming.platform,
+                    user_id = incoming.user_id,
+                    "Slash command denied: user not in platform allowlist"
+                );
+                return Ok(());
+            }
+        }
+
         // 1. Check DM authorization if this is a direct message
         if incoming.is_dm {
             let dm_manager = self.dm_manager.read().await;
@@ -509,7 +623,7 @@ impl Gateway {
         }
 
         // Slash commands are executed directly by the gateway command runtime.
-        if incoming.text.trim_start().starts_with('/') {
+        if is_slash_command {
             if self.execute_slash_command(incoming, &session_key).await? {
                 return Ok(());
             }
@@ -2282,6 +2396,89 @@ mod tests {
         // Should fail because no handler, but DM check is skipped
         let result = gw.route_message(&incoming).await;
         assert!(result.is_err()); // No handler configured
+    }
+
+    #[tokio::test]
+    async fn gateway_group_allowlist_denies_unauthorized_user() {
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let dm_manager = DmManager::with_ignore_behavior();
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        let mut policies = HashMap::new();
+        let mut policy = PlatformAccessPolicy {
+            group_mode: GroupAccessMode::Allowlist,
+            ..PlatformAccessPolicy::default()
+        };
+        policy.allowed_users.insert("allowed_user".to_string());
+        policies.insert("telegram".to_string(), policy);
+        gw.set_platform_access_policies(policies).await;
+
+        let incoming = IncomingMessage {
+            platform: "telegram".into(),
+            chat_id: "-100123".into(),
+            user_id: "other_user".into(),
+            text: "hello group".into(),
+            message_id: None,
+            is_dm: false,
+        };
+
+        let result = gw.route_message(&incoming).await;
+        assert!(result.is_ok());
+        assert_eq!(
+            gw.session_transcript_len("telegram", "-100123", "other_user")
+                .await,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_discord_slash_requires_allowlist() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(TestAdapter {
+            messages: sent.clone(),
+        });
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let dm_manager = DmManager::with_ignore_behavior();
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("discord", adapter).await;
+
+        let mut policies = HashMap::new();
+        let mut policy = PlatformAccessPolicy {
+            group_mode: GroupAccessMode::Open,
+            slash_requires_allowlist: true,
+            ..PlatformAccessPolicy::default()
+        };
+        policy.allowed_users.insert("allowed_user".to_string());
+        policies.insert("discord".to_string(), policy);
+        gw.set_platform_access_policies(policies).await;
+
+        let denied = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "guild:1".into(),
+            user_id: "random_user".into(),
+            text: "/status".into(),
+            message_id: Some("m1".into()),
+            is_dm: false,
+        };
+        assert!(gw.route_message(&denied).await.is_ok());
+        assert_eq!(
+            gw.session_transcript_len("discord", "guild:1", "random_user")
+                .await,
+            0
+        );
+
+        let allowed = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "guild:1".into(),
+            user_id: "allowed_user".into(),
+            text: "/status".into(),
+            message_id: Some("m2".into()),
+            is_dm: false,
+        };
+        assert!(gw.route_message(&allowed).await.is_ok());
+        let sent_msgs = sent.lock().unwrap();
+        assert_eq!(sent_msgs.len(), 1);
+        assert_eq!(sent_msgs[0].0, "guild:1");
+        assert!(!sent_msgs[0].1.trim().is_empty());
     }
 
     #[tokio::test]
