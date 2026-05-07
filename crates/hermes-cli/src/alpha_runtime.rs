@@ -18,6 +18,10 @@ const OBJECTIVE_PROFILE_FILE: &str = "objective_profile.json";
 const OBJECTIVE_SIMULATION_POLICY_FILE: &str = "objective_simulation_policy.json";
 const OBJECTIVE_ENSEMBLE_POLICY_FILE: &str = "objective_ensemble_policy.json";
 const OBJECTIVE_LEARNING_LEDGER_FILE: &str = "objective_learning_ledger.json";
+const OBJECTIVE_DAG_FILE: &str = "objective_dag.json";
+const CLAIM_VERIFIER_POLICY_FILE: &str = "claim_verifier_policy.json";
+const QUORUM_POLICY_FILE: &str = "quorum_policy.json";
+const OBJECTIVE_EVAL_TREND_FILE: &str = "objective_eval_trend.json";
 const SUBAGENT_REGISTRY_FILE: &str = "subagents.json";
 const CONTEXTLATTICE_POLICY_FILE: &str = "contextlattice_policy.json";
 const LOOPS_FILE: &str = "loops.json";
@@ -131,6 +135,59 @@ pub struct ObjectiveLearningLedger {
     pub updated_at: String,
     #[serde(default)]
     pub entries: Vec<ObjectiveLearningLedgerEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveDagNode {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    pub rollback: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveDag {
+    pub updated_at: String,
+    pub objective_id: String,
+    #[serde(default)]
+    pub nodes: Vec<ObjectiveDagNode>,
+    pub auto_resume_checkpoint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClaimVerifierPolicy {
+    pub enabled: bool,
+    pub required: bool,
+    pub max_retries: u32,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuorumPolicy {
+    pub enabled: bool,
+    pub voters: usize,
+    #[serde(default)]
+    pub models: Vec<String>,
+    pub mode: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObjectiveEvalSample {
+    pub recorded_at: String,
+    pub objective_id: String,
+    pub objective_state: String,
+    pub score: f64,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObjectiveEvalTrend {
+    pub updated_at: String,
+    #[serde(default)]
+    pub samples: Vec<ObjectiveEvalSample>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -264,6 +321,22 @@ fn objective_ensemble_policy_path() -> PathBuf {
 
 fn objective_learning_ledger_path() -> PathBuf {
     alpha_state_dir().join(OBJECTIVE_LEARNING_LEDGER_FILE)
+}
+
+fn objective_dag_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_DAG_FILE)
+}
+
+fn claim_verifier_policy_path() -> PathBuf {
+    alpha_state_dir().join(CLAIM_VERIFIER_POLICY_FILE)
+}
+
+fn quorum_policy_path() -> PathBuf {
+    alpha_state_dir().join(QUORUM_POLICY_FILE)
+}
+
+fn objective_eval_trend_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_EVAL_TREND_FILE)
 }
 
 fn subagent_registry_path() -> PathBuf {
@@ -449,6 +522,42 @@ fn default_objective_learning_ledger() -> ObjectiveLearningLedger {
     ObjectiveLearningLedger {
         updated_at: now_rfc3339(),
         entries: vec![],
+    }
+}
+
+fn default_claim_verifier_policy() -> ClaimVerifierPolicy {
+    ClaimVerifierPolicy {
+        enabled: true,
+        required: true,
+        max_retries: 1,
+        updated_at: now_rfc3339(),
+    }
+}
+
+fn default_quorum_policy() -> QuorumPolicy {
+    QuorumPolicy {
+        enabled: false,
+        voters: 3,
+        models: vec![],
+        mode: "optional-deep".to_string(),
+        updated_at: now_rfc3339(),
+    }
+}
+
+fn default_objective_eval_trend() -> ObjectiveEvalTrend {
+    ObjectiveEvalTrend {
+        updated_at: now_rfc3339(),
+        samples: vec![],
+    }
+}
+
+fn score_for_objective_state(state: &str) -> f64 {
+    match state.trim().to_ascii_lowercase().as_str() {
+        "advancing" => 1.0,
+        "flat" => 0.5,
+        "regressing" => 0.0,
+        "unproven" => 0.25,
+        _ => 0.4,
     }
 }
 
@@ -641,6 +750,38 @@ pub fn ensure_alpha_runtime_bootstrap(force: bool) -> Result<Vec<PathBuf>, Agent
     if force || !learning_ledger_path.exists() {
         write_json_file(&learning_ledger_path, &default_objective_learning_ledger())?;
         written.push(learning_ledger_path);
+    }
+
+    let dag_path = objective_dag_path();
+    if force || !dag_path.exists() {
+        write_json_file(
+            &dag_path,
+            &ObjectiveDag {
+                updated_at: now_rfc3339(),
+                objective_id: "none".to_string(),
+                nodes: vec![],
+                auto_resume_checkpoint: "none".to_string(),
+            },
+        )?;
+        written.push(dag_path);
+    }
+
+    let claim_policy = claim_verifier_policy_path();
+    if force || !claim_policy.exists() {
+        write_json_file(&claim_policy, &default_claim_verifier_policy())?;
+        written.push(claim_policy);
+    }
+
+    let quorum = quorum_policy_path();
+    if force || !quorum.exists() {
+        write_json_file(&quorum, &default_quorum_policy())?;
+        written.push(quorum);
+    }
+
+    let eval_trend = objective_eval_trend_path();
+    if force || !eval_trend.exists() {
+        write_json_file(&eval_trend, &default_objective_eval_trend())?;
+        written.push(eval_trend);
     }
 
     Ok(written)
@@ -905,6 +1046,140 @@ pub fn clear_objective_learning_ledger() -> Result<ObjectiveLearningLedger, Agen
     let ledger = default_objective_learning_ledger();
     write_json_file(&objective_learning_ledger_path(), &ledger)?;
     Ok(ledger)
+}
+
+pub fn build_objective_dag_from_contract() -> Result<ObjectiveDag, AgentError> {
+    let contract = load_objective_contract()?.ok_or_else(|| {
+        AgentError::Config(
+            "objective contract is not initialized; run `/objective <text>` first".to_string(),
+        )
+    })?;
+    let mut nodes = Vec::new();
+    nodes.push(ObjectiveDagNode {
+        id: "discover".to_string(),
+        title: "Discover facts and gather constraints".to_string(),
+        status: "pending".to_string(),
+        depends_on: vec![],
+        rollback: "narrow_scope_and_reprobe".to_string(),
+    });
+    nodes.push(ObjectiveDagNode {
+        id: "design".to_string(),
+        title: "Design targeted patch strategy".to_string(),
+        status: "pending".to_string(),
+        depends_on: vec!["discover".to_string()],
+        rollback: "re-open alternatives".to_string(),
+    });
+    nodes.push(ObjectiveDagNode {
+        id: "implement".to_string(),
+        title: "Implement smallest reversible change-set".to_string(),
+        status: "pending".to_string(),
+        depends_on: vec!["design".to_string()],
+        rollback: "git_revert_candidate".to_string(),
+    });
+    nodes.push(ObjectiveDagNode {
+        id: "verify".to_string(),
+        title: "Verify with objective-linked tests".to_string(),
+        status: "pending".to_string(),
+        depends_on: vec!["implement".to_string()],
+        rollback: "re-open_implementation".to_string(),
+    });
+    if contract.trading_sensitive {
+        nodes.push(ObjectiveDagNode {
+            id: "shadow".to_string(),
+            title: "Shadow/simulator gate before promotion".to_string(),
+            status: "pending".to_string(),
+            depends_on: vec!["verify".to_string()],
+            rollback: "reduce_exposure_and_rerun".to_string(),
+        });
+    }
+    let dag = ObjectiveDag {
+        updated_at: now_rfc3339(),
+        objective_id: contract.id.clone(),
+        nodes,
+        auto_resume_checkpoint: "discover".to_string(),
+    };
+    write_json_file(&objective_dag_path(), &dag)?;
+    Ok(dag)
+}
+
+pub fn load_objective_dag() -> Result<ObjectiveDag, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_dag_path())
+}
+
+pub fn clear_objective_dag() -> Result<ObjectiveDag, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    let dag = ObjectiveDag {
+        updated_at: now_rfc3339(),
+        objective_id: "none".to_string(),
+        nodes: vec![],
+        auto_resume_checkpoint: "none".to_string(),
+    };
+    write_json_file(&objective_dag_path(), &dag)?;
+    Ok(dag)
+}
+
+pub fn load_claim_verifier_policy() -> Result<ClaimVerifierPolicy, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&claim_verifier_policy_path())
+}
+
+pub fn set_claim_verifier_enabled(enabled: bool) -> Result<ClaimVerifierPolicy, AgentError> {
+    let mut policy = load_claim_verifier_policy()?;
+    policy.enabled = enabled;
+    policy.updated_at = now_rfc3339();
+    write_json_file(&claim_verifier_policy_path(), &policy)?;
+    Ok(policy)
+}
+
+pub fn load_quorum_policy() -> Result<QuorumPolicy, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&quorum_policy_path())
+}
+
+pub fn set_quorum_policy(
+    enabled: bool,
+    voters: Option<usize>,
+    models: Option<Vec<String>>,
+) -> Result<QuorumPolicy, AgentError> {
+    let mut policy = load_quorum_policy()?;
+    policy.enabled = enabled;
+    if let Some(v) = voters {
+        policy.voters = v.clamp(2, 5);
+    }
+    if let Some(m) = models {
+        policy.models = m;
+    }
+    policy.updated_at = now_rfc3339();
+    write_json_file(&quorum_policy_path(), &policy)?;
+    Ok(policy)
+}
+
+pub fn load_objective_eval_trend() -> Result<ObjectiveEvalTrend, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_eval_trend_path())
+}
+
+pub fn append_objective_eval_sample(
+    objective_id: &str,
+    objective_state: &str,
+    note: &str,
+) -> Result<ObjectiveEvalTrend, AgentError> {
+    let mut trend = load_objective_eval_trend()?;
+    trend.samples.push(ObjectiveEvalSample {
+        recorded_at: now_rfc3339(),
+        objective_id: objective_id.trim().to_string(),
+        objective_state: objective_state.trim().to_string(),
+        score: score_for_objective_state(objective_state),
+        note: note.trim().to_string(),
+    });
+    if trend.samples.len() > 512 {
+        let drain = trend.samples.len().saturating_sub(512);
+        trend.samples.drain(0..drain);
+    }
+    trend.updated_at = now_rfc3339();
+    write_json_file(&objective_eval_trend_path(), &trend)?;
+    Ok(trend)
 }
 
 pub fn load_subagent_registry() -> Result<SubagentRegistry, AgentError> {
@@ -2988,6 +3263,44 @@ mod tests {
 
         let generalized = reset_objective_profile_generalized().expect("reset profile");
         assert_eq!(generalized.profile_id, "repo-general");
+        std::env::remove_var("HERMES_HOME");
+    }
+
+    #[test]
+    fn objective_dag_claim_quorum_and_eval_surfaces_roundtrip() {
+        let tmp = tempdir().expect("tempdir");
+        std::env::set_var("HERMES_HOME", tmp.path());
+        ensure_alpha_runtime_bootstrap(true).expect("bootstrap");
+        upsert_objective_contract("improve objective with verified rollout", false).expect("obj");
+
+        let dag = build_objective_dag_from_contract().expect("build dag");
+        assert_eq!(dag.objective_id.starts_with("obj-"), true);
+        assert!(dag.nodes.len() >= 4);
+        let loaded_dag = load_objective_dag().expect("load dag");
+        assert_eq!(loaded_dag.nodes.len(), dag.nodes.len());
+
+        let claim = set_claim_verifier_enabled(false).expect("claim off");
+        assert!(!claim.enabled);
+        let claim = set_claim_verifier_enabled(true).expect("claim on");
+        assert!(claim.enabled);
+
+        let quorum = set_quorum_policy(
+            true,
+            Some(3),
+            Some(vec!["nous:nousresearch/hermes-4-70b".to_string()]),
+        )
+        .expect("quorum");
+        assert!(quorum.enabled);
+        assert_eq!(quorum.voters, 3);
+        assert_eq!(quorum.models.len(), 1);
+
+        let trend = append_objective_eval_sample("obj-demo", "advancing", "test sample")
+            .expect("append eval");
+        assert_eq!(trend.samples.len(), 1);
+        assert!(trend.samples[0].score > 0.9);
+
+        let cleared = clear_objective_dag().expect("clear dag");
+        assert!(cleared.nodes.is_empty());
         std::env::remove_var("HERMES_HOME");
     }
 }
