@@ -14,6 +14,10 @@ use crate::model_switch::{curated_provider_slugs, provider_model_ids};
 
 const ALPHA_STATE_DIR: &str = "alpha";
 const OBJECTIVE_CONTRACT_FILE: &str = "objective_contract.json";
+const OBJECTIVE_PROFILE_FILE: &str = "objective_profile.json";
+const OBJECTIVE_SIMULATION_POLICY_FILE: &str = "objective_simulation_policy.json";
+const OBJECTIVE_ENSEMBLE_POLICY_FILE: &str = "objective_ensemble_policy.json";
+const OBJECTIVE_LEARNING_LEDGER_FILE: &str = "objective_learning_ledger.json";
 const SUBAGENT_REGISTRY_FILE: &str = "subagents.json";
 const CONTEXTLATTICE_POLICY_FILE: &str = "contextlattice_policy.json";
 const LOOPS_FILE: &str = "loops.json";
@@ -73,6 +77,60 @@ pub struct ObjectiveContract {
     pub trading_sensitive: bool,
     #[serde(default)]
     pub counterfactual_journal: Vec<CounterfactualEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveProfile {
+    pub profile_id: String,
+    pub updated_at: String,
+    pub operator_hint: String,
+    pub default_shell: String,
+    pub memory_backend: String,
+    pub specialization_note: String,
+    #[serde(default)]
+    pub preferred_repos: Vec<String>,
+    #[serde(default)]
+    pub preferred_languages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ObjectiveSimulationPolicy {
+    pub mode: String,
+    pub require_shadow_pass: bool,
+    pub min_shadow_samples: usize,
+    pub require_replay_validation: bool,
+    pub max_live_capital_fraction: f64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveEnsemblePolicy {
+    pub mode: String,
+    pub arbitration: String,
+    pub min_voters: usize,
+    pub require_disagreement_explainer: bool,
+    pub allow_fast_path_single_model: bool,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveLearningLedgerEntry {
+    pub recorded_at: String,
+    pub objective_id: String,
+    pub objective_state: String,
+    pub decision: String,
+    #[serde(default)]
+    pub evidence_files: Vec<String>,
+    #[serde(default)]
+    pub evidence_commands: Vec<String>,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ObjectiveLearningLedger {
+    pub updated_at: String,
+    #[serde(default)]
+    pub entries: Vec<ObjectiveLearningLedgerEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -192,6 +250,22 @@ fn objective_contract_path() -> PathBuf {
     alpha_state_dir().join(OBJECTIVE_CONTRACT_FILE)
 }
 
+fn objective_profile_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_PROFILE_FILE)
+}
+
+fn objective_simulation_policy_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_SIMULATION_POLICY_FILE)
+}
+
+fn objective_ensemble_policy_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_ENSEMBLE_POLICY_FILE)
+}
+
+fn objective_learning_ledger_path() -> PathBuf {
+    alpha_state_dir().join(OBJECTIVE_LEARNING_LEDGER_FILE)
+}
+
 fn subagent_registry_path() -> PathBuf {
     alpha_state_dir().join(SUBAGENT_REGISTRY_FILE)
 }
@@ -251,6 +325,130 @@ fn default_contextlattice_policy() -> ContextLatticePolicy {
             "runbooks/alpha/provider".to_string(),
         ],
         conflict_resolution_mode: "source_weight_then_recency".to_string(),
+    }
+}
+
+fn default_objective_profile() -> ObjectiveProfile {
+    ObjectiveProfile {
+        profile_id: "repo-general".to_string(),
+        updated_at: now_rfc3339(),
+        operator_hint: "operator".to_string(),
+        default_shell: "auto".to_string(),
+        memory_backend: "contextlattice-preferred".to_string(),
+        specialization_note:
+            "Generalized repository profile: portable defaults with evidence-first execution."
+                .to_string(),
+        preferred_repos: vec![],
+        preferred_languages: vec!["rust".to_string(), "python".to_string(), "go".to_string()],
+    }
+}
+
+pub fn objective_profile_specialized_for(operator_hint: &str) -> ObjectiveProfile {
+    let normalized = operator_hint.trim().to_ascii_lowercase();
+    if normalized == "sheawinkler" {
+        return ObjectiveProfile {
+            profile_id: "sheawinkler".to_string(),
+            updated_at: now_rfc3339(),
+            operator_hint: "sheawinkler".to_string(),
+            default_shell: "zsh".to_string(),
+            memory_backend: "contextlattice-primary".to_string(),
+            specialization_note: "Specialized operator profile: ContextLattice-first, zsh-first, objective verification with deterministic evidence gates.".to_string(),
+            preferred_repos: vec![
+                "~/Documents/Projects/hermes-agent-ultra".to_string(),
+                "~/Documents/Projects/algotraderv2_rust".to_string(),
+                "~/Documents/Projects/fastapi-sidecar".to_string(),
+            ],
+            preferred_languages: vec![
+                "rust".to_string(),
+                "python".to_string(),
+                "go".to_string(),
+                "typescript".to_string(),
+            ],
+        };
+    }
+    ObjectiveProfile {
+        profile_id: "operator-custom".to_string(),
+        updated_at: now_rfc3339(),
+        operator_hint: operator_hint.trim().to_string(),
+        default_shell: "auto".to_string(),
+        memory_backend: "contextlattice-preferred".to_string(),
+        specialization_note: "Specialized operator profile generated from runtime command."
+            .to_string(),
+        preferred_repos: vec![],
+        preferred_languages: vec!["rust".to_string(), "python".to_string(), "go".to_string()],
+    }
+}
+
+fn default_objective_simulation_policy() -> ObjectiveSimulationPolicy {
+    ObjectiveSimulationPolicy {
+        mode: "balanced".to_string(),
+        require_shadow_pass: true,
+        min_shadow_samples: 5,
+        require_replay_validation: true,
+        max_live_capital_fraction: 0.25,
+        updated_at: now_rfc3339(),
+    }
+}
+
+fn simulation_policy_for_mode(mode: &str) -> ObjectiveSimulationPolicy {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "strict" => ObjectiveSimulationPolicy {
+            mode: "strict".to_string(),
+            require_shadow_pass: true,
+            min_shadow_samples: 12,
+            require_replay_validation: true,
+            max_live_capital_fraction: 0.08,
+            updated_at: now_rfc3339(),
+        },
+        "aggressive" => ObjectiveSimulationPolicy {
+            mode: "aggressive".to_string(),
+            require_shadow_pass: false,
+            min_shadow_samples: 0,
+            require_replay_validation: false,
+            max_live_capital_fraction: 0.40,
+            updated_at: now_rfc3339(),
+        },
+        _ => default_objective_simulation_policy(),
+    }
+}
+
+fn default_objective_ensemble_policy() -> ObjectiveEnsemblePolicy {
+    ObjectiveEnsemblePolicy {
+        mode: "committee".to_string(),
+        arbitration: "weighted-confidence".to_string(),
+        min_voters: 2,
+        require_disagreement_explainer: true,
+        allow_fast_path_single_model: true,
+        updated_at: now_rfc3339(),
+    }
+}
+
+fn ensemble_policy_for_mode(mode: &str) -> ObjectiveEnsemblePolicy {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "single" => ObjectiveEnsemblePolicy {
+            mode: "single".to_string(),
+            arbitration: "primary-model".to_string(),
+            min_voters: 1,
+            require_disagreement_explainer: false,
+            allow_fast_path_single_model: true,
+            updated_at: now_rfc3339(),
+        },
+        "debate" => ObjectiveEnsemblePolicy {
+            mode: "debate".to_string(),
+            arbitration: "disagreement-resolution".to_string(),
+            min_voters: 3,
+            require_disagreement_explainer: true,
+            allow_fast_path_single_model: false,
+            updated_at: now_rfc3339(),
+        },
+        _ => default_objective_ensemble_policy(),
+    }
+}
+
+fn default_objective_learning_ledger() -> ObjectiveLearningLedger {
+    ObjectiveLearningLedger {
+        updated_at: now_rfc3339(),
+        entries: vec![],
     }
 }
 
@@ -419,6 +617,30 @@ pub fn ensure_alpha_runtime_bootstrap(force: bool) -> Result<Vec<PathBuf>, Agent
             },
         )?;
         written.push(runtime_path);
+    }
+
+    let profile_path = objective_profile_path();
+    if force || !profile_path.exists() {
+        write_json_file(&profile_path, &default_objective_profile())?;
+        written.push(profile_path);
+    }
+
+    let sim_policy_path = objective_simulation_policy_path();
+    if force || !sim_policy_path.exists() {
+        write_json_file(&sim_policy_path, &default_objective_simulation_policy())?;
+        written.push(sim_policy_path);
+    }
+
+    let ensemble_policy_path = objective_ensemble_policy_path();
+    if force || !ensemble_policy_path.exists() {
+        write_json_file(&ensemble_policy_path, &default_objective_ensemble_policy())?;
+        written.push(ensemble_policy_path);
+    }
+
+    let learning_ledger_path = objective_learning_ledger_path();
+    if force || !learning_ledger_path.exists() {
+        write_json_file(&learning_ledger_path, &default_objective_learning_ledger())?;
+        written.push(learning_ledger_path);
     }
 
     Ok(written)
@@ -613,6 +835,76 @@ pub fn append_counterfactual(
     contract.updated_at = now_rfc3339();
     write_json_file(&objective_contract_path(), &contract)?;
     Ok(contract)
+}
+
+pub fn load_objective_profile() -> Result<ObjectiveProfile, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_profile_path())
+}
+
+pub fn set_objective_profile(profile: ObjectiveProfile) -> Result<ObjectiveProfile, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    let mut updated = profile;
+    updated.updated_at = now_rfc3339();
+    write_json_file(&objective_profile_path(), &updated)?;
+    Ok(updated)
+}
+
+pub fn reset_objective_profile_generalized() -> Result<ObjectiveProfile, AgentError> {
+    set_objective_profile(default_objective_profile())
+}
+
+pub fn load_objective_simulation_policy() -> Result<ObjectiveSimulationPolicy, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_simulation_policy_path())
+}
+
+pub fn set_objective_simulation_mode(mode: &str) -> Result<ObjectiveSimulationPolicy, AgentError> {
+    let policy = simulation_policy_for_mode(mode);
+    ensure_alpha_runtime_bootstrap(false)?;
+    write_json_file(&objective_simulation_policy_path(), &policy)?;
+    Ok(policy)
+}
+
+pub fn load_objective_ensemble_policy() -> Result<ObjectiveEnsemblePolicy, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_ensemble_policy_path())
+}
+
+pub fn set_objective_ensemble_mode(mode: &str) -> Result<ObjectiveEnsemblePolicy, AgentError> {
+    let policy = ensemble_policy_for_mode(mode);
+    ensure_alpha_runtime_bootstrap(false)?;
+    write_json_file(&objective_ensemble_policy_path(), &policy)?;
+    Ok(policy)
+}
+
+pub fn load_objective_learning_ledger() -> Result<ObjectiveLearningLedger, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    read_json_file(&objective_learning_ledger_path())
+}
+
+pub fn append_objective_learning_entry(
+    mut entry: ObjectiveLearningLedgerEntry,
+) -> Result<ObjectiveLearningLedger, AgentError> {
+    let mut ledger = load_objective_learning_ledger()?;
+    if entry.recorded_at.trim().is_empty() {
+        entry.recorded_at = now_rfc3339();
+    }
+    ledger.entries.push(entry);
+    if ledger.entries.len() > 512 {
+        let drain = ledger.entries.len().saturating_sub(512);
+        ledger.entries.drain(0..drain);
+    }
+    ledger.updated_at = now_rfc3339();
+    write_json_file(&objective_learning_ledger_path(), &ledger)?;
+    Ok(ledger)
+}
+
+pub fn clear_objective_learning_ledger() -> Result<ObjectiveLearningLedger, AgentError> {
+    ensure_alpha_runtime_bootstrap(false)?;
+    let ledger = default_objective_learning_ledger();
+    write_json_file(&objective_learning_ledger_path(), &ledger)?;
+    Ok(ledger)
 }
 
 pub fn load_subagent_registry() -> Result<SubagentRegistry, AgentError> {
@@ -2657,5 +2949,45 @@ mod tests {
         };
         let drift = collect_repo_drift(&spec, &TradingDriftBaseline::default());
         assert_eq!(drift.drift_state, "missing-project");
+    }
+
+    #[test]
+    fn objective_profile_and_policy_planes_roundtrip() {
+        let tmp = tempdir().expect("tempdir");
+        std::env::set_var("HERMES_HOME", tmp.path());
+        ensure_alpha_runtime_bootstrap(true).expect("bootstrap");
+
+        let profile = objective_profile_specialized_for("sheawinkler");
+        let profile = set_objective_profile(profile).expect("set profile");
+        assert_eq!(profile.profile_id, "sheawinkler");
+        assert_eq!(profile.default_shell, "zsh");
+        let loaded_profile = load_objective_profile().expect("load profile");
+        assert_eq!(loaded_profile.profile_id, "sheawinkler");
+
+        let sim = set_objective_simulation_mode("strict").expect("strict sim");
+        assert_eq!(sim.mode, "strict");
+        assert!(sim.require_shadow_pass);
+        assert!(sim.require_replay_validation);
+        let ensemble = set_objective_ensemble_mode("debate").expect("debate ensemble");
+        assert_eq!(ensemble.mode, "debate");
+        assert!(ensemble.require_disagreement_explainer);
+        assert!(!ensemble.allow_fast_path_single_model);
+
+        let ledger = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
+            recorded_at: String::new(),
+            objective_id: "obj-demo".to_string(),
+            objective_state: "advancing".to_string(),
+            decision: "promote".to_string(),
+            evidence_files: vec!["src/lib.rs".to_string()],
+            evidence_commands: vec!["cargo test".to_string()],
+            notes: "test-entry".to_string(),
+        })
+        .expect("append ledger");
+        assert_eq!(ledger.entries.len(), 1);
+        assert_eq!(ledger.entries[0].objective_id, "obj-demo");
+
+        let generalized = reset_objective_profile_generalized().expect("reset profile");
+        assert_eq!(generalized.profile_id, "repo-general");
+        std::env::remove_var("HERMES_HOME");
     }
 }

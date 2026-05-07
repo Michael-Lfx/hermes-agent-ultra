@@ -23,12 +23,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::alpha_runtime::{
-    append_counterfactual, clear_objective_contract, enqueue_loop_event,
-    ensure_alpha_runtime_bootstrap, ensure_trading_runtime_bootstrap, load_alpha_loops,
-    load_last_trading_alpha_report, load_objective_contract, recover_orphan_loop_events,
-    refresh_trading_alpha_report, render_mission_board, render_trading_alpha_board,
-    replay_loop_queue, summarize_objective_contract, upsert_objective_contract,
-    utility_terms_from_contract,
+    append_counterfactual, append_objective_learning_entry, clear_objective_contract,
+    clear_objective_learning_ledger, enqueue_loop_event, ensure_alpha_runtime_bootstrap,
+    ensure_trading_runtime_bootstrap, load_alpha_loops, load_last_trading_alpha_report,
+    load_objective_contract, load_objective_ensemble_policy, load_objective_learning_ledger,
+    load_objective_profile, load_objective_simulation_policy, objective_profile_specialized_for,
+    recover_orphan_loop_events, refresh_trading_alpha_report, render_mission_board,
+    render_trading_alpha_board, replay_loop_queue, reset_objective_profile_generalized,
+    set_objective_ensemble_mode, set_objective_profile, set_objective_simulation_mode,
+    summarize_objective_contract, upsert_objective_contract, utility_terms_from_contract,
+    ObjectiveLearningLedgerEntry,
 };
 use crate::app::{App, PetDock, PetSettings};
 use crate::model_switch::{curated_provider_slugs, normalize_provider_model, provider_model_ids};
@@ -149,7 +153,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ),
     (
         "/objective",
-        "Set/show/clear objective contract (`status|plan|constraints|counterfactual|clear`)",
+        "Set/show objective contract + profile/policies (`status|plan|constraints|counterfactual|profile|simulator|ensemble|ledger|clear`)",
     ),
     ("/goal", "Alias for /objective"),
     (
@@ -7447,10 +7451,245 @@ fn handle_capability_surface_command(
 }
 
 fn handle_objective_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
-    let objective_usage = "Usage: `/objective <text>` or `/objective status|plan|constraints|counterfactual <scenario> | <expected_delta>|clear`.";
+    let objective_usage = "Usage: `/objective <text>` or `/objective status|plan|constraints|counterfactual <scenario> | <expected_delta>|profile [status|list|general|me|set <id>]|simulator [status|balanced|strict|aggressive]|ensemble [status|committee|single|debate]|ledger [status|tail [n]|clear]|clear`.";
 
     if let Some(first) = args.first() {
         let cmd = first.trim().to_ascii_lowercase();
+        if cmd == "profile" {
+            let sub = args
+                .get(1)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "status".to_string());
+            match sub.as_str() {
+                "status" | "show" => {
+                    let p = load_objective_profile()?;
+                    let mut out = String::new();
+                    out.push_str("Objective profile\n");
+                    out.push_str("-----------------\n");
+                    let _ = writeln!(out, "profile_id: {}", p.profile_id);
+                    let _ = writeln!(out, "operator_hint: {}", p.operator_hint);
+                    let _ = writeln!(out, "default_shell: {}", p.default_shell);
+                    let _ = writeln!(out, "memory_backend: {}", p.memory_backend);
+                    let _ = writeln!(out, "specialization_note: {}", p.specialization_note);
+                    if !p.preferred_repos.is_empty() {
+                        out.push_str("preferred_repos:\n");
+                        for repo in p.preferred_repos {
+                            let _ = writeln!(out, "- {}", repo);
+                        }
+                    }
+                    if !p.preferred_languages.is_empty() {
+                        out.push_str("preferred_languages:\n");
+                        for lang in p.preferred_languages {
+                            let _ = writeln!(out, "- {}", lang);
+                        }
+                    }
+                    emit_command_output(app, out.trim_end());
+                    return Ok(CommandResult::Handled);
+                }
+                "list" => {
+                    emit_command_output(
+                        app,
+                        "Objective profile presets:\n- repo-general: generalized defaults for any operator/repo\n- sheawinkler: specialized ContextLattice+zsh profile\n- operator-custom: generated when using `/objective profile set <name>`",
+                    );
+                    return Ok(CommandResult::Handled);
+                }
+                "general" | "repo-general" | "reset" => {
+                    let profile = reset_objective_profile_generalized()?;
+                    emit_command_output(
+                        app,
+                        format!(
+                            "Objective profile reset to generalized defaults.\nprofile_id={} memory_backend={} shell={}",
+                            profile.profile_id, profile.memory_backend, profile.default_shell
+                        ),
+                    );
+                    return Ok(CommandResult::Handled);
+                }
+                "me" | "sheawinkler" => {
+                    let profile = set_objective_profile(objective_profile_specialized_for(
+                        std::env::var("USER")
+                            .unwrap_or_else(|_| "sheawinkler".to_string())
+                            .as_str(),
+                    ))?;
+                    emit_command_output(
+                        app,
+                        format!(
+                            "Objective profile specialized for operator.\nprofile_id={} memory_backend={} shell={}",
+                            profile.profile_id, profile.memory_backend, profile.default_shell
+                        ),
+                    );
+                    return Ok(CommandResult::Handled);
+                }
+                "set" => {
+                    let Some(name) = args.get(2) else {
+                        emit_command_output(
+                            app,
+                            "Usage: /objective profile set <name> (or use /objective profile me|general)",
+                        );
+                        return Ok(CommandResult::Handled);
+                    };
+                    let profile = set_objective_profile(objective_profile_specialized_for(name))?;
+                    emit_command_output(
+                        app,
+                        format!(
+                            "Objective profile set.\nprofile_id={} operator_hint={} shell={} memory_backend={}",
+                            profile.profile_id,
+                            profile.operator_hint,
+                            profile.default_shell,
+                            profile.memory_backend
+                        ),
+                    );
+                    return Ok(CommandResult::Handled);
+                }
+                _ => {
+                    emit_command_output(
+                        app,
+                        "Usage: /objective profile [status|list|general|me|set <id>]",
+                    );
+                    return Ok(CommandResult::Handled);
+                }
+            }
+        }
+
+        if cmd == "simulator" || cmd == "simulation" {
+            let sub = args
+                .get(1)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "status".to_string());
+            if sub == "status" || sub == "show" {
+                let p = load_objective_simulation_policy()?;
+                emit_command_output(
+                    app,
+                    format!(
+                        "Objective simulation policy\nmode={}\nrequire_shadow_pass={}\nmin_shadow_samples={}\nrequire_replay_validation={}\nmax_live_capital_fraction={:.4}\nupdated_at={}",
+                        p.mode,
+                        p.require_shadow_pass,
+                        p.min_shadow_samples,
+                        p.require_replay_validation,
+                        p.max_live_capital_fraction,
+                        p.updated_at
+                    ),
+                );
+                return Ok(CommandResult::Handled);
+            }
+            if !matches!(sub.as_str(), "balanced" | "strict" | "aggressive") {
+                emit_command_output(
+                    app,
+                    "Usage: /objective simulator [status|balanced|strict|aggressive]",
+                );
+                return Ok(CommandResult::Handled);
+            }
+            let p = set_objective_simulation_mode(&sub)?;
+            emit_command_output(
+                app,
+                format!(
+                    "Objective simulation policy updated.\nmode={} shadow_pass={} replay_validation={} max_live_capital_fraction={:.4}",
+                    p.mode,
+                    p.require_shadow_pass,
+                    p.require_replay_validation,
+                    p.max_live_capital_fraction
+                ),
+            );
+            return Ok(CommandResult::Handled);
+        }
+
+        if cmd == "ensemble" {
+            let sub = args
+                .get(1)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "status".to_string());
+            if sub == "status" || sub == "show" {
+                let p = load_objective_ensemble_policy()?;
+                emit_command_output(
+                    app,
+                    format!(
+                        "Objective ensemble policy\nmode={}\narbitration={}\nmin_voters={}\nrequire_disagreement_explainer={}\nallow_fast_path_single_model={}\nupdated_at={}",
+                        p.mode,
+                        p.arbitration,
+                        p.min_voters,
+                        p.require_disagreement_explainer,
+                        p.allow_fast_path_single_model,
+                        p.updated_at
+                    ),
+                );
+                return Ok(CommandResult::Handled);
+            }
+            if !matches!(sub.as_str(), "committee" | "single" | "debate") {
+                emit_command_output(
+                    app,
+                    "Usage: /objective ensemble [status|committee|single|debate]",
+                );
+                return Ok(CommandResult::Handled);
+            }
+            let p = set_objective_ensemble_mode(&sub)?;
+            emit_command_output(
+                app,
+                format!(
+                    "Objective ensemble policy updated.\nmode={} arbitration={} min_voters={} disagreement_explainer={}",
+                    p.mode, p.arbitration, p.min_voters, p.require_disagreement_explainer
+                ),
+            );
+            return Ok(CommandResult::Handled);
+        }
+
+        if cmd == "ledger" {
+            let sub = args
+                .get(1)
+                .map(|v| v.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "status".to_string());
+            if sub == "clear" {
+                clear_objective_learning_ledger()?;
+                emit_command_output(app, "Objective learning ledger cleared.");
+                return Ok(CommandResult::Handled);
+            }
+            let ledger = load_objective_learning_ledger()?;
+            if sub == "status" || sub == "show" {
+                let last = ledger
+                    .entries
+                    .last()
+                    .map(|v| format!("{} {} {}", v.recorded_at, v.objective_state, v.decision))
+                    .unwrap_or_else(|| "none".to_string());
+                emit_command_output(
+                    app,
+                    format!(
+                        "Objective learning ledger\nentries={}\nupdated_at={}\nlast_entry={}",
+                        ledger.entries.len(),
+                        ledger.updated_at,
+                        last
+                    ),
+                );
+                return Ok(CommandResult::Handled);
+            }
+            if sub == "tail" {
+                let n = args
+                    .get(2)
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(8)
+                    .clamp(1, 64);
+                let mut out = String::new();
+                out.push_str("Objective learning ledger tail\n");
+                out.push_str("-----------------------------\n");
+                let start = ledger.entries.len().saturating_sub(n);
+                for row in &ledger.entries[start..] {
+                    let _ = writeln!(
+                        out,
+                        "- {} id={} state={} decision={} notes={}",
+                        row.recorded_at,
+                        row.objective_id,
+                        row.objective_state,
+                        row.decision,
+                        row.notes
+                    );
+                }
+                if ledger.entries.is_empty() {
+                    out.push_str("(empty)\n");
+                }
+                emit_command_output(app, out.trim_end());
+                return Ok(CommandResult::Handled);
+            }
+            emit_command_output(app, "Usage: /objective ledger [status|tail [n]|clear]");
+            return Ok(CommandResult::Handled);
+        }
+
         if cmd == "status" || cmd == "show" {
             let mut out = String::new();
             match app.session_objective.as_deref() {
@@ -7467,6 +7706,27 @@ fn handle_objective_command(app: &mut App, args: &[&str]) -> Result<CommandResul
                 let _ = writeln!(out, "{}", summarize_objective_contract(&contract));
             } else {
                 let _ = writeln!(out, "\nNo persisted objective contract yet.");
+            }
+            if let Ok(profile) = load_objective_profile() {
+                let _ = writeln!(
+                    out,
+                    "\nObjective profile\n-----------------\nprofile_id: {}\noperator_hint: {}\nmemory_backend: {}\ndefault_shell: {}",
+                    profile.profile_id, profile.operator_hint, profile.memory_backend, profile.default_shell
+                );
+            }
+            if let Ok(sim) = load_objective_simulation_policy() {
+                let _ = writeln!(
+                    out,
+                    "\nSimulation policy\n-----------------\nmode: {} (shadow_pass={} replay_validation={} cap={:.4})",
+                    sim.mode, sim.require_shadow_pass, sim.require_replay_validation, sim.max_live_capital_fraction
+                );
+            }
+            if let Ok(ensemble) = load_objective_ensemble_policy() {
+                let _ = writeln!(
+                    out,
+                    "\nEnsemble policy\n---------------\nmode: {} (arbitration={} min_voters={})",
+                    ensemble.mode, ensemble.arbitration, ensemble.min_voters
+                );
             }
             emit_command_output(app, out.trim_end());
             return Ok(CommandResult::Handled);
@@ -7570,8 +7830,20 @@ fn handle_objective_command(app: &mut App, args: &[&str]) -> Result<CommandResul
         || first.eq_ignore_ascii_case("none")
         || first.eq_ignore_ascii_case("reset")
     {
+        let previous_id = load_objective_contract()?
+            .map(|c| c.id)
+            .unwrap_or_else(|| "none".to_string());
         app.set_session_objective(None);
         clear_objective_contract()?;
+        let _ = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
+            recorded_at: String::new(),
+            objective_id: previous_id,
+            objective_state: "cleared".to_string(),
+            decision: "objective_clear".to_string(),
+            evidence_files: vec![],
+            evidence_commands: vec!["/objective clear".to_string()],
+            notes: "Objective contract cleared by operator command.".to_string(),
+        });
         emit_command_output(app, "Session objective cleared.");
         return Ok(CommandResult::Handled);
     }
@@ -7589,6 +7861,19 @@ fn handle_objective_command(app: &mut App, args: &[&str]) -> Result<CommandResul
     .any(|needle| objective_lc.contains(needle));
     let contract = upsert_objective_contract(&objective, trading_sensitive)?;
     app.set_session_objective(Some(objective.clone()));
+    let _ = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
+        recorded_at: String::new(),
+        objective_id: contract.id.clone(),
+        objective_state: "configured".to_string(),
+        decision: "objective_set".to_string(),
+        evidence_files: vec!["alpha/objective_contract.json".to_string()],
+        evidence_commands: vec!["/objective <text>".to_string()],
+        notes: if trading_sensitive {
+            "Trading-sensitive objective configured.".to_string()
+        } else {
+            "General objective configured.".to_string()
+        },
+    });
     emit_command_output(
         app,
         format!(
