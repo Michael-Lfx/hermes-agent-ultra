@@ -43,8 +43,8 @@ use crate::runtime_tool_wiring::{wire_cron_scheduler_backend, wire_stdio_clarify
 use crate::terminal_backend::build_terminal_backend;
 use crate::tui::StreamHandle;
 
-const SESSION_SNAPSHOT_MAX_FILES_DEFAULT: usize = 250;
-const SESSION_SNAPSHOT_MAX_TOTAL_BYTES_DEFAULT: u64 = 256 * 1024 * 1024;
+const SESSION_SNAPSHOT_MAX_FILES_DEFAULT: usize = 1500;
+const SESSION_SNAPSHOT_MAX_TOTAL_BYTES_DEFAULT: u64 = 1536 * 1024 * 1024;
 const SESSION_SNAPSHOT_MIN_FREE_BYTES_DEFAULT: u64 = 128 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
