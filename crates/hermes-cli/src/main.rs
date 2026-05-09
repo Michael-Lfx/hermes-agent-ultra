@@ -98,6 +98,49 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, mpsc};
+
+fn auth_error_message(err: &AgentError) -> Option<String> {
+    match err {
+        AgentError::LlmApi(msg)
+        | AgentError::Config(msg)
+        | AgentError::ToolExecution(msg)
+        | AgentError::Gateway(msg)
+        | AgentError::AuthFailed(msg) => Some(msg.to_ascii_lowercase()),
+        _ => None,
+    }
+}
+
+fn oneshot_should_auto_verify_nous(
+    err: &AgentError,
+    provider_override: Option<&str>,
+    model_override: Option<&str>,
+) -> bool {
+    let Some(message) = auth_error_message(err) else {
+        return false;
+    };
+
+    let is_auth_like = message.contains("401")
+        || message.contains("unauthorized")
+        || message.contains("invalid token")
+        || message.contains("token expired")
+        || message.contains("authentication failed");
+    if !is_auth_like {
+        return false;
+    }
+
+    let provider_is_nous = provider_override
+        .map(str::trim)
+        .is_some_and(|p| p.eq_ignore_ascii_case("nous"));
+    let model_is_nous = model_override
+        .map(str::trim)
+        .is_some_and(|m| m.to_ascii_lowercase().starts_with("nous:"));
+    let message_is_nous = message.contains("nous")
+        || message.contains("portal.nousresearch.com")
+        || message.contains("inference-api.nousresearch.com");
+
+    provider_is_nous || model_is_nous || message_is_nous
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
@@ -145,7 +188,7 @@ async fn main() {
     tracing::debug!("Hermes Agent starting");
 
     if let Some(prompt) = cli.oneshot.clone() {
-        let result = hermes_cli::commands::handle_cli_chat(
+        let mut result = hermes_cli::commands::handle_cli_chat(
             Some(prompt),
             None,
             false,
@@ -154,6 +197,43 @@ async fn main() {
             global_allow_tools_override,
         )
         .await;
+        if let Err(err) = &result {
+            if oneshot_should_auto_verify_nous(
+                err,
+                global_provider_override.as_deref(),
+                global_model_override.as_deref(),
+            ) {
+                eprintln!(
+                    "Detected Nous auth failure in one-shot mode; running `hermes-ultra auth verify nous` and retrying once..."
+                );
+                if let Err(verify_err) = run_auth(
+                    cli.clone(),
+                    Some("verify".to_string()),
+                    Some("nous".to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                )
+                .await
+                {
+                    eprintln!(
+                        "Warning: automatic `auth verify nous` failed: {}",
+                        verify_err
+                    );
+                }
+                result = hermes_cli::commands::handle_cli_chat(
+                    Some(cli.oneshot.clone().unwrap_or_default()),
+                    None,
+                    false,
+                    global_model_override.clone(),
+                    global_provider_override.clone(),
+                    global_allow_tools_override,
+                )
+                .await;
+            }
+        }
         if let Err(e) = result {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -12848,6 +12928,43 @@ mod tests {
         assert_eq!(normalize_auth_provider("text-generation-inference"), "tgi");
         assert_eq!(normalize_auth_provider("api-server"), "api_server");
         assert_eq!(normalize_auth_provider("mm"), "mattermost");
+    }
+
+    #[test]
+    fn oneshot_auto_verify_nous_detects_nous_401_errors() {
+        let err = AgentError::LlmApi(
+            "API error 401 Unauthorized: https://portal.nousresearch.com".to_string(),
+        );
+        assert!(oneshot_should_auto_verify_nous(
+            &err,
+            Some("nous"),
+            Some("nous:openai/gpt-5.5")
+        ));
+        assert!(oneshot_should_auto_verify_nous(
+            &err,
+            None,
+            Some("nous:moonshotai/kimi-k2.6")
+        ));
+        assert!(oneshot_should_auto_verify_nous(&err, None, None));
+    }
+
+    #[test]
+    fn oneshot_auto_verify_nous_ignores_non_nous_or_non_auth_errors() {
+        let not_auth = AgentError::LlmApi("API error 404 Not Found".to_string());
+        assert!(!oneshot_should_auto_verify_nous(
+            &not_auth,
+            Some("nous"),
+            Some("nous:openai/gpt-5.5")
+        ));
+
+        let other_provider = AgentError::LlmApi(
+            "API error 401 Unauthorized: provider openrouter token expired".to_string(),
+        );
+        assert!(!oneshot_should_auto_verify_nous(
+            &other_provider,
+            Some("openrouter"),
+            Some("openrouter:openai/gpt-4o")
+        ));
     }
 
     #[test]
