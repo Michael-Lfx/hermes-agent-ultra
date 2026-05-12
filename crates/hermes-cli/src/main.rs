@@ -1008,15 +1008,17 @@ fn resolve_latest_nonempty_session_file(
         candidates.push((path, modified));
     }
     candidates.sort_by(|a, b| b.1.cmp(&a.1));
+    // Prefer canonical snapshots: file stem == session_info.session_id.
     for (path, _) in candidates {
-        if !session_file_has_nonempty_messages(&path) {
-            continue;
+        if let Some(summary) = session_file_summary(&path) {
+            if summary.message_count > 0 && summary.canonical {
+                let resolved_id = path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "latest".to_string());
+                return Ok((resolved_id, path));
+            }
         }
-        let resolved_id = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "latest".to_string());
-        return Ok((resolved_id, path));
     }
     Err(AgentError::Config(format!(
         "No non-empty saved sessions found in {}.",
@@ -1024,16 +1026,41 @@ fn resolve_latest_nonempty_session_file(
     )))
 }
 
-fn session_file_has_nonempty_messages(path: &Path) -> bool {
+#[derive(Debug, Clone, Default)]
+struct SessionFileSummary {
+    message_count: usize,
+    canonical: bool,
+}
+
+fn session_file_summary(path: &Path) -> Option<SessionFileSummary> {
     let Ok(raw) = std::fs::read_to_string(path) else {
-        return false;
+        return None;
     };
     let Ok(doc) = serde_json::from_str::<serde_json::Value>(&raw) else {
-        return false;
+        return None;
     };
-    doc.get("messages")
+    let message_count = doc
+        .get("messages")
         .and_then(|v| v.as_array())
-        .is_some_and(|arr| !arr.is_empty())
+        .map(|arr| arr.len())
+        .unwrap_or(0);
+    let stem = path
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    let session_id = doc
+        .get("session_info")
+        .and_then(|v| v.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .unwrap_or_default();
+    let canonical =
+        !stem.is_empty() && !session_id.is_empty() && stem.eq_ignore_ascii_case(session_id);
+    Some(SessionFileSummary {
+        message_count,
+        canonical,
+    })
 }
 
 fn resolve_resume_session_file(
@@ -1061,6 +1088,30 @@ fn resolve_resume_session_file(
             candidates.push((path, modified));
         }
         candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        // 1) newest canonical non-empty snapshot
+        for (path, _) in &candidates {
+            if let Some(summary) = session_file_summary(path) {
+                if summary.canonical && summary.message_count > 0 {
+                    let resolved_id = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "latest".to_string());
+                    return Ok((resolved_id, path.clone()));
+                }
+            }
+        }
+        // 2) newest canonical snapshot (may be startup stub)
+        for (path, _) in &candidates {
+            if let Some(summary) = session_file_summary(path) {
+                if summary.canonical {
+                    let resolved_id = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "latest".to_string());
+                    return Ok((resolved_id, path.clone()));
+                }
+            }
+        }
         let Some((path, _)) = candidates.into_iter().next() else {
             return Err(AgentError::Config(format!(
                 "No saved sessions found in {}.",
@@ -14539,6 +14590,39 @@ max_turns: 50
             resolve_resume_session_file(&sessions_dir, None).expect("resolve latest");
         assert_eq!(resolved, "new-session");
         assert_eq!(path, new);
+    }
+
+    #[test]
+    fn resolve_resume_session_file_latest_prefers_canonical_session_stem() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = cli_for_temp_state_root(tmp.path());
+        let sessions_dir = hermes_state_root(&cli).join("sessions");
+        std::fs::create_dir_all(&sessions_dir).expect("create sessions dir");
+
+        let canonical = sessions_dir.join("c0ffee00-0000-4000-8000-000000000001.json");
+        std::fs::write(
+            &canonical,
+            r#"{
+  "session_info": {"session_id":"c0ffee00-0000-4000-8000-000000000001","model":"nous:openai/gpt-5.5"},
+  "messages":[]
+}"#,
+        )
+        .expect("write canonical");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let named = sessions_dir.join("newest.json");
+        std::fs::write(
+            &named,
+            r#"{
+  "session_info": {"session_id":"snap-prune","model":"nous:openai/gpt-5.5"},
+  "messages":[{"role":"User","content":"snapshot payload"}]
+}"#,
+        )
+        .expect("write named artifact");
+
+        let (resolved, path) =
+            resolve_resume_session_file(&sessions_dir, None).expect("resolve latest");
+        assert_eq!(resolved, "c0ffee00-0000-4000-8000-000000000001");
+        assert_eq!(path, canonical);
     }
 
     #[test]

@@ -7645,6 +7645,19 @@ fn inspect_snapshot_integrity(path: &Path) -> SnapshotIntegrity {
     }
 }
 
+fn is_canonical_snapshot_name(name: &str, integrity: &SnapshotIntegrity) -> bool {
+    let stem = name.trim();
+    let Some(session_id) = integrity
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return false;
+    };
+    !stem.is_empty() && stem.eq_ignore_ascii_case(session_id)
+}
+
 fn resolve_saved_session_entry<'a>(
     entries: &'a [(String, PathBuf, SystemTime)],
     requested: &str,
@@ -7898,10 +7911,26 @@ fn handle_resume_command(app: &mut App, args: &[&str]) -> Result<CommandResult, 
     }
 
     if args.is_empty() {
-        if let Some((name, path, _)) = entries
+        let pick = entries
             .iter()
-            .find(|(_, path, _)| inspect_snapshot_integrity(path).valid)
-        {
+            .find(|(name, path, _)| {
+                let integrity = inspect_snapshot_integrity(path);
+                integrity.valid
+                    && integrity.message_count > 0
+                    && is_canonical_snapshot_name(name, &integrity)
+            })
+            .or_else(|| {
+                entries.iter().find(|(name, path, _)| {
+                    let integrity = inspect_snapshot_integrity(path);
+                    integrity.valid && is_canonical_snapshot_name(name, &integrity)
+                })
+            })
+            .or_else(|| {
+                entries
+                    .iter()
+                    .find(|(_, path, _)| inspect_snapshot_integrity(path).valid)
+            });
+        if let Some((name, path, _)) = pick {
             return load_session_from_path(app, name, path, true);
         }
         emit_command_output(
