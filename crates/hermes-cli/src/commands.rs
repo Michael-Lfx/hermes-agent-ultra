@@ -8580,6 +8580,17 @@ fn gemini_thinking_level_for_effort(effort: &str) -> &'static str {
     }
 }
 
+fn openai_reasoning_effort_for_level(effort: &str) -> &'static str {
+    match effort {
+        "minimal" => "low",
+        "xhigh" => "high",
+        "low" => "low",
+        "medium" => "medium",
+        "high" => "high",
+        _ => "medium",
+    }
+}
+
 fn set_provider_reasoning_effort(cfg: &mut GatewayConfig, provider: &str, effort: Option<&str>) {
     let provider_key = resolve_provider_key(cfg, provider);
     let provider_cfg = cfg
@@ -8595,17 +8606,18 @@ fn set_provider_reasoning_effort(cfg: &mut GatewayConfig, provider: &str, effort
 
     match effort {
         Some(level) => {
-            body_map.insert(
-                "reasoning_effort".to_string(),
-                serde_json::Value::String(level.to_string()),
-            );
+            // Keep request payloads OpenAI-compatible for Nous/OpenRouter/OpenAI routes:
+            // use `reasoning.effort` (`low|medium|high`) instead of legacy top-level
+            // `reasoning_effort` which can trigger schema validation errors.
+            body_map.remove("reasoning_effort");
             let mut reasoning_obj = body_map
                 .get("reasoning")
                 .and_then(|v| v.as_object().cloned())
                 .unwrap_or_default();
+            let mapped_reasoning = openai_reasoning_effort_for_level(level);
             reasoning_obj.insert(
                 "effort".to_string(),
-                serde_json::Value::String(level.to_string()),
+                serde_json::Value::String(mapped_reasoning.to_string()),
             );
             body_map.insert(
                 "reasoning".to_string(),
@@ -8673,9 +8685,17 @@ fn provider_reasoning_effort(cfg: &GatewayConfig, provider: &str) -> Option<Stri
     cfg.llm_providers
         .get(&provider_key)
         .and_then(|entry| entry.extra_body.as_ref())
-        .and_then(|body| body.get("reasoning_effort"))
-        .and_then(|value| value.as_str())
-        .map(ToString::to_string)
+        .and_then(|body| {
+            body.get("reasoning")
+                .and_then(|value| value.get("effort"))
+                .and_then(|value| value.as_str())
+                .map(ToString::to_string)
+                .or_else(|| {
+                    body.get("reasoning_effort")
+                        .and_then(|value| value.as_str())
+                        .map(ToString::to_string)
+                })
+        })
 }
 
 fn handle_reasoning_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
@@ -22119,13 +22139,7 @@ install_command: "uv pip install -r requirements.txt"
             .get("nous")
             .and_then(|entry| entry.extra_body.as_ref())
             .expect("extra body");
-        assert_eq!(
-            extra
-                .get("reasoning_effort")
-                .and_then(|value| value.as_str())
-                .expect("reasoning effort"),
-            "high"
-        );
+        assert!(extra.get("reasoning_effort").is_none());
         assert_eq!(
             extra
                 .get("reasoning")
@@ -22141,6 +22155,37 @@ install_command: "uv pip install -r requirements.txt"
             .get("nous")
             .and_then(|entry| entry.extra_body.as_ref());
         assert!(extra_after_clear.is_none());
+    }
+
+    #[test]
+    fn set_provider_reasoning_effort_normalizes_openai_effort_levels() {
+        let mut cfg = GatewayConfig::default();
+        set_provider_reasoning_effort(&mut cfg, "nous", Some("xhigh"));
+        let extra = cfg
+            .llm_providers
+            .get("nous")
+            .and_then(|entry| entry.extra_body.as_ref())
+            .expect("extra body");
+        assert_eq!(
+            extra
+                .get("reasoning")
+                .and_then(|value| value.get("effort"))
+                .and_then(|value| value.as_str()),
+            Some("high")
+        );
+        set_provider_reasoning_effort(&mut cfg, "nous", Some("minimal"));
+        let extra = cfg
+            .llm_providers
+            .get("nous")
+            .and_then(|entry| entry.extra_body.as_ref())
+            .expect("extra body");
+        assert_eq!(
+            extra
+                .get("reasoning")
+                .and_then(|value| value.get("effort"))
+                .and_then(|value| value.as_str()),
+            Some("low")
+        );
     }
 
     #[test]
