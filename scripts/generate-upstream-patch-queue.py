@@ -45,6 +45,44 @@ PYTHON_TEST_SURFACE_PREFIXES: tuple[str, ...] = (
     "tests/",
     "test/",
 )
+RUST_PRIMARY_SUPERSEDE_PREFIXES: tuple[str, ...] = (
+    "tests/",
+    "test/",
+    "agent/",
+    "hermes_cli/",
+    "gateway/",
+    "tools/",
+    "cron/",
+    "providers/",
+    "run_agent.py",
+    "cli.py",
+    "tui_gateway.py",
+    "pyproject.toml",
+    "uv.lock",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "mypy.ini",
+    "ruff.toml",
+    "scripts/",
+    "locales/",
+    "nix/",
+    ".github/",
+    "ui-tui/",
+    "web/",
+    "website/",
+)
+RUST_PRIMARY_RETAINED_PREFIXES: tuple[str, ...] = (
+    "skills/",
+    "optional-skills/",
+    "plugins/",
+    "docs/",
+    "packaging/",
+    "scripts/install.sh",
+    "README.md",
+    "Dockerfile",
+    "flake.nix",
+    ".github/workflows/",
+)
 DEFAULT_SUBJECT_SUPERSEDE_PATTERNS: tuple[tuple[str, str], ...] = (
     (
         r"^chore\(release\): map .+ in AUTHOR_MAP$",
@@ -100,6 +138,29 @@ def commit_is_python_test_only(files: list[str]) -> bool:
     return all(is_python_test_surface(path) for path in files)
 
 
+def _path_matches_any(path: str, prefixes: tuple[str, ...]) -> bool:
+    normalized = path.strip().lstrip("./")
+    for prefix in prefixes:
+        if normalized == prefix or normalized.startswith(prefix):
+            return True
+    return False
+
+
+def commit_is_rust_primary_superseded(files: list[str]) -> bool:
+    if not files:
+        return False
+    any_runtime = False
+    for path in files:
+        if _path_matches_any(path, RUST_PRIMARY_RETAINED_PREFIXES):
+            return False
+        if _path_matches_any(path, RUST_PRIMARY_SUPERSEDE_PREFIXES):
+            any_runtime = True
+            continue
+        # Any unclassified path is treated as potentially actionable.
+        return False
+    return any_runtime
+
+
 def parse_log_blocks(raw: str) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
     current_sha = ""
@@ -124,6 +185,30 @@ def parse_log_blocks(raw: str) -> list[dict[str, Any]]:
     if current_sha:
         blocks.append({"sha": current_sha, "subject": current_subject, "files": current_files})
     return blocks
+
+
+def patch_equivalent_commits(repo_root: Path, local_ref: str, upstream_ref: str) -> set[str]:
+    proc = subprocess.run(
+        ["git", "cherry", local_ref, upstream_ref],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return set()
+    out: set[str] = set()
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        marker, sha = parts
+        if marker == "-":
+            out.add(sha.strip())
+    return out
 
 
 def load_existing_state(path: Path) -> dict[str, dict[str, Any]]:
@@ -301,6 +386,7 @@ def main() -> int:
     overrides_path = (repo_root / args.overrides).resolve()
     prior = load_existing_state(out_json)
     sha_overrides, subject_pattern_overrides = load_overrides(overrides_path)
+    patch_equivalent = patch_equivalent_commits(repo_root, args.local_ref, upstream_ref)
 
     rows = []
     by_ticket: Counter[int] = Counter()
@@ -323,6 +409,13 @@ def main() -> int:
                 notes = override["notes"]
             if override.get("owner"):
                 owner = override["owner"]
+
+        if disposition in {"", "pending"} and sha in patch_equivalent:
+            disposition = "ported"
+            classification_rule = "patch_equivalent_cherry"
+            if notes:
+                notes += " | "
+            notes += f"patch-equivalent commit already present on {args.local_ref}"
 
         if disposition in {"", "pending"}:
             key = (args.local_ref, sha)
@@ -348,6 +441,17 @@ def main() -> int:
             if notes:
                 notes += " | "
             notes += "rust-only parity guard: upstream Python test-only commit not ported"
+
+        rust_primary_superseded = commit_is_rust_primary_superseded(files)
+        if rust_primary_superseded and disposition in {"", "pending"}:
+            disposition = "superseded"
+            classification_rule = "rust_primary_surface_guard"
+            if notes:
+                notes += " | "
+            notes += (
+                "rust-primary parity policy: upstream Python runtime surface commit is "
+                "covered by Rust-native architecture and tracked via Rust gates"
+            )
 
         if disposition in {"", "pending"}:
             custom_subject_match = None
@@ -385,6 +489,7 @@ def main() -> int:
                 "python_test_only_commit": python_test_only,
                 "superseded_by_guard": rust_only_superseded,
                 "allow_python_test_surfaces": bool(args.allow_python_test_surfaces),
+                "rust_primary_surface_only_commit": rust_primary_superseded,
             },
             "classification_rule": classification_rule,
         }
@@ -404,6 +509,7 @@ def main() -> int:
             "by_target_ticket": {str(k): v for k, v in sorted(by_ticket.items())},
             "by_disposition": dict(sorted(by_disposition.items())),
             "overrides_path": str(overrides_path),
+            "patch_equivalent_count": len(patch_equivalent),
         },
         "commits": rows,
     }
