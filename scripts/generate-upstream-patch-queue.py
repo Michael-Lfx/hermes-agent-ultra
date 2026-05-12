@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 import subprocess
 from collections import Counter
 from pathlib import Path
@@ -43,6 +44,20 @@ TICKET_NAME = {
 PYTHON_TEST_SURFACE_PREFIXES: tuple[str, ...] = (
     "tests/",
     "test/",
+)
+DEFAULT_SUBJECT_SUPERSEDE_PATTERNS: tuple[tuple[str, str], ...] = (
+    (
+        r"^chore\(release\): map .+ in AUTHOR_MAP$",
+        "release metadata-only AUTHOR_MAP update from upstream Python pipeline",
+    ),
+    (
+        r"^chore\(release\): add .+ to AUTHOR_MAP",
+        "release metadata-only AUTHOR_MAP update from upstream Python pipeline",
+    ),
+    (
+        r"^review\(.+\): .+$",
+        "review-only upstream nit commit; no Rust-runtime behavior delta",
+    ),
 )
 
 
@@ -131,6 +146,98 @@ def load_existing_state(path: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
+def git_blob_text(repo_root: Path, ref: str, path: str) -> str | None:
+    proc = subprocess.run(
+        ["git", "show", f"{ref}:{path}"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def file_identical_between_refs(repo_root: Path, local_ref: str, upstream_ref: str, path: str) -> bool:
+    local_blob = git_blob_text(repo_root, local_ref, path)
+    if local_blob is None:
+        return False
+    upstream_blob = git_blob_text(repo_root, upstream_ref, path)
+    if upstream_blob is None:
+        return False
+    return local_blob == upstream_blob
+
+
+def commit_mirrored_between_refs(
+    repo_root: Path,
+    local_ref: str,
+    upstream_ref: str,
+    files: list[str],
+) -> bool:
+    if not files:
+        return False
+    return all(file_identical_between_refs(repo_root, local_ref, upstream_ref, path) for path in files)
+
+
+def load_overrides(path: Path) -> tuple[dict[str, dict[str, str]], list[dict[str, str]]]:
+    if not path.exists():
+        return {}, []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}, []
+    sha_overrides_raw = payload.get("sha", {}) if isinstance(payload, dict) else {}
+    subject_patterns_raw = payload.get("subject_patterns", {}) if isinstance(payload, dict) else {}
+    sha_overrides: dict[str, dict[str, str]] = {}
+    if isinstance(sha_overrides_raw, dict):
+        for sha, row in sha_overrides_raw.items():
+            if not isinstance(row, dict):
+                continue
+            sha_overrides[str(sha).strip()] = {
+                "disposition": str(row.get("disposition", "")).strip(),
+                "notes": str(row.get("notes", "")).strip(),
+                "owner": str(row.get("owner", "")).strip(),
+            }
+    subject_patterns: list[dict[str, str]] = []
+    if isinstance(subject_patterns_raw, list):
+        for row in subject_patterns_raw:
+            if not isinstance(row, dict):
+                continue
+            pattern = str(row.get("pattern", "")).strip()
+            disposition = str(row.get("disposition", "")).strip()
+            notes = str(row.get("notes", "")).strip()
+            if not pattern or not disposition:
+                continue
+            subject_patterns.append(
+                {
+                    "pattern": pattern,
+                    "disposition": disposition,
+                    "notes": notes,
+                }
+            )
+    return sha_overrides, subject_patterns
+
+
+def resolve_sha_override(sha: str, overrides: dict[str, dict[str, str]]) -> dict[str, str] | None:
+    direct = overrides.get(sha)
+    if direct:
+        return direct
+    for key, value in overrides.items():
+        normalized = key.strip()
+        if normalized and sha.startswith(normalized):
+            return value
+    return None
+
+
+def classify_subject_default(subject: str) -> tuple[str, str] | None:
+    text = subject.strip()
+    for pattern, note in DEFAULT_SUBJECT_SUPERSEDE_PATTERNS:
+        if re.search(pattern, text, flags=re.IGNORECASE):
+            return ("superseded", note)
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate upstream missing patch queue.")
     parser.add_argument("--repo-root", default=".", help="Repository root path")
@@ -165,6 +272,12 @@ def main() -> int:
             "Default behavior marks them superseded under Rust-only parity policy."
         ),
     )
+    parser.add_argument(
+        "--overrides",
+        default="docs/parity/queue-overrides.json",
+        type=Path,
+        help="Optional JSON file with sha and subject-pattern disposition overrides.",
+    )
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -185,11 +298,14 @@ def main() -> int:
 
     out_json = (repo_root / args.out_json).resolve()
     out_md = (repo_root / args.out_md).resolve()
+    overrides_path = (repo_root / args.overrides).resolve()
     prior = load_existing_state(out_json)
+    sha_overrides, subject_pattern_overrides = load_overrides(overrides_path)
 
     rows = []
     by_ticket: Counter[int] = Counter()
     by_disposition: Counter[str] = Counter()
+    mirrored_cache: dict[tuple[str, str], bool] = {}
     for block in blocks:
         sha = block["sha"]
         files = sorted(set(block["files"]))
@@ -197,13 +313,64 @@ def main() -> int:
         prev = prior.get(sha, {})
         disposition = str(prev.get("disposition", "pending")) or "pending"
         notes = str(prev.get("notes", ""))
+        owner = str(prev.get("owner", ""))
+        classification_rule = "prior_state"
+        override = resolve_sha_override(sha, sha_overrides)
+        if override:
+            classification_rule = "sha_override"
+            disposition = override.get("disposition") or disposition
+            if override.get("notes"):
+                notes = override["notes"]
+            if override.get("owner"):
+                owner = override["owner"]
+
+        if disposition in {"", "pending"}:
+            key = (args.local_ref, sha)
+            if key not in mirrored_cache:
+                mirrored_cache[key] = commit_mirrored_between_refs(
+                    repo_root,
+                    args.local_ref,
+                    upstream_ref,
+                    files,
+                )
+            if mirrored_cache[key]:
+                disposition = "mirrored"
+                classification_rule = "mirrored_file_state"
+                if notes:
+                    notes += " | "
+                notes += f"all touched files in {upstream_ref} already mirror {args.local_ref}"
+
         python_test_only = commit_is_python_test_only(files)
         rust_only_superseded = python_test_only and not args.allow_python_test_surfaces
         if rust_only_superseded and disposition in {"", "pending"}:
             disposition = "superseded"
+            classification_rule = "rust_only_python_test_guard"
             if notes:
                 notes += " | "
             notes += "rust-only parity guard: upstream Python test-only commit not ported"
+
+        if disposition in {"", "pending"}:
+            custom_subject_match = None
+            for item in subject_pattern_overrides:
+                if re.search(item["pattern"], block["subject"], flags=re.IGNORECASE):
+                    custom_subject_match = item
+                    break
+            if custom_subject_match:
+                disposition = custom_subject_match["disposition"]
+                classification_rule = "subject_override_pattern"
+                if custom_subject_match.get("notes"):
+                    if notes:
+                        notes += " | "
+                    notes += custom_subject_match["notes"]
+            else:
+                default_subject_match = classify_subject_default(block["subject"])
+                if default_subject_match is not None:
+                    disposition, match_note = default_subject_match
+                    classification_rule = "default_subject_pattern"
+                    if match_note:
+                        if notes:
+                            notes += " | "
+                        notes += match_note
         row = {
             "sha": sha,
             "subject": block["subject"],
@@ -212,13 +379,14 @@ def main() -> int:
             "files_touched": len(files),
             "files_sample": files[:20],
             "disposition": disposition,
-            "owner": str(prev.get("owner", "")),
+            "owner": owner,
             "notes": notes,
             "rust_only_guard": {
                 "python_test_only_commit": python_test_only,
                 "superseded_by_guard": rust_only_superseded,
                 "allow_python_test_surfaces": bool(args.allow_python_test_surfaces),
             },
+            "classification_rule": classification_rule,
         }
         rows.append(row)
         by_ticket[ticket] += 1
@@ -235,6 +403,7 @@ def main() -> int:
             "total_commits": len(rows),
             "by_target_ticket": {str(k): v for k, v in sorted(by_ticket.items())},
             "by_disposition": dict(sorted(by_disposition.items())),
+            "overrides_path": str(overrides_path),
         },
         "commits": rows,
     }

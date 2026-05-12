@@ -1,0 +1,35 @@
+{
+  "sha": {
+    "3d90292eda55": {
+      "disposition": "superseded",
+      "notes": "rust models_dev registry already resolves provider aliases in list_provider_models with regression coverage in crates/hermes-intelligence/src/models_dev/client.rs"
+    },
+    "8b1ff55f5382": {
+      "disposition": "superseded",
+      "notes": "rust gateway already strips group mention prefixes for slash recognition in crates/hermes-gateway/src/platforms/wecom_callback.rs"
+    },
+    "15efb410d035": {
+      "disposition": "superseded",
+      "notes": "upstream nixosModules.nix path does not exist in this fork packaging surface; no functional Rust runtime delta"
+    },
+    "22afa066f838": {
+      "disposition": "superseded",
+      "notes": "rust cron runner already guards trailing control payload parse via object-only extraction in crates/hermes-cron/src/runner.rs"
+    },
+    "738d0900fddd": {
+      "disposition": "superseded",
+      "notes": "rust auxiliary transport stack in crates/hermes-intelligence/src/auxiliary/* already uses typed transport path and does not mirror Python auxiliary_client internals"
+    },
+    "f4612785a485": {
+      "disposition": "superseded",
+      "notes": "rust anthropic normalization path is already typed and test-covered; Python adapter refactor not directly portable to Rust architecture"
+    }
+  },
+  "subject_patterns": [
+    {
+      "pattern": "^docs\\(cron\\):",
+      "disposition": "mirrored",
+      "notes": "cron docs changes are mirrored by file-state sync from upstream website/docs surface"
+    }
+  ]
+}
