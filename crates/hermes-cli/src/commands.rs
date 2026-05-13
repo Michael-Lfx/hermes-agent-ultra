@@ -12973,7 +12973,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
             emit_command_output(
                 app,
                 format!(
-                    "Quorum policy\nenabled={}\nmode={}\nvoters={}\nmodels={}\nupdated_at={}\n\nQuorum is optional and off by default to control token cost.",
+                    "Quorum policy\nenabled={}\nmode={}\nvoters={}\nmodels={}\narmed_once={}\nupdated_at={}\n\nQuorum is optional and off by default to control token cost.",
                     policy.enabled,
                     policy.mode,
                     policy.voters,
@@ -12982,6 +12982,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
                     } else {
                         policy.models.join(", ")
                     },
+                    app.quorum_armed_once,
                     policy.updated_at
                 ),
             );
@@ -12990,6 +12991,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
             let policy = set_quorum_policy(true, None, None)?;
             std::env::set_var("HERMES_QUORUM_ENABLED", "1");
             install_quorum_system_hint(app, policy.voters, &policy.models);
+            app.quorum_armed_once = false;
             emit_command_output(
                 app,
                 format!(
@@ -13007,6 +13009,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
             let policy = set_quorum_policy(false, None, None)?;
             std::env::set_var("HERMES_QUORUM_ENABLED", "0");
             clear_quorum_system_hints(app);
+            app.quorum_armed_once = false;
             emit_command_output(
                 app,
                 format!(
@@ -13074,6 +13077,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
                 return Ok(CommandResult::Handled);
             }
             install_quorum_system_hint(app, policy.voters, &policy.models);
+            app.quorum_armed_once = true;
             emit_command_output(
                 app,
                 "Quorum deep-reasoning armed for subsequent turns.\nNext user prompt will run multi-voter fan-out across configured models and return synthesis (plus persisted quorum artifact).",

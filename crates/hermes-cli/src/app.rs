@@ -287,6 +287,8 @@ pub struct App {
     pub pending_image_hint: Option<String>,
     /// Optional durable objective for the current interactive session.
     pub session_objective: Option<String>,
+    /// One-shot quorum arm state set by `/quorum run`.
+    pub quorum_armed_once: bool,
     /// Animated companion pet settings.
     pub pet_settings: PetSettings,
 }
@@ -304,6 +306,7 @@ impl std::fmt::Debug for App {
             .field("pending_theme", &self.pending_theme)
             .field("pending_image_hint", &self.pending_image_hint)
             .field("session_objective", &self.session_objective)
+            .field("quorum_armed_once", &self.quorum_armed_once)
             .field("pet_settings", &self.pet_settings)
             .finish_non_exhaustive()
     }
@@ -784,8 +787,23 @@ impl App {
     }
 
     fn quorum_mode_armed_for_turn(&self) -> Option<QuorumPolicy> {
-        let policy = load_quorum_policy().ok()?;
+        let policy = match load_quorum_policy() {
+            Ok(policy) => policy,
+            Err(err) => {
+                Self::emit_lifecycle_event(
+                    &self.stream_handle_shared,
+                    format!("quorum policy load failed: {}", err),
+                );
+                return None;
+            }
+        };
         if !policy.enabled {
+            if self.quorum_armed_once {
+                Self::emit_lifecycle_event(
+                    &self.stream_handle_shared,
+                    "quorum run requested but policy is disabled; run `/quorum on` first",
+                );
+            }
             return None;
         }
         let has_hint = self.messages.iter().any(|message| {
@@ -796,17 +814,36 @@ impl App {
                     .unwrap_or_default()
                     .starts_with(QUORUM_HINT_PREFIX)
         });
-        if !has_hint {
-            return None;
-        }
         let has_user_turn = self
             .messages
             .iter()
             .any(|m| m.role == hermes_core::MessageRole::User);
         if !has_user_turn {
+            if self.quorum_armed_once || has_hint {
+                Self::emit_lifecycle_event(
+                    &self.stream_handle_shared,
+                    "quorum armed but no user turn present yet; waiting for next user prompt",
+                );
+            }
+            return None;
+        }
+        if !(self.quorum_armed_once || has_hint) {
             return None;
         }
         Some(policy)
+    }
+
+    fn clear_quorum_system_hints_inplace(&mut self) {
+        self.messages.retain(|message| {
+            if message.role != hermes_core::MessageRole::System {
+                return true;
+            }
+            !message
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with(QUORUM_HINT_PREFIX)
+        });
     }
 
     fn collect_quorum_models(policy: &QuorumPolicy, current_model: &str) -> Vec<String> {
@@ -1072,6 +1109,7 @@ impl App {
             pending_theme: None,
             pending_image_hint: None,
             session_objective: None,
+            quorum_armed_once: false,
             pet_settings: load_pet_settings(),
         };
         app.ensure_session_stub_snapshot();
@@ -1652,6 +1690,8 @@ impl App {
             );
         }
         if let Some(policy) = self.quorum_mode_armed_for_turn() {
+            self.quorum_armed_once = false;
+            self.clear_quorum_system_hints_inplace();
             self.interrupt_controller.clear_interrupt();
             match self.run_quorum_fanout_turn(run_started_at, policy).await {
                 Ok(true) => return Ok(()),
@@ -2289,7 +2329,7 @@ fn apply_cli_runtime_overrides(config: &mut GatewayConfig, cli: &Cli) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alpha_runtime::upsert_objective_contract;
+    use crate::alpha_runtime::{load_quorum_policy, set_quorum_policy, upsert_objective_contract};
     use crate::test_env_lock;
     use hermes_config::LlmProviderConfig;
     use std::collections::HashMap;
@@ -2339,6 +2379,7 @@ mod tests {
             pending_theme: None,
             pending_image_hint: None,
             session_objective: None,
+            quorum_armed_once: false,
             pet_settings: PetSettings::default(),
         }
     }
@@ -2401,6 +2442,147 @@ mod tests {
         assert_eq!(App::required_quorum_success(3), 2);
         assert_eq!(App::required_quorum_success(4), 3);
         assert_eq!(App::required_quorum_success(5), 3);
+    }
+
+    #[test]
+    fn test_quorum_mode_armed_once_triggers_without_system_hint() {
+        let _guard = env_test_lock();
+        let prev_home = std::env::var("HERMES_HOME").ok();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HERMES_HOME", tmp.path());
+
+        let _ = set_quorum_policy(
+            true,
+            Some(3),
+            Some(vec![
+                "nous:openai/gpt-5.5-pro".to_string(),
+                "nous:anthropic/claude-opus-4.7".to_string(),
+            ]),
+        )
+        .expect("set quorum policy");
+        let policy = load_quorum_policy().expect("load quorum policy");
+        assert!(
+            policy.enabled,
+            "quorum policy should be enabled in test home"
+        );
+
+        let mut app = build_minimal_test_app();
+        app.messages = vec![hermes_core::Message::user("run quorum now")];
+        app.quorum_armed_once = true;
+        let has_hint = app.messages.iter().any(|message| {
+            message.role == hermes_core::MessageRole::System
+                && message
+                    .content
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with(QUORUM_HINT_PREFIX)
+        });
+        let has_user_turn = app
+            .messages
+            .iter()
+            .any(|m| m.role == hermes_core::MessageRole::User);
+
+        assert!(
+            app.quorum_mode_armed_for_turn().is_some(),
+            "one-shot quorum arm should trigger fan-out without relying on stale system hints (enabled={}, armed_once={}, has_hint={}, has_user_turn={})",
+            policy.enabled,
+            app.quorum_armed_once,
+            has_hint,
+            has_user_turn
+        );
+
+        match prev_home {
+            Some(v) => std::env::set_var("HERMES_HOME", v),
+            None => std::env::remove_var("HERMES_HOME"),
+        }
+    }
+
+    #[test]
+    fn test_clear_quorum_system_hints_inplace_preserves_other_system_messages() {
+        let mut app = build_minimal_test_app();
+        app.messages = vec![
+            hermes_core::Message::system("[QUORUM_MODE] quorum armed"),
+            hermes_core::Message::system("normal system context"),
+            hermes_core::Message::user("hello"),
+        ];
+
+        app.clear_quorum_system_hints_inplace();
+
+        assert_eq!(app.messages.len(), 2);
+        assert!(app.messages.iter().all(|message| !message
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("[QUORUM_MODE] ")));
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.as_deref() == Some("normal system context")));
+    }
+
+    #[test]
+    fn test_run_agent_quorum_arm_persists_artifact_even_on_voter_failures() {
+        let _guard = env_test_lock();
+        let prev_home = std::env::var("HERMES_HOME").ok();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_var("HERMES_HOME", tmp.path());
+
+        let _ = set_quorum_policy(
+            true,
+            Some(3),
+            Some(vec![
+                "openai:gpt-4o".to_string(),
+                "anthropic:claude-3-5-sonnet".to_string(),
+                "nous:openai/gpt-5.5-pro".to_string(),
+            ]),
+        )
+        .expect("set quorum policy");
+
+        let mut app = build_minimal_test_app();
+        app.session_id = "quorum-test-session".to_string();
+        app.messages = vec![hermes_core::Message::user(
+            "no tools, just verify quorum fan-out branch",
+        )];
+        app.quorum_armed_once = true;
+
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let result = runtime.block_on(app.run_agent());
+        assert!(
+            result.is_err(),
+            "NoBackendProvider should fail voter inference, but quorum artifact must still persist"
+        );
+
+        let quorum_dir = app.state_root.join("quorum");
+        let artifacts: Vec<_> = std::fs::read_dir(&quorum_dir)
+            .expect("read quorum artifact dir")
+            .flatten()
+            .filter(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("json"))
+            .collect();
+        assert!(
+            !artifacts.is_empty(),
+            "quorum run should write at least one artifact file"
+        );
+        let latest = artifacts
+            .iter()
+            .max_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok())
+            .expect("latest quorum artifact");
+        let raw = std::fs::read_to_string(latest.path()).expect("read quorum artifact");
+        let doc: serde_json::Value = serde_json::from_str(&raw).expect("parse quorum artifact");
+        assert_eq!(
+            doc.get("session_id").and_then(|v| v.as_str()),
+            Some("quorum-test-session")
+        );
+        assert!(
+            doc.get("voters")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| !arr.is_empty()),
+            "artifact should contain per-voter outcomes"
+        );
+
+        match prev_home {
+            Some(v) => std::env::set_var("HERMES_HOME", v),
+            None => std::env::remove_var("HERMES_HOME"),
+        }
     }
 
     #[test]
