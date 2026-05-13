@@ -18921,7 +18921,8 @@ pub async fn handle_cli_sessions(
                 println!("No sessions directory found.");
                 return Ok(());
             }
-            let mut entries: Vec<(String, u64)> = Vec::new();
+            let mut entries: Vec<(String, u64, std::time::SystemTime, bool, bool, usize)> =
+                Vec::new();
             if let Ok(rd) = std::fs::read_dir(&sessions_dir) {
                 for entry in rd.filter_map(|e| e.ok()) {
                     let path = entry.path();
@@ -18931,17 +18932,50 @@ pub async fn handle_cli_sessions(
                             .unwrap_or_default()
                             .to_string_lossy()
                             .into_owned();
-                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                        entries.push((stem, size));
+                        let meta = std::fs::metadata(&path);
+                        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                        let modified = meta
+                            .and_then(|m| m.modified())
+                            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        let integrity = inspect_snapshot_integrity(&path);
+                        let canonical = is_canonical_snapshot_name(&stem, &integrity);
+                        entries.push((
+                            stem,
+                            size,
+                            modified,
+                            canonical,
+                            integrity.valid,
+                            integrity.message_count,
+                        ));
                     }
                 }
             }
+            entries.sort_by(|a, b| {
+                b.3.cmp(&a.3)
+                    .then_with(|| b.5.cmp(&a.5))
+                    .then_with(|| b.2.cmp(&a.2))
+                    .then_with(|| a.0.cmp(&b.0))
+            });
             if entries.is_empty() {
                 println!("No saved sessions.");
             } else {
-                println!("Saved sessions ({}):", entries.len());
-                for (name, size) in &entries {
-                    println!("  • {} ({} bytes)", name, size);
+                let canonical_count = entries.iter().filter(|entry| entry.3).count();
+                let artifact_count = entries.len().saturating_sub(canonical_count);
+                println!(
+                    "Saved sessions ({} total; {} canonical; {} artifacts):",
+                    entries.len(),
+                    canonical_count,
+                    artifact_count
+                );
+                for (name, size, _, canonical, valid, messages) in &entries {
+                    let kind = if *canonical {
+                        "session"
+                    } else if *valid {
+                        "artifact"
+                    } else {
+                        "invalid"
+                    };
+                    println!("  • {} ({} bytes, {} msgs, {})", name, size, messages, kind);
                 }
             }
         }
