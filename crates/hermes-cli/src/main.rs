@@ -93,7 +93,8 @@ use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -715,6 +716,7 @@ fn process_pid_is_alive(_pid: u32) -> bool {
 struct InteractiveSessionLockGuard {
     lock_path: PathBuf,
     pid: u32,
+    _lock_file: std::fs::File,
 }
 
 impl InteractiveSessionLockGuard {
@@ -733,25 +735,54 @@ impl InteractiveSessionLockGuard {
             })?;
         }
         let own_pid = std::process::id();
-        if let Some(existing_pid) = read_interactive_lock_pid(&lock_path) {
-            if existing_pid != own_pid && process_pid_is_alive(existing_pid) {
-                return Err(AgentError::Config(format!(
-                    "Another Hermes interactive session is running (PID {}). Close it first or set {}=1 to allow parallel sessions.",
-                    existing_pid, INTERACTIVE_SESSION_LOCK_BYPASS_ENV
-                )));
+
+        // Use create_new for atomic lock acquisition. This closes the race where
+        // two interactive sessions read "no lock" and both write concurrently.
+        let lock_file = loop {
+            match OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(file) => break file,
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if let Some(existing_pid) = read_interactive_lock_pid(&lock_path) {
+                        if existing_pid != own_pid && process_pid_is_alive(existing_pid) {
+                            return Err(AgentError::Config(format!(
+                                "Another Hermes interactive session is running (PID {}). Close it first or set {}=1 to allow parallel sessions.",
+                                existing_pid, INTERACTIVE_SESSION_LOCK_BYPASS_ENV
+                            )));
+                        }
+                    }
+                    let _ = std::fs::remove_file(&lock_path);
+                    continue;
+                }
+                Err(err) => {
+                    return Err(AgentError::Io(format!(
+                        "failed to create interactive lock {}: {}",
+                        lock_path.display(),
+                        err
+                    )));
+                }
             }
-            let _ = std::fs::remove_file(&lock_path);
-        }
-        std::fs::write(&lock_path, format!("{}\n", own_pid)).map_err(|e| {
-            AgentError::Io(format!(
-                "failed to write interactive lock {}: {}",
-                lock_path.display(),
-                e
-            ))
-        })?;
+        };
+
+        let mut lock_file = lock_file;
+        lock_file
+            .write_all(format!("{}\n", own_pid).as_bytes())
+            .map_err(|e| {
+                AgentError::Io(format!(
+                    "failed to write interactive lock {}: {}",
+                    lock_path.display(),
+                    e
+                ))
+            })?;
+        let _ = lock_file.flush();
+
         Ok(Some(Self {
             lock_path,
             pid: own_pid,
+            _lock_file: lock_file,
         }))
     }
 }
@@ -14188,6 +14219,26 @@ max_turns: 50
         );
         drop(guard);
         assert!(!lock_path.exists(), "lock file should be removed on drop");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interactive_session_lock_guard_rejects_live_pid() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = cli_for_temp_state_root(tmp.path());
+        let lock_path = interactive_lock_path_for_cli(&cli);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir lock parent");
+        }
+        // PID 1 should always be alive on Unix systems.
+        std::fs::write(&lock_path, "1").expect("write lock");
+        let err = match InteractiveSessionLockGuard::acquire(&cli) {
+            Err(err) => err,
+            Ok(_) => panic!("must reject live lock holder"),
+        };
+        let msg = format!("{err}");
+        assert!(msg.contains("Another Hermes interactive session is running"));
+        assert_eq!(read_interactive_lock_pid(&lock_path), Some(1));
     }
 
     #[test]
