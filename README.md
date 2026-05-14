@@ -142,6 +142,14 @@ Key operator commands:
 /ops autopilot recommend
 /ops autopilot apply
 
+# OpenHuman-derived P0/P1 operator control-plane
+/commands search boot
+/boot quick
+/walkthrough start quick
+/integrations status
+/triage eval webhook "secret leak panic outage"
+/subconscious status
+
 # Session time-travel + simulation
 /timetravel list
 /timetravel goto <snapshot>
@@ -202,6 +210,10 @@ Skills commands support multi-registry search/install and local tap flows.
   - `clawhub/...`
   - `claude-marketplace/...`
 - Mandatory skill security scanning runs before install and before use.
+
+OpenHuman P0/P1 runbook and matrix:
+- `docs/implementation/openhuman-p0-p1-runbook.md`
+- `docs/implementation/openhuman-p0-p1-surface-matrix.md`
 
 ## Security Posture
 

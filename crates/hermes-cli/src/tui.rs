@@ -1462,11 +1462,55 @@ impl TuiState {
 const TRANSCRIPT_HARD_WRAP_COLS: u16 = 80;
 const TRANSCRIPT_CONTENT_WRAP_COLS: usize = 76;
 const OFFSET_ANCHOR_SEARCH_RADIUS: usize = 1200;
-const MAX_ASSISTANT_RENDER_LINES: usize = 260;
+const DEFAULT_MAX_ASSISTANT_RENDER_LINES: usize = 260;
 const MAX_STREAM_RENDER_LINES: usize = 140;
-const TOOL_OUTPUT_MAX_LINES: usize = 180;
-const TOOL_OUTPUT_MAX_LINE_CHARS: usize = 600;
-const TOOL_OUTPUT_MAX_TOTAL_CHARS: usize = 48_000;
+const DEFAULT_TOOL_OUTPUT_MAX_LINES: usize = 180;
+const DEFAULT_TOOL_OUTPUT_MAX_LINE_CHARS: usize = 600;
+const DEFAULT_TOOL_OUTPUT_MAX_TOTAL_CHARS: usize = 48_000;
+
+fn env_usize_with_bounds(key: &str, default: usize, min: usize, max: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|v| v.clamp(min, max))
+        .unwrap_or(default)
+}
+
+fn max_assistant_render_lines() -> usize {
+    env_usize_with_bounds(
+        "HERMES_TUI_MAX_ASSISTANT_RENDER_LINES",
+        DEFAULT_MAX_ASSISTANT_RENDER_LINES,
+        40,
+        4000,
+    )
+}
+
+fn max_tool_output_lines() -> usize {
+    env_usize_with_bounds(
+        "HERMES_TUI_MAX_TOOL_OUTPUT_LINES",
+        DEFAULT_TOOL_OUTPUT_MAX_LINES,
+        20,
+        5000,
+    )
+}
+
+fn max_tool_output_line_chars() -> usize {
+    env_usize_with_bounds(
+        "HERMES_TUI_MAX_TOOL_OUTPUT_LINE_CHARS",
+        DEFAULT_TOOL_OUTPUT_MAX_LINE_CHARS,
+        120,
+        4000,
+    )
+}
+
+fn max_tool_output_total_chars() -> usize {
+    env_usize_with_bounds(
+        "HERMES_TUI_MAX_TOOL_OUTPUT_TOTAL_CHARS",
+        DEFAULT_TOOL_OUTPUT_MAX_TOTAL_CHARS,
+        2000,
+        500_000,
+    )
+}
 
 fn transcript_wrap_width(viewport_width: u16) -> u16 {
     viewport_width.min(TRANSCRIPT_HARD_WRAP_COLS).max(1)
@@ -2657,18 +2701,20 @@ fn push_block(lines: &mut Vec<String>, header: &str, value: &serde_json::Value) 
 fn sanitize_tool_line(raw: &str) -> String {
     let sanitized =
         sanitize_line_to_default_language_ascii(raw, false).unwrap_or_else(|| String::new());
-    truncate_chars(&sanitized, TOOL_OUTPUT_MAX_LINE_CHARS)
+    truncate_chars(&sanitized, max_tool_output_line_chars())
 }
 
 fn finalize_tool_message_lines(raw_lines: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut total_chars = 0usize;
     let mut omitted = 0usize;
+    let max_lines = max_tool_output_lines();
+    let max_total_chars = max_tool_output_total_chars();
     for line in raw_lines {
         let sanitized = sanitize_tool_line(&line);
         let line_chars = sanitized.chars().count();
         let next_total = total_chars.saturating_add(line_chars);
-        if out.len() < TOOL_OUTPUT_MAX_LINES && next_total <= TOOL_OUTPUT_MAX_TOTAL_CHARS {
+        if out.len() < max_lines && next_total <= max_total_chars {
             total_chars = next_total;
             out.push(sanitized);
         } else {
@@ -2868,7 +2914,7 @@ fn append_transcript_message_lines(
                 let assistant_lines = render_assistant_markdown_lines(content, styles, colors);
                 lines.extend(collapse_render_lines_with_notice(
                     assistant_lines,
-                    MAX_ASSISTANT_RENDER_LINES,
+                    max_assistant_render_lines(),
                     colors,
                 ));
             }
@@ -5800,7 +5846,8 @@ mod tests {
 
     #[test]
     fn test_format_tool_message_lines_truncates_large_payload() {
-        let long = (0..(TOOL_OUTPUT_MAX_LINES + 40))
+        let cap = max_tool_output_lines();
+        let long = (0..(cap + 40))
             .map(|idx| format!("row-{idx}-{}", "x".repeat(120)))
             .collect::<Vec<_>>()
             .join("\\n");
@@ -5808,7 +5855,7 @@ mod tests {
         let lines = format_tool_message_lines(&payload);
         let joined = lines.join("\n");
         assert!(joined.contains("tool output truncated"));
-        assert!(lines.len() <= TOOL_OUTPUT_MAX_LINES + 8);
+        assert!(lines.len() <= cap + 8);
     }
 
     #[test]
