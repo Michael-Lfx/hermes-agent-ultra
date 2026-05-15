@@ -192,6 +192,9 @@ impl ToolCallParser for HermesToolCallParser {
             Regex::new(r#"(?s)<tool_call\s+name=['"]([^'"]+)['"]\s*>(.*?)</tool_call>"#).unwrap();
         let argument_re =
             Regex::new(r#"(?s)<argument\s+name=['"]([^'"]+)['"]\s*>(.*?)</argument>"#).unwrap();
+        let arguments_re = Regex::new(r#"(?s)<arguments>\s*(.*?)\s*</arguments>"#).unwrap();
+        let tool_use_re = Regex::new(r#"(?s)<tool_use>\s*(.*?)\s*</tool_use>"#).unwrap();
+        let tool_use_name_re = Regex::new(r#"(?s)<name>\s*([^<]+?)\s*</name>"#).unwrap();
 
         for fc_caps in func_calls_re.captures_iter(content) {
             let block = fc_caps.get(1).unwrap().as_str();
@@ -224,6 +227,27 @@ impl ToolCallParser for HermesToolCallParser {
                 let name = call_caps.get(1).unwrap().as_str().to_string();
                 let args_block = call_caps.get(2).unwrap().as_str();
                 let mut args = serde_json::Map::new();
+                if let Some(arguments_caps) = arguments_re.captures(args_block) {
+                    let raw_value = arguments_caps.get(1).unwrap().as_str().trim();
+                    let parsed_value = serde_json::from_str(raw_value)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw_value.to_string()));
+                    let arguments = if let serde_json::Value::Object(map) = parsed_value {
+                        serde_json::Value::Object(map)
+                    } else {
+                        let mut fallback = serde_json::Map::new();
+                        fallback.insert("value".to_string(), parsed_value);
+                        serde_json::Value::Object(fallback)
+                    };
+                    calls.push(ToolCall {
+                        id: next_call_id(),
+                        function: FunctionCall {
+                            name,
+                            arguments: arguments.to_string(),
+                        },
+                        extra_content: None,
+                    });
+                    continue;
+                }
                 for arg_caps in argument_re.captures_iter(args_block) {
                     let arg_name = arg_caps.get(1).unwrap().as_str().to_string();
                     let raw_value = arg_caps.get(2).unwrap().as_str().trim();
@@ -236,6 +260,41 @@ impl ToolCallParser for HermesToolCallParser {
                     function: FunctionCall {
                         name,
                         arguments: serde_json::Value::Object(args).to_string(),
+                    },
+                    extra_content: None,
+                });
+            }
+        }
+
+        if calls.is_empty() {
+            for use_caps in tool_use_re.captures_iter(content) {
+                let block = use_caps.get(1).unwrap().as_str();
+                let Some(name_caps) = tool_use_name_re.captures(block) else {
+                    continue;
+                };
+                let name = name_caps.get(1).unwrap().as_str().trim().to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                let arguments = if let Some(arguments_caps) = arguments_re.captures(block) {
+                    let raw = arguments_caps.get(1).unwrap().as_str().trim();
+                    let parsed_value = serde_json::from_str(raw)
+                        .unwrap_or_else(|_| serde_json::Value::String(raw.to_string()));
+                    if let serde_json::Value::Object(map) = parsed_value {
+                        serde_json::Value::Object(map)
+                    } else {
+                        let mut fallback = serde_json::Map::new();
+                        fallback.insert("value".to_string(), parsed_value);
+                        serde_json::Value::Object(fallback)
+                    }
+                } else {
+                    serde_json::Value::Object(serde_json::Map::new())
+                };
+                calls.push(ToolCall {
+                    id: next_call_id(),
+                    function: FunctionCall {
+                        name,
+                        arguments: arguments.to_string(),
                     },
                     extra_content: None,
                 });
@@ -305,6 +364,10 @@ pub fn separate_text_and_calls(content: &str) -> (String, Vec<ToolCall>) {
     let alt_tool_call_re =
         Regex::new(r#"(?s)<tool_call\s+name=['"][^'"]+['"]\s*>.*?</tool_call>"#).unwrap();
     result = alt_tool_call_re.replace_all(&result, "").to_string();
+
+    // Remove <tool_use>...</tool_use> blocks
+    let tool_use_re = Regex::new(r"(?s)<tool_use>\s*.*?\s*</tool_use>").unwrap();
+    result = tool_use_re.replace_all(&result, "").to_string();
 
     // Remove bare <tool_call>...</tool_call> blocks
     let bare_tool_call_re = Regex::new(r"(?s)<tool_call>\s*.*?\s*</tool_call>").unwrap();
@@ -474,6 +537,37 @@ Hello! Let me search for that.
     }
 
     #[test]
+    fn test_parse_tool_call_xml_arguments_payload_variant() {
+        let content = r#"
+<tool_call name="contextlattice_context_pack">
+<arguments>{"query":"repo state","max_items":20}</arguments>
+</tool_call>
+"#;
+        let calls = parse_tool_calls(content).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "contextlattice_context_pack");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["query"], "repo state");
+        assert_eq!(args["max_items"], 20);
+    }
+
+    #[test]
+    fn test_parse_tool_use_name_arguments_variant() {
+        let content = r#"
+<tool_use>
+<name>shell_exec</name>
+<arguments>{"cmd":"pwd","timeout_ms":10000}</arguments>
+</tool_use>
+"#;
+        let calls = parse_tool_calls(content).unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "shell_exec");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["cmd"], "pwd");
+        assert_eq!(args["timeout_ms"], 10000);
+    }
+
+    #[test]
     fn test_parse_bare_tool_call_json_payload() {
         let content = r#"
 Proceeding.
@@ -526,6 +620,22 @@ Ready.
         let (text, calls) = separate_text_and_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(text.trim(), "Ready.");
+    }
+
+    #[test]
+    fn test_separate_text_and_calls_removes_tool_use_block() {
+        let content = r#"
+Proceeding now.
+<tool_use>
+<name>contextlattice_search</name>
+<arguments>{"query":"connectivity probe","limit":5}</arguments>
+</tool_use>
+"#;
+        let (text, calls) = separate_text_and_calls(content);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "contextlattice_search");
+        assert_eq!(text.trim(), "Proceeding now.");
+        assert!(!text.contains("<tool_use>"));
     }
 
     #[test]

@@ -234,6 +234,7 @@ const OBJECTIVE_DEEP_AUDIT_MIN_UNIQUE_COMMANDS: usize = 3;
 const OBJECTIVE_DEEP_AUDIT_MIN_WORKSTREAMS: usize = 3;
 const FINALIZER_EVIDENCE_MAX_RETRIES: u32 = 2;
 const FINALIZER_OUTPUT_QUALITY_MAX_RETRIES: u32 = 2;
+const FINALIZER_ACTION_EXECUTION_MAX_RETRIES: u32 = 2;
 
 // Python `AIAgent._MEMORY_REVIEW_PROMPT` / `_SKILL_REVIEW_PROMPT` / `_COMBINED_REVIEW_PROMPT` (v2026.4.13)
 const MEMORY_REVIEW_PROMPT: &str = "Review the conversation above and consider saving to memory if appropriate.\n\n\
@@ -4519,6 +4520,7 @@ impl AgentLoop {
         let mut objective_guard_retries: u32 = 0;
         let mut finalizer_evidence_retries: u32 = 0;
         let mut finalizer_output_quality_retries: u32 = 0;
+        let mut finalizer_action_execution_retries: u32 = 0;
         let governor_window_limit = governor_window_size();
 
         loop {
@@ -4960,8 +4962,32 @@ impl AgentLoop {
                     ));
                     continue;
                 }
+                if finalizer_action_execution_requires_retry(
+                    ctx.get_messages(),
+                    assistant_msg.content.as_deref().unwrap_or_default(),
+                    finalizer_action_execution_retries,
+                ) {
+                    finalizer_action_execution_retries =
+                        finalizer_action_execution_retries.saturating_add(1);
+                    self.emit_status(
+                        "lifecycle",
+                        "Detected intent narration without execution evidence; forcing action run.",
+                    );
+                    ctx.add_message(Message::system(
+                        "[SYSTEM] Execution contract: this request requires concrete execution now.\n\
+                         Requirements:\n\
+                         - run the relevant tool calls in this turn (do not only describe intent)\n\
+                         - if blocked, output `BLOCKED:` with exact command/tool error and next probe\n\
+                         - include at least one evidence line (`cmd=...` or `file=...`) in the final response.",
+                    ));
+                    ctx.add_message(Message::user(
+                        "Execute now. Do not narrate intent; return concrete evidence or explicit BLOCKED state.",
+                    ));
+                    continue;
+                }
                 finalizer_evidence_retries = 0;
                 finalizer_output_quality_retries = 0;
+                finalizer_action_execution_retries = 0;
                 let (objective_guard_active, requires_analytics, deep_audit_required) =
                     objective_guard_policy(ctx.get_messages());
                 if objective_guard_active {
@@ -5591,6 +5617,7 @@ impl AgentLoop {
         let mut objective_guard_retries: u32 = 0;
         let mut finalizer_evidence_retries: u32 = 0;
         let mut finalizer_output_quality_retries: u32 = 0;
+        let mut finalizer_action_execution_retries: u32 = 0;
         let governor_window_limit = governor_window_size();
 
         loop {
@@ -6102,8 +6129,32 @@ impl AgentLoop {
                     ));
                     continue;
                 }
+                if finalizer_action_execution_requires_retry(
+                    ctx.get_messages(),
+                    assistant_msg.content.as_deref().unwrap_or_default(),
+                    finalizer_action_execution_retries,
+                ) {
+                    finalizer_action_execution_retries =
+                        finalizer_action_execution_retries.saturating_add(1);
+                    self.emit_status(
+                        "lifecycle",
+                        "Detected intent narration without execution evidence; forcing action run.",
+                    );
+                    ctx.add_message(Message::system(
+                        "[SYSTEM] Execution contract: this request requires concrete execution now.\n\
+                         Requirements:\n\
+                         - run the relevant tool calls in this turn (do not only describe intent)\n\
+                         - if blocked, output `BLOCKED:` with exact command/tool error and next probe\n\
+                         - include at least one evidence line (`cmd=...` or `file=...`) in the final response.",
+                    ));
+                    ctx.add_message(Message::user(
+                        "Execute now. Do not narrate intent; return concrete evidence or explicit BLOCKED state.",
+                    ));
+                    continue;
+                }
                 finalizer_evidence_retries = 0;
                 finalizer_output_quality_retries = 0;
+                finalizer_action_execution_retries = 0;
                 let (objective_guard_active, requires_analytics, deep_audit_required) =
                     objective_guard_policy(ctx.get_messages());
                 if objective_guard_active {
@@ -8506,6 +8557,94 @@ fn finalizer_output_quality_requires_retry(assistant_text: &str, retry_count: u3
         }
     }
     false
+}
+
+fn assistant_response_has_execution_evidence(lower: &str) -> bool {
+    [
+        "file=",
+        "path=",
+        "cmd=",
+        "exists_now=",
+        "objective_state=",
+        "error:",
+        "blocked:",
+        "blocker:",
+        "run finished",
+        "tested",
+        "verified",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn detect_execution_required_intent(messages: &[Message]) -> bool {
+    let user = latest_user_content(messages)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if user.trim().is_empty() {
+        return false;
+    }
+    let objective = extract_session_objective(messages)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let combined = format!("{} {}", user, objective);
+    let action_terms = [
+        "proceed",
+        "implement",
+        "fix",
+        "debug",
+        "diagnose",
+        "run",
+        "test",
+        "patch",
+        "sync",
+        "rebuild",
+        "verify",
+        "connect",
+        "integrat",
+        "investigate",
+        "analyze",
+        "review",
+    ];
+    let has_action = action_terms.iter().any(|needle| combined.contains(needle));
+    let has_surface = combined.contains("repo")
+        || combined.contains("repository")
+        || combined.contains("codebase")
+        || combined.contains("contextlattice")
+        || combined.contains('/')
+        || combined.contains(".rs")
+        || combined.contains(".py")
+        || combined.contains("session");
+    has_action && has_surface
+}
+
+fn finalizer_action_execution_requires_retry(
+    messages: &[Message],
+    assistant_text: &str,
+    retry_count: u32,
+) -> bool {
+    if retry_count >= FINALIZER_ACTION_EXECUTION_MAX_RETRIES {
+        return false;
+    }
+    if !detect_execution_required_intent(messages) {
+        return false;
+    }
+    let lower = assistant_text.to_ascii_lowercase();
+    if assistant_response_has_execution_evidence(&lower) {
+        return false;
+    }
+    let deferral_markers = [
+        "i will",
+        "i'll",
+        "let me",
+        "i can",
+        "i'm going to",
+        "proceeding",
+        "next i",
+        "i should",
+        "i would",
+    ];
+    deferral_markers.iter().any(|needle| lower.contains(needle))
 }
 
 fn detect_contextlattice_connect_intent(messages: &[Message]) -> bool {
@@ -12832,6 +12971,35 @@ mod tests {
             - **Title:** Bayesian Learning for Dive State Prediction and Management";
         assert!(finalizer_output_quality_requires_retry(duplicated, 0));
         assert!(!finalizer_output_quality_requires_retry(duplicated, 2));
+    }
+
+    #[test]
+    fn test_finalizer_action_execution_retry_detects_intent_narration() {
+        let msgs = vec![Message::user(
+            "proceed with deep repo review for /tmp/app and implement patches",
+        )];
+        assert!(finalizer_action_execution_requires_retry(
+            &msgs,
+            "I will proceed now and report back shortly.",
+            0
+        ));
+        assert!(!finalizer_action_execution_requires_retry(
+            &msgs,
+            "I will proceed now and report back shortly.",
+            2
+        ));
+    }
+
+    #[test]
+    fn test_finalizer_action_execution_retry_skips_when_evidence_present() {
+        let msgs = vec![Message::user(
+            "proceed with deep repo review for /tmp/app and implement patches",
+        )];
+        assert!(!finalizer_action_execution_requires_retry(
+            &msgs,
+            "cmd=rg -n TODO src\nfile=/tmp/app/src/main.rs\nobjective_state=advancing",
+            0
+        ));
     }
 
     #[test]
