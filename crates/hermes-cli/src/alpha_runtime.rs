@@ -687,7 +687,7 @@ fn default_quorum_policy() -> QuorumPolicy {
         enabled: false,
         voters: 3,
         models: vec![],
-        mode: "optional-deep".to_string(),
+        mode: "adaptive-unbounded".to_string(),
         updated_at: now_rfc3339(),
     }
 }
@@ -1393,7 +1393,7 @@ pub fn set_quorum_policy(
     let mut policy = load_quorum_policy()?;
     policy.enabled = enabled;
     if let Some(v) = voters {
-        policy.voters = v.clamp(2, 5);
+        policy.voters = v.clamp(2, 8);
     }
     if let Some(m) = models {
         policy.models = m;

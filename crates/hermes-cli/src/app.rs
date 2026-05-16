@@ -38,7 +38,7 @@ use crate::alpha_runtime::{
 use crate::auth::{
     login_nous_device_code, resolve_gemini_oauth_runtime_credentials,
     resolve_nous_runtime_credentials, resolve_qwen_runtime_credentials, save_nous_auth_state,
-    NousDeviceCodeOptions, DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS,
+    NousDeviceCodeOptions, NousRuntimeCredentials, DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS,
     NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS, QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
 };
 use crate::cli::Cli;
@@ -52,8 +52,10 @@ const SESSION_SNAPSHOT_MAX_FILES_DEFAULT: usize = 1500;
 const SESSION_SNAPSHOT_MAX_TOTAL_BYTES_DEFAULT: u64 = 1536 * 1024 * 1024;
 const SESSION_SNAPSHOT_MIN_FREE_BYTES_DEFAULT: u64 = 128 * 1024 * 1024;
 const QUORUM_HINT_PREFIX: &str = "[QUORUM_MODE] ";
-const QUORUM_MAX_VOTER_OUTPUT_CHARS: usize = 20_000;
-const QUORUM_DEFAULT_VOTER_PASSES: usize = 3;
+const QUORUM_MAX_VOTER_OUTPUT_CHARS: usize = 120_000;
+const QUORUM_DEFAULT_VOTER_PASSES: usize = 6;
+const QUORUM_AGENT_CONTRACT_DEFAULT_PATH: &str =
+    "/Users/sheawinkler/Documents/Projects/hermes-agent-ultra/docs/QUORUM_AGENTS.md";
 
 #[derive(Debug, Clone)]
 struct SessionSnapshotEntry {
@@ -315,6 +317,35 @@ impl std::fmt::Debug for App {
     }
 }
 
+impl Clone for App {
+    fn clone(&self) -> Self {
+        Self {
+            state_root: self.state_root.clone(),
+            config: self.config.clone(),
+            agent: self.agent.clone(),
+            tool_registry: self.tool_registry.clone(),
+            tool_schemas: self.tool_schemas.clone(),
+            messages: self.messages.clone(),
+            ui_messages: self.ui_messages.clone(),
+            session_id: self.session_id.clone(),
+            running: self.running,
+            current_model: self.current_model.clone(),
+            current_personality: self.current_personality.clone(),
+            input_history: self.input_history.clone(),
+            history_index: self.history_index,
+            interrupt_controller: self.interrupt_controller.clone(),
+            stream_handle: self.stream_handle.clone(),
+            stream_handle_shared: self.stream_handle_shared.clone(),
+            mouse_enabled: self.mouse_enabled,
+            pending_theme: self.pending_theme.clone(),
+            pending_image_hint: self.pending_image_hint.clone(),
+            session_objective: self.session_objective.clone(),
+            quorum_armed_once: self.quorum_armed_once,
+            pet_settings: self.pet_settings.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SessionInfo (for serialization)
 // ---------------------------------------------------------------------------
@@ -412,6 +443,13 @@ impl App {
         }
     }
 
+    fn is_unbounded_token(raw: &str) -> bool {
+        matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "0" | "off" | "unlimited" | "infinite" | "max"
+        )
+    }
+
     fn auth_refresh_retry_limit() -> usize {
         std::env::var("HERMES_AUTH_REFRESH_MAX_RETRIES")
             .ok()
@@ -421,12 +459,15 @@ impl App {
     }
 
     fn quorum_voter_retry_limit() -> usize {
-        std::env::var("HERMES_QUORUM_VOTER_MAX_RETRIES")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|v| *v > 0)
-            .unwrap_or_else(Self::auth_refresh_retry_limit)
-            .max(2)
+        if let Ok(raw) = std::env::var("HERMES_QUORUM_VOTER_MAX_RETRIES") {
+            if Self::is_unbounded_token(&raw) {
+                return 16;
+            }
+            if let Some(parsed) = raw.trim().parse::<usize>().ok().filter(|v| *v > 0) {
+                return parsed.max(2);
+            }
+        }
+        Self::auth_refresh_retry_limit().max(6)
     }
 
     fn transient_retry_limit() -> usize {
@@ -610,6 +651,42 @@ impl App {
         )
     }
 
+    fn quorum_force_refresh_each_voter() -> bool {
+        Self::bool_env("HERMES_QUORUM_FORCE_REFRESH_EACH_VOTER").unwrap_or(false)
+    }
+
+    fn quorum_toolless_provider_fallback_enabled() -> bool {
+        !matches!(
+            Self::bool_env("HERMES_QUORUM_TOOLLESS_PROVIDER_FALLBACK"),
+            Some(false)
+        )
+    }
+
+    fn quorum_voter_tools_enabled() -> bool {
+        !matches!(Self::bool_env("HERMES_QUORUM_VOTER_TOOLS"), Some(false))
+    }
+
+    fn quorum_synthesis_tools_enabled() -> bool {
+        !matches!(Self::bool_env("HERMES_QUORUM_SYNTHESIS_TOOLS"), Some(false))
+    }
+
+    fn nous_refresh_contention_error(err: &AgentError) -> bool {
+        let text = err.to_string().to_ascii_lowercase();
+        text.contains("slow_down")
+            || text.contains("too many requests")
+            || text.contains("refresh already in progress")
+            || text.contains("429")
+    }
+
+    fn apply_nous_runtime_credentials(creds: &NousRuntimeCredentials) -> bool {
+        let mut changed = false;
+        changed |= Self::set_env_if_changed("NOUS_API_KEY", &creds.api_key);
+        if !creds.base_url.trim().is_empty() {
+            changed |= Self::set_env_if_changed("NOUS_INFERENCE_BASE_URL", &creds.base_url);
+        }
+        changed
+    }
+
     fn contextlattice_ui_status_enabled() -> bool {
         !matches!(
             std::env::var("HERMES_CONTEXTLATTICE_UI_STATUS")
@@ -786,16 +863,38 @@ impl App {
             .await
             {
                 Ok(creds) => {
-                    rotated |= Self::set_env_if_changed("NOUS_API_KEY", &creds.api_key);
-                    if !creds.base_url.trim().is_empty() {
-                        rotated |=
-                            Self::set_env_if_changed("NOUS_INFERENCE_BASE_URL", &creds.base_url);
-                    }
+                    rotated |= Self::apply_nous_runtime_credentials(&creds);
                     if rotated {
                         note = Some("refreshed Nous runtime credential".to_string());
                     }
                 }
                 Err(e) => {
+                    if force_refresh && Self::nous_refresh_contention_error(&e) {
+                        match resolve_nous_runtime_credentials(
+                            false,
+                            true,
+                            NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+                            DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS,
+                        )
+                        .await
+                        {
+                            Ok(creds) => {
+                                rotated |= Self::apply_nous_runtime_credentials(&creds);
+                                note = Some(
+                                    "Nous refresh busy; reused cached runtime credential"
+                                        .to_string(),
+                                );
+                            }
+                            Err(cache_err) => {
+                                Self::emit_lifecycle_event(
+                                    &self.stream_handle_shared,
+                                    format!(
+                                        "warning: Nous cached credential hydration failed after refresh contention ({cache_err})"
+                                    ),
+                                );
+                            }
+                        }
+                    }
                     if Self::auth_error_requires_nous_login(&e)
                         && self
                             .attempt_interactive_nous_login("credential missing or invalid")
@@ -810,13 +909,7 @@ impl App {
                         .await
                         {
                             Ok(creds) => {
-                                rotated |= Self::set_env_if_changed("NOUS_API_KEY", &creds.api_key);
-                                if !creds.base_url.trim().is_empty() {
-                                    rotated |= Self::set_env_if_changed(
-                                        "NOUS_INFERENCE_BASE_URL",
-                                        &creds.base_url,
-                                    );
-                                }
+                                rotated |= Self::apply_nous_runtime_credentials(&creds);
                                 if rotated {
                                     note = Some("refreshed Nous runtime credential".to_string());
                                 }
@@ -829,10 +922,12 @@ impl App {
                             }
                         }
                     } else {
-                        Self::emit_lifecycle_event(
-                            &self.stream_handle_shared,
-                            format!("warning: Nous credential refresh skipped ({e})"),
-                        );
+                        if !rotated && note.is_none() {
+                            Self::emit_lifecycle_event(
+                                &self.stream_handle_shared,
+                                format!("warning: Nous credential refresh skipped ({e})"),
+                            );
+                        }
                     }
                 }
             },
@@ -959,6 +1054,9 @@ impl App {
         if preview.is_empty() {
             return;
         }
+        if App::oneshot_lifecycle_stdout_enabled(shared) {
+            println!("[lifecycle] {}", preview);
+        }
         App::push_stream_extra_event(
             shared,
             serde_json::json!({
@@ -979,6 +1077,9 @@ impl App {
         if phase.is_empty() || label.is_empty() {
             return;
         }
+        if App::oneshot_lifecycle_stdout_enabled(shared) {
+            println!("[phase {:>3}%] {}: {}", progress_pct.min(100), phase, label);
+        }
         App::push_stream_extra_event(
             shared,
             serde_json::json!({
@@ -988,6 +1089,24 @@ impl App {
                 "progress_pct": progress_pct.min(100),
             }),
         );
+    }
+
+    fn oneshot_lifecycle_stdout_enabled(shared: &Arc<StdMutex<Option<StreamHandle>>>) -> bool {
+        let stream_attached = shared
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|_| ()))
+            .is_some();
+        if stream_attached {
+            return false;
+        }
+        matches!(
+            std::env::var("HERMES_ONESHOT_LIFECYCLE_STDOUT")
+                .ok()
+                .as_deref()
+                .map(|v| v.trim().to_ascii_lowercase()),
+            Some(v) if matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        )
     }
 
     fn objective_context_autopin_enabled() -> bool {
@@ -1245,6 +1364,22 @@ impl App {
             return None;
         }
         if !(self.quorum_armed_once || has_hint) {
+            let auto_arm = std::env::var("HERMES_QUORUM_AUTO_ARM")
+                .ok()
+                .map(|raw| {
+                    matches!(
+                        raw.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "on" | "auto"
+                    )
+                })
+                .unwrap_or(false);
+            if auto_arm {
+                Self::emit_lifecycle_event(
+                    &self.stream_handle_shared,
+                    "quorum auto-arm enabled via HERMES_QUORUM_AUTO_ARM=1",
+                );
+                return Some(policy);
+            }
             return None;
         }
         Some(policy)
@@ -1281,7 +1416,7 @@ impl App {
         if models.is_empty() {
             push_unique(&mut models, current_model);
         }
-        let max_voters = policy.voters.clamp(2, 5);
+        let max_voters = policy.voters.clamp(2, 8);
         if models.len() < max_voters {
             push_unique(&mut models, current_model);
         }
@@ -1292,12 +1427,15 @@ impl App {
     }
 
     fn quorum_voter_passes() -> usize {
-        std::env::var("HERMES_QUORUM_VOTER_PASSES")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|v| *v > 0)
-            .map(|v| v.clamp(1, 4))
-            .unwrap_or(QUORUM_DEFAULT_VOTER_PASSES)
+        if let Ok(raw) = std::env::var("HERMES_QUORUM_VOTER_PASSES") {
+            if Self::is_unbounded_token(&raw) {
+                return 16;
+            }
+            if let Some(parsed) = raw.trim().parse::<usize>().ok().filter(|v| *v > 0) {
+                return parsed.clamp(1, 16);
+            }
+        }
+        QUORUM_DEFAULT_VOTER_PASSES
     }
 
     fn normalize_quorum_model_target(current_model: &str, raw: &str) -> String {
@@ -1477,17 +1615,55 @@ impl App {
         (resolved, notes)
     }
 
+    fn quorum_output_char_cap() -> Option<usize> {
+        if let Ok(raw) = std::env::var("HERMES_QUORUM_MAX_VOTER_OUTPUT_CHARS") {
+            if Self::is_unbounded_token(&raw) {
+                return None;
+            }
+            if let Some(parsed) = raw.trim().parse::<usize>().ok().filter(|v| *v > 0) {
+                return Some(parsed);
+            }
+        }
+        Some(QUORUM_MAX_VOTER_OUTPUT_CHARS)
+    }
+
+    fn load_quorum_agent_contract_text(&self) -> Option<(PathBuf, String)> {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        if let Ok(raw) = std::env::var("HERMES_QUORUM_AGENT_CONTRACT_PATH") {
+            let path = PathBuf::from(raw.trim());
+            if !path.as_os_str().is_empty() {
+                candidates.push(path);
+            }
+        }
+        candidates.push(self.state_root.join("quorum").join("AGENTS.md"));
+        candidates.push(PathBuf::from(QUORUM_AGENT_CONTRACT_DEFAULT_PATH));
+        for path in candidates {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            return Some((path, trimmed.to_string()));
+        }
+        None
+    }
+
     fn build_quorum_voter_prompt(pass_index: usize, total_passes: usize, model: &str) -> String {
         if pass_index == 0 {
             return format!(
                 "[QUORUM_VOTER] model={}\n\
-                 You are in deep-voter mode. Do rigorous objective-first work, not a shallow one-pass answer.\n\
-                 Required phases:\n\
-                 1) hypothesis framing,\n\
+                 You are in deep-voter mode. Act like quality is existential.\n\
+                 Hard requirements:\n\
+                 1) exhaustive exploration before conclusion,\n\
                  2) contradiction/null-hypothesis attack,\n\
-                 3) final synthesis with explicit confidence and risk caveats.\n\
-                 Evidence requirements:\n\
-                 - include concrete evidence bullets (tools/data/reasoning traces)\n\
+                 3) final synthesis with explicit confidence and risk caveats,\n\
+                 4) no placeholder names, no fake files, no invented metrics.\n\
+                 Verification requirements:\n\
+                 - every file/module claim must include an absolute path and exists_now=true/false\n\
+                 - if you cannot verify a claim, mark it UNPROVEN (never guess)\n\
+                 - include evidence bullets from tools/data/reasoning traces\n\
                  - include at least one counter-argument before final answer.\n\
                  This is pass {}/{}.",
                 model,
@@ -1499,6 +1675,7 @@ impl App {
             "[QUORUM_VOTER_REVIEW] pass {}/{}\n\
              Critique and strengthen your prior answer.\n\
              - Assume the previous draft is partially wrong.\n\
+             - Remove any unverified file names/modules/metrics.\n\
              - Fix weak claims, tighten evidence, and improve actionability.\n\
              - Keep objective truth over optimism.",
             pass_index + 1,
@@ -1527,8 +1704,11 @@ impl App {
         String::new()
     }
 
-    fn truncate_for_quorum(text: &str, max_chars: usize) -> String {
-        if text.chars().count() <= max_chars {
+    fn truncate_for_quorum(text: &str, max_chars: Option<usize>) -> String {
+        let Some(max_chars) = max_chars else {
+            return text.to_string();
+        };
+        if max_chars == 0 || text.chars().count() <= max_chars {
             return text.to_string();
         }
         let keep = max_chars.saturating_sub(1);
@@ -1553,7 +1733,9 @@ impl App {
              2) Call out disagreements explicitly.\n\
              3) If a voter failed, mark it failed and continue.\n\
              4) Return: (a) strongest case, (b) strongest counter-case, (c) final synthesis with confidence.\n\
-             5) Do not claim quorum executed unless voter outputs are present.\n",
+             5) Do not claim quorum executed unless voter outputs are present.\n\
+             6) Reject placeholder names/fake files/fake metrics; keep only verified claims.\n\
+             7) Any file claim in final synthesis must include absolute path + exists_now status or be marked UNPROVEN.\n",
         );
         prompt.push_str(&format!(
             "Configured voters: {} | mode={} | enabled={} | required_success={}\n\n",
@@ -1616,6 +1798,101 @@ impl App {
         Ok(path)
     }
 
+    fn update_quorum_artifact_with_synthesis(
+        path: &Path,
+        synthesis: &str,
+    ) -> Result<(), AgentError> {
+        let raw = std::fs::read_to_string(path).map_err(|e| {
+            AgentError::Io(format!(
+                "Failed to read quorum artifact {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let mut payload: serde_json::Value = serde_json::from_str(&raw).map_err(|e| {
+            AgentError::Config(format!(
+                "Failed to parse quorum artifact {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        payload["synthesis"] = serde_json::Value::String(synthesis.trim().to_string());
+        payload["synthesis_saved_at"] = serde_json::Value::String(chrono::Utc::now().to_rfc3339());
+        let updated = serde_json::to_string_pretty(&payload).map_err(|e| {
+            AgentError::Config(format!(
+                "Failed to serialize quorum synthesis artifact {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        std::fs::write(path, updated).map_err(|e| {
+            AgentError::Io(format!(
+                "Failed to write quorum synthesis artifact {}: {}",
+                path.display(),
+                e
+            ))
+        })
+    }
+
+    fn apply_explore_first_runtime_defaults() {
+        if std::env::var("HERMES_SKILL_GUARD_MODE")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_SKILL_GUARD_MODE", "off");
+        }
+        if std::env::var("HERMES_GUARD_MODE")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_GUARD_MODE", "off");
+        }
+        if std::env::var("HERMES_TOOL_POLICY_PRESET")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_TOOL_POLICY_PRESET", "dev");
+        }
+        if std::env::var("HERMES_TOOL_POLICY_MODE")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_TOOL_POLICY_MODE", "audit");
+        }
+        if std::env::var("HERMES_REPO_REVIEW_BUDGET_PROFILE")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_REPO_REVIEW_BUDGET_PROFILE", "off");
+        }
+        if std::env::var("HERMES_MAX_ITERATIONS")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_MAX_ITERATIONS", "250");
+        }
+        if std::env::var("HERMES_TOOL_CALL_MAX_CONCURRENCY")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_TOOL_CALL_MAX_CONCURRENCY", "12");
+        }
+        if std::env::var("HERMES_MAX_DELEGATE_DEPTH")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_MAX_DELEGATE_DEPTH", "4");
+        }
+    }
+
     /// Create a new `App` from the parsed CLI arguments.
     ///
     /// This loads (or creates) the gateway configuration, builds a tool
@@ -1628,6 +1905,7 @@ impl App {
 
         let mut config = config;
         apply_cli_runtime_overrides(&mut config, &cli);
+        Self::apply_explore_first_runtime_defaults();
 
         if config.sessions.auto_prune {
             let resolved_home = config
@@ -2078,6 +2356,17 @@ impl App {
         messages: Vec<hermes_core::Message>,
         stream_enabled: bool,
     ) -> Result<hermes_core::AgentResult, AgentError> {
+        self.run_messages_with_current_agent_tools(messages, stream_enabled, true)
+            .await
+    }
+
+    async fn run_messages_with_current_agent_tools(
+        &self,
+        messages: Vec<hermes_core::Message>,
+        stream_enabled: bool,
+        include_tools: bool,
+    ) -> Result<hermes_core::AgentResult, AgentError> {
+        let tool_schemas = include_tools.then(|| self.tool_schemas.clone());
         if stream_enabled && self.config.streaming.enabled {
             let stream_handle = self.stream_handle.clone();
             let stream_cb: Option<Box<dyn Fn(hermes_core::StreamChunk) + Send + Sync>> =
@@ -2087,12 +2376,10 @@ impl App {
                     }) as Box<dyn Fn(hermes_core::StreamChunk) + Send + Sync>
                 });
             self.agent
-                .run_stream(messages, Some(self.tool_schemas.clone()), stream_cb)
+                .run_stream(messages, tool_schemas, stream_cb)
                 .await
         } else {
-            self.agent
-                .run(messages, Some(self.tool_schemas.clone()))
-                .await
+            self.agent.run(messages, tool_schemas).await
         }
     }
 
@@ -2101,6 +2388,29 @@ impl App {
         run_started_at: Instant,
         policy: QuorumPolicy,
     ) -> Result<bool, AgentError> {
+        // Explore-first quorum runtime: keep safety observable but do not pre-trim exploration.
+        std::env::set_var("HERMES_SKILL_GUARD_MODE", "off");
+        std::env::set_var("HERMES_GUARD_MODE", "off");
+        std::env::set_var("HERMES_TOOL_POLICY_PRESET", "dev");
+        std::env::set_var("HERMES_TOOL_POLICY_MODE", "audit");
+        std::env::set_var("HERMES_MAX_TURNS_UNLIMITED", "1");
+        std::env::set_var("HERMES_REPO_REVIEW_BUDGET_PROFILE", "off");
+        if std::env::var("HERMES_QUORUM_VOTER_PASSES")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_QUORUM_VOTER_PASSES", "0");
+        }
+        if std::env::var("HERMES_QUORUM_VOTER_MAX_RETRIES")
+            .ok()
+            .map(|v| v.trim().is_empty())
+            .unwrap_or(true)
+        {
+            std::env::set_var("HERMES_QUORUM_VOTER_MAX_RETRIES", "0");
+        }
+
+        let quorum_contract = self.load_quorum_agent_contract_text();
         let (voter_models, model_resolution_notes) = self.resolve_quorum_models(&policy).await;
         for note in model_resolution_notes {
             Self::emit_lifecycle_event(&self.stream_handle_shared, note);
@@ -2126,6 +2436,7 @@ impl App {
         let original_model = self.current_model.clone();
         let mut outcomes: Vec<QuorumVoterOutcome> = Vec::new();
         let mut succeeded = 0usize;
+        let output_char_cap = Self::quorum_output_char_cap();
 
         Self::emit_phase_event(
             &self.stream_handle_shared,
@@ -2148,8 +2459,7 @@ impl App {
             if self.current_model != *model {
                 self.switch_model(model);
             }
-            let provider = self.current_runtime_provider();
-            let force_refresh = Self::should_force_preflight_auth_refresh(provider.as_str());
+            let force_refresh = display_index == 1 || Self::quorum_force_refresh_each_voter();
             self.refresh_runtime_provider_credentials_if_needed(force_refresh)
                 .await;
 
@@ -2161,6 +2471,8 @@ impl App {
             let mut combined_turns: u32 = 0;
             let mut combined_tool_errors: usize = 0;
             let mut last_err: Option<AgentError> = None;
+            let mut toolless_fallback_used = false;
+            let voter_tools_enabled = Self::quorum_voter_tools_enabled();
 
             for pass_idx in 0..voter_passes {
                 Self::emit_lifecycle_event(
@@ -2178,6 +2490,13 @@ impl App {
                 if pass_idx > 0 && !combined_output.trim().is_empty() {
                     pass_messages.push(hermes_core::Message::assistant(combined_output.clone()));
                 }
+                if let Some((contract_path, contract_text)) = quorum_contract.as_ref() {
+                    pass_messages.push(hermes_core::Message::system(format!(
+                        "[QUORUM_AGENT_CONTRACT]\npath={}\nApply this contract strictly for this voter pass:\n{}",
+                        contract_path.display(),
+                        contract_text
+                    )));
+                }
                 pass_messages.push(hermes_core::Message::system(
                     Self::build_quorum_voter_prompt(pass_idx, voter_passes, model),
                 ));
@@ -2187,7 +2506,11 @@ impl App {
                 while attempts < max_attempts {
                     attempts += 1;
                     match self
-                        .run_messages_with_current_agent(pass_messages.clone(), false)
+                        .run_messages_with_current_agent_tools(
+                            pass_messages.clone(),
+                            false,
+                            voter_tools_enabled,
+                        )
                         .await
                     {
                         Ok(result) => {
@@ -2198,6 +2521,38 @@ impl App {
                             if Self::is_provider_auth_or_session_error(&err)
                                 && attempts < max_attempts
                             {
+                                if Self::quorum_toolless_provider_fallback_enabled()
+                                    && voter_tools_enabled
+                                    && !toolless_fallback_used
+                                    && attempts >= 2
+                                {
+                                    toolless_fallback_used = true;
+                                    Self::emit_lifecycle_event(
+                                        &self.stream_handle_shared,
+                                        format!(
+                                            "quorum voter {}/{} provider rejected tool-enabled request; retrying pass without tool schemas",
+                                            display_index,
+                                            voter_models.len()
+                                        ),
+                                    );
+                                    match self
+                                        .run_messages_with_current_agent_tools(
+                                            pass_messages.clone(),
+                                            false,
+                                            false,
+                                        )
+                                        .await
+                                    {
+                                        Ok(result) => {
+                                            maybe_result = Some(result);
+                                            break;
+                                        }
+                                        Err(fallback_err) => {
+                                            last_err = Some(fallback_err);
+                                            break;
+                                        }
+                                    }
+                                }
                                 let refreshed = self.force_auth_refresh_after_error().await;
                                 if refreshed {
                                     continue;
@@ -2249,8 +2604,7 @@ impl App {
             }
 
             if !combined_output.trim().is_empty() {
-                let output =
-                    Self::truncate_for_quorum(&combined_output, QUORUM_MAX_VOTER_OUTPUT_CHARS);
+                let output = Self::truncate_for_quorum(&combined_output, output_char_cap);
                 let status = if output.trim().is_empty() {
                     "empty"
                 } else {
@@ -2326,6 +2680,13 @@ impl App {
 
         let synthesis_system = Self::build_quorum_synthesis_prompt(&policy, &outcomes);
         let mut synthesis_messages = base_messages;
+        if let Some((contract_path, contract_text)) = quorum_contract.as_ref() {
+            synthesis_messages.push(hermes_core::Message::system(format!(
+                "[QUORUM_AGENT_CONTRACT]\npath={}\nApply this contract strictly for synthesis:\n{}",
+                contract_path.display(),
+                contract_text
+            )));
+        }
         synthesis_messages.push(hermes_core::Message::system(synthesis_system));
 
         Self::emit_phase_event(
@@ -2335,9 +2696,23 @@ impl App {
             75,
         );
         let result = self
-            .run_messages_with_current_agent(synthesis_messages, true)
+            .run_messages_with_current_agent_tools(
+                synthesis_messages,
+                true,
+                Self::quorum_synthesis_tools_enabled(),
+            )
             .await?;
         let total_turns = result.total_turns;
+        let synthesis_text = Self::extract_last_assistant_output(&result.messages);
+        if let Err(err) =
+            Self::update_quorum_artifact_with_synthesis(&artifact_path, &synthesis_text)
+        {
+            tracing::warn!("quorum synthesis artifact update skipped: {}", err);
+            Self::emit_lifecycle_event(
+                &self.stream_handle_shared,
+                format!("warning: quorum synthesis artifact update skipped: {}", err),
+            );
+        }
         if let Err(err) = self.apply_agent_result_and_persist(result) {
             tracing::warn!("session autosave skipped: {}", err);
         }
@@ -2899,12 +3274,7 @@ impl App {
             .await
             {
                 Ok(creds) => {
-                    let mut changed = false;
-                    changed |= Self::set_env_if_changed("NOUS_API_KEY", &creds.api_key);
-                    if !creds.base_url.trim().is_empty() {
-                        changed |=
-                            Self::set_env_if_changed("NOUS_INFERENCE_BASE_URL", &creds.base_url);
-                    }
+                    let changed = Self::apply_nous_runtime_credentials(&creds);
                     if changed {
                         self.switch_model(&self.current_model.clone());
                     }
@@ -2914,7 +3284,37 @@ impl App {
                     )
                 }
                 Err(err) => {
-                    if Self::auth_error_requires_nous_login(&err)
+                    if Self::nous_refresh_contention_error(&err) {
+                        match resolve_nous_runtime_credentials(
+                            false,
+                            true,
+                            NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+                            DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS,
+                        )
+                        .await
+                        {
+                            Ok(creds) => {
+                                let changed = Self::apply_nous_runtime_credentials(&creds);
+                                if changed {
+                                    self.switch_model(&self.current_model.clone());
+                                }
+                                (
+                                    Some(
+                                        "Nous refresh busy; reused cached runtime credential and retrying request."
+                                            .to_string(),
+                                    ),
+                                    true,
+                                )
+                            }
+                            Err(cache_err) => (
+                                Some(format!(
+                                    "Nous cached credential hydration failed after refresh contention: {}",
+                                    cache_err
+                                )),
+                                false,
+                            ),
+                        }
+                    } else if Self::auth_error_requires_nous_login(&err)
                         && self
                             .attempt_interactive_nous_login("runtime auth refresh failed")
                             .await
@@ -2928,14 +3328,7 @@ impl App {
                         .await
                         {
                             Ok(creds) => {
-                                let mut changed = false;
-                                changed |= Self::set_env_if_changed("NOUS_API_KEY", &creds.api_key);
-                                if !creds.base_url.trim().is_empty() {
-                                    changed |= Self::set_env_if_changed(
-                                        "NOUS_INFERENCE_BASE_URL",
-                                        &creds.base_url,
-                                    );
-                                }
+                                let changed = Self::apply_nous_runtime_credentials(&creds);
                                 if changed {
                                     self.switch_model(&self.current_model.clone());
                                 }

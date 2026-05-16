@@ -160,7 +160,9 @@ impl SkillGuardMode {
 }
 
 fn relaxed_rm_target_is_safe(target: &str) -> bool {
-    let raw = target.trim().trim_matches(|c| matches!(c, '"' | '\'' | '`'));
+    let raw = target
+        .trim()
+        .trim_matches(|c| matches!(c, '"' | '\'' | '`'));
     if raw.is_empty() {
         return false;
     }

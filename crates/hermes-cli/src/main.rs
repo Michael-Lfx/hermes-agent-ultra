@@ -164,6 +164,40 @@ fn query_is_local_slash_command(query: &str) -> bool {
     query.trim_start().starts_with('/')
 }
 
+fn env_truthy(key: &str) -> bool {
+    std::env::var(key)
+        .ok()
+        .map(|raw| {
+            matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on" | "auto"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn oneshot_should_use_app_runtime(query: &str) -> bool {
+    !query_is_local_slash_command(query)
+        && (env_truthy("HERMES_ONESHOT_APP_RUNTIME") || env_truthy("HERMES_QUORUM_AUTO_ARM"))
+}
+
+fn print_app_oneshot_result(app: &App) {
+    if let Some(reply) = app.messages.iter().rev().find_map(|message| {
+        if message.role == MessageRole::Assistant {
+            message
+                .content
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        } else {
+            None
+        }
+    }) {
+        println!("{}", reply);
+    }
+}
+
 async fn handle_local_slash_query(cli: Cli, query: &str) -> Result<bool, AgentError> {
     if !query_is_local_slash_command(query) {
         return Ok(false);
@@ -267,6 +301,21 @@ async fn main() {
                 eprintln!("Error: {}", err);
                 std::process::exit(1);
             }
+        }
+        if oneshot_should_use_app_runtime(&prompt) {
+            let mut app = match App::new(cli.clone()).await {
+                Ok(app) => app,
+                Err(err) => {
+                    eprintln!("Error: {}", err);
+                    std::process::exit(1);
+                }
+            };
+            if let Err(err) = app.handle_input(&prompt).await {
+                eprintln!("Error: {}", err);
+                std::process::exit(1);
+            }
+            print_app_oneshot_result(&app);
+            return;
         }
         let mut result = hermes_cli::commands::handle_cli_chat(
             Some(prompt),
@@ -756,6 +805,104 @@ fn process_pid_is_alive(_pid: u32) -> bool {
     false
 }
 
+#[cfg(unix)]
+#[derive(Debug, Clone)]
+struct InteractivePidSnapshot {
+    ppid: u32,
+    tty: String,
+    command: String,
+}
+
+#[cfg(unix)]
+fn parse_pid_snapshot_line(line: &str) -> Option<InteractivePidSnapshot> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let mut parts = trimmed.split_whitespace();
+    let ppid = parts.next()?.parse::<u32>().ok()?;
+    let tty = parts.next()?.to_string();
+    let command = parts.collect::<Vec<_>>().join(" ");
+    if command.is_empty() {
+        return None;
+    }
+    Some(InteractivePidSnapshot { ppid, tty, command })
+}
+
+#[cfg(unix)]
+fn interactive_pid_snapshot(pid: u32) -> Option<InteractivePidSnapshot> {
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "ppid=,tty=,command="])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    parse_pid_snapshot_line(line.as_ref())
+}
+
+#[cfg(unix)]
+fn looks_like_interactive_hermes_process(command: &str) -> bool {
+    let cmd = command.to_ascii_lowercase();
+    (cmd.contains("hermes-agent-ultra") || cmd.contains("hermes-ultra")) && !cmd.contains("gateway")
+}
+
+#[cfg(unix)]
+fn interactive_lock_holder_is_reapable_orphan(pid: u32) -> bool {
+    let snapshot = match interactive_pid_snapshot(pid) {
+        Some(snapshot) => snapshot,
+        None => return false,
+    };
+    // Reap only obvious abandoned interactive agents:
+    // orphaned from shell (ppid=1) and detached from a terminal.
+    looks_like_interactive_hermes_process(&snapshot.command)
+        && snapshot.ppid == 1
+        && (snapshot.tty == "??" || snapshot.tty == "?")
+}
+
+#[cfg(unix)]
+fn reap_interactive_orphan(pid: u32) -> bool {
+    let _ = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    if !process_pid_is_alive(pid) {
+        return true;
+    }
+    let _ = unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    !process_pid_is_alive(pid)
+}
+
+#[cfg(unix)]
+fn reap_interactive_orphans_except(own_pid: u32) -> usize {
+    let output = match std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,command="])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return 0,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut reaped = 0usize;
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(pid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        let Some(ppid) = parts.next().and_then(|p| p.parse::<u32>().ok()) else {
+            continue;
+        };
+        if pid == own_pid || ppid != 1 {
+            continue;
+        }
+        let command = parts.collect::<Vec<_>>().join(" ");
+        if looks_like_interactive_hermes_process(&command) && reap_interactive_orphan(pid) {
+            reaped = reaped.saturating_add(1);
+        }
+    }
+    reaped
+}
+
 struct InteractiveSessionLockGuard {
     lock_path: PathBuf,
     pid: u32,
@@ -778,6 +925,10 @@ impl InteractiveSessionLockGuard {
             })?;
         }
         let own_pid = std::process::id();
+        #[cfg(unix)]
+        {
+            let _ = reap_interactive_orphans_except(own_pid);
+        }
 
         // Use create_new for atomic lock acquisition. This closes the race where
         // two interactive sessions read "no lock" and both write concurrently.
@@ -791,6 +942,15 @@ impl InteractiveSessionLockGuard {
                 Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                     if let Some(existing_pid) = read_interactive_lock_pid(&lock_path) {
                         if existing_pid != own_pid && process_pid_is_alive(existing_pid) {
+                            #[cfg(unix)]
+                            {
+                                if interactive_lock_holder_is_reapable_orphan(existing_pid)
+                                    && reap_interactive_orphan(existing_pid)
+                                {
+                                    let _ = std::fs::remove_file(&lock_path);
+                                    continue;
+                                }
+                            }
                             return Err(AgentError::Config(format!(
                                 "Another Hermes interactive session is running (PID {}). Close it first or set {}=1 to allow parallel sessions.",
                                 existing_pid, INTERACTIVE_SESSION_LOCK_BYPASS_ENV
@@ -14246,6 +14406,8 @@ max_turns: 50
 
     #[test]
     fn interactive_session_lock_guard_replaces_stale_pid_and_cleans_up() {
+        let old_bypass = std::env::var_os(INTERACTIVE_SESSION_LOCK_BYPASS_ENV);
+        std::env::remove_var(INTERACTIVE_SESSION_LOCK_BYPASS_ENV);
         let tmp = tempfile::tempdir().expect("tempdir");
         let cli = cli_for_temp_state_root(tmp.path());
         let lock_path = interactive_lock_path_for_cli(&cli);
@@ -14262,11 +14424,16 @@ max_turns: 50
         );
         drop(guard);
         assert!(!lock_path.exists(), "lock file should be removed on drop");
+        if let Some(value) = old_bypass {
+            std::env::set_var(INTERACTIVE_SESSION_LOCK_BYPASS_ENV, value);
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn interactive_session_lock_guard_rejects_live_pid() {
+        let old_bypass = std::env::var_os(INTERACTIVE_SESSION_LOCK_BYPASS_ENV);
+        std::env::remove_var(INTERACTIVE_SESSION_LOCK_BYPASS_ENV);
         let tmp = tempfile::tempdir().expect("tempdir");
         let cli = cli_for_temp_state_root(tmp.path());
         let lock_path = interactive_lock_path_for_cli(&cli);
@@ -14282,6 +14449,31 @@ max_turns: 50
         let msg = format!("{err}");
         assert!(msg.contains("Another Hermes interactive session is running"));
         assert_eq!(read_interactive_lock_pid(&lock_path), Some(1));
+        if let Some(value) = old_bypass {
+            std::env::set_var(INTERACTIVE_SESSION_LOCK_BYPASS_ENV, value);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parse_pid_snapshot_line_parses_ppid_tty_and_command() {
+        let snap = parse_pid_snapshot_line("1 ?? /Users/sheawinkler/.cargo/bin/hermes-agent-ultra")
+            .expect("snapshot");
+        assert_eq!(snap.ppid, 1);
+        assert_eq!(snap.tty, "??");
+        assert!(snap.command.contains("hermes-agent-ultra"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn looks_like_interactive_hermes_process_matches_cli_and_not_gateway() {
+        assert!(looks_like_interactive_hermes_process(
+            "/Users/sheawinkler/.cargo/bin/hermes-agent-ultra"
+        ));
+        assert!(looks_like_interactive_hermes_process("hermes-ultra"));
+        assert!(!looks_like_interactive_hermes_process(
+            "/Users/sheawinkler/.cargo/bin/hermes-gateway"
+        ));
     }
 
     #[test]

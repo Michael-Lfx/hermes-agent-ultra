@@ -133,7 +133,7 @@ impl ToolPolicyEngine {
             .ok()
             .as_deref()
             .and_then(ToolPolicyPreset::parse)
-            .unwrap_or(ToolPolicyPreset::Relaxed);
+            .unwrap_or(ToolPolicyPreset::Dev);
         let mut policy = Self::from_preset(preset);
 
         if let Ok(path) = std::env::var("HERMES_TOOL_POLICY_FILE") {

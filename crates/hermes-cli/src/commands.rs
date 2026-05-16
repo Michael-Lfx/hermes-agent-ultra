@@ -2979,6 +2979,298 @@ pub fn autocomplete(partial: &str) -> Vec<&'static str> {
     ranked.into_iter().map(|(cmd, _)| cmd).collect()
 }
 
+/// Return contextual auto-completion suggestions for slash commands.
+///
+/// Unlike [`autocomplete`], this understands command argument position and can
+/// suggest nested values like `/swarm run <passes> <mode>`.
+pub fn autocomplete_contextual(partial: &str) -> Vec<String> {
+    let trimmed_start = partial.trim_start();
+    if !trimmed_start.starts_with('/') {
+        return Vec::new();
+    }
+    let trailing_space = trimmed_start
+        .chars()
+        .last()
+        .is_some_and(char::is_whitespace);
+    let tokens: Vec<&str> = trimmed_start.split_whitespace().collect();
+    if tokens.is_empty() {
+        return Vec::new();
+    }
+
+    // First token only: preserve current fuzzy top-level behavior.
+    if tokens.len() == 1 && !trailing_space {
+        return autocomplete(trimmed_start)
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+    }
+
+    let Some(cmd) = resolve_completion_command(tokens[0]) else {
+        return autocomplete(tokens[0])
+            .into_iter()
+            .map(ToString::to_string)
+            .collect();
+    };
+
+    let args = if tokens.len() > 1 {
+        tokens[1..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let (arg_position, fragment) = if args.is_empty() {
+        (0usize, "")
+    } else if trailing_space {
+        (args.len(), "")
+    } else {
+        (args.len() - 1, args[args.len() - 1])
+    };
+
+    let candidates = if arg_position == 0 {
+        command_subcommand_candidates(&cmd)
+    } else {
+        command_nested_candidates(&cmd, args[0], arg_position)
+    };
+
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let fragment_lc = fragment.to_ascii_lowercase();
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for candidate in candidates {
+        if !fragment_lc.is_empty() && !candidate.to_ascii_lowercase().starts_with(&fragment_lc) {
+            continue;
+        }
+        let mut parts: Vec<String> = Vec::with_capacity(1 + arg_position + 1);
+        parts.push(cmd.clone());
+        for i in 0..arg_position {
+            if i < args.len() {
+                parts.push(args[i].to_string());
+            }
+        }
+        parts.push(candidate.to_string());
+        let mut suggestion = parts.join(" ");
+        if trailing_space {
+            suggestion.push(' ');
+        }
+        if seen.insert(suggestion.clone()) {
+            out.push(suggestion);
+        }
+    }
+    out
+}
+
+fn resolve_completion_command(raw: &str) -> Option<String> {
+    let canonical = canonical_command(raw);
+    if SLASH_COMMANDS.iter().any(|(name, _)| *name == canonical) {
+        return Some(canonical.to_string());
+    }
+    let exact = autocomplete(raw);
+    if exact.len() == 1 {
+        return exact
+            .first()
+            .copied()
+            .map(canonical_command)
+            .map(ToString::to_string);
+    }
+    None
+}
+
+fn command_subcommand_candidates(cmd: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    for value in command_subcommand_overrides(cmd) {
+        if seen.insert(value.to_string()) {
+            out.push(value.to_string());
+        }
+    }
+    for value in inferred_subcommands_from_description(cmd) {
+        if seen.insert(value.clone()) {
+            out.push(value);
+        }
+    }
+    out
+}
+
+fn command_nested_candidates(cmd: &str, subcommand: &str, arg_position: usize) -> Vec<String> {
+    let sub = subcommand.to_ascii_lowercase();
+    match (cmd, sub.as_str(), arg_position) {
+        ("/swarm", "plan", 1) => ["concurrent", "sequential", "graph"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/swarm", "run", 1) => ["1", "2", "4", "8", "16", "32", "64"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/swarm", "run", 2) => ["concurrent", "sequential", "graph"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/swarm", "voters", 1) => ["2", "3", "4", "5", "6", "7", "8"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/quorum", "voters", 1) => ["2", "3", "4", "5", "6", "7", "8"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "lifecycle", 1) => [
+            "status",
+            "active",
+            "pause",
+            "resume",
+            "budget-limited",
+            "achieved",
+            "unmet",
+        ]
+        .iter()
+        .map(|v| (*v).to_string())
+        .collect(),
+        ("/objective", "behavior", 1) => [
+            "status",
+            "list",
+            "balanced",
+            "strict",
+            "autonomous",
+            "mission",
+            "minimal",
+            "sigma",
+        ]
+        .iter()
+        .map(|v| (*v).to_string())
+        .collect(),
+        ("/objective", "profile", 1) => ["status", "list", "general", "me", "set"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "context", 1) => ["status", "list", "max", "balanced", "fast"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "simulator", 1) => ["status", "balanced", "strict", "aggressive"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "ensemble", 1) => ["status", "committee", "single", "debate"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "ledger", 1) => ["status", "tail", "clear"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "dag", 1) => ["status", "rebuild", "clear"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/objective", "eval", 1) => ["status", "tail"]
+            .iter()
+            .map(|v| (*v).to_string())
+            .collect(),
+        ("/model", "why-not", 1) => [
+            "--cap",
+            "--min-context",
+            "--max-input-cost",
+            "--max-output-cost",
+            "--budget",
+        ]
+        .iter()
+        .map(|v| (*v).to_string())
+        .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn command_subcommand_overrides(cmd: &str) -> &'static [&'static str] {
+    match cmd {
+        "/auth" => &["status", "verify", "refresh"],
+        "/context" => &["status", "breakdown", "compress"],
+        "/pet" => &[
+            "status", "on", "off", "toggle", "list", "set", "mood", "dock", "speed",
+        ],
+        "/agents" => &["status", "pause", "resume", "doctor"],
+        "/objective" => &[
+            "status",
+            "verify",
+            "plan",
+            "constraints",
+            "counterfactual",
+            "profile",
+            "context",
+            "simulator",
+            "ensemble",
+            "ledger",
+            "dag",
+            "eval",
+            "clear",
+            "lifecycle",
+            "behavior",
+        ],
+        "/quorum" => &["status", "on", "off", "voters", "models", "run"],
+        "/swarm" => &[
+            "status", "plan", "run", "cancel", "artifact", "on", "off", "voters", "models",
+        ],
+        "/simulate" => &["status"],
+        "/timetravel" => &["list", "latest", "goto", "undo", "branch"],
+        "/autocompact" => &["status", "now", "governance"],
+        "/qos" => &["status", "health", "autotune"],
+        "/claims" => &["status", "on", "off"],
+        _ => &[],
+    }
+}
+
+fn inferred_subcommands_from_description(cmd: &str) -> Vec<String> {
+    let Some((_, desc)) = SLASH_COMMANDS.iter().find(|(name, _)| *name == cmd) else {
+        return Vec::new();
+    };
+    let mut segments: Vec<String> = Vec::new();
+    let mut in_tick = false;
+    let mut buf = String::new();
+    for ch in desc.chars() {
+        if ch == '`' {
+            if in_tick && !buf.trim().is_empty() {
+                segments.push(buf.clone());
+            }
+            buf.clear();
+            in_tick = !in_tick;
+            continue;
+        }
+        if in_tick {
+            buf.push(ch);
+        }
+    }
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for seg in segments {
+        for raw in seg.split('|') {
+            let cleaned = raw
+                .trim()
+                .trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                .trim_start_matches('/');
+            if cleaned.is_empty() {
+                continue;
+            }
+            let lc = cleaned.to_ascii_lowercase();
+            if lc == cmd.trim_start_matches('/') {
+                continue;
+            }
+            if !lc
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                continue;
+            }
+            if seen.insert(lc.clone()) {
+                out.push(lc);
+            }
+        }
+    }
+    out
+}
+
 fn command_match_score(query: &str, cmd: &str, desc: &str) -> Option<i32> {
     if query.is_empty() || query == "/" {
         return Some(10);
@@ -5796,7 +6088,7 @@ fn handle_about_command(app: &mut App) -> Result<CommandResult, AgentError> {
     let policy_preset = std::env::var("HERMES_TOOL_POLICY_PRESET")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "balanced".to_string());
+        .unwrap_or_else(|| "off".to_string());
 
     let has_contextlattice_mcp = app.config.mcp_servers.iter().any(|entry| {
         let name_hit = entry.name.to_ascii_lowercase().contains("contextlattice");
@@ -6761,7 +7053,7 @@ fn handle_ops_tool_profile_command(
     let mode = std::env::var("HERMES_REPO_REVIEW_TOOL_PROFILE_MODE")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "balanced".to_string());
+        .unwrap_or_else(|| "off".to_string());
     if args.is_empty()
         || args
             .first()
@@ -7186,7 +7478,7 @@ async fn handle_ops_autopilot_command(
     let profile = std::env::var("HERMES_PERF_AUTOPILOT_PROFILE")
         .ok()
         .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| "balanced".to_string());
+        .unwrap_or_else(|| "off".to_string());
 
     let Some(repo_root) = discover_repo_root_for_about() else {
         emit_command_output(
@@ -7305,7 +7597,7 @@ async fn handle_ops_autopilot_command(
                     "Autopilot profiles:\n- balanced: default stability/perf mix\n- throughput: lower latency and tighter loop cadence\n- quality: stronger verification and replay focus\n- reliability: prioritize retries/recovery and degraded-source tolerance\n- safety: strictest gate posture with conservative policy knobs",
                 ),
                 Some("balanced" | "throughput" | "quality" | "reliability" | "safety") => {
-                    let value = next.unwrap_or_else(|| "balanced".to_string());
+                    let value = next.unwrap_or_else(|| "off".to_string());
                     std::env::set_var("HERMES_PERF_AUTOPILOT_PROFILE", &value);
                     emit_command_output(app, format!("autopilot profile set to '{}'", value));
                 }
@@ -7461,7 +7753,7 @@ async fn handle_ops_command(app: &mut App, args: &[&str]) -> Result<CommandResul
         let policy_preset = std::env::var("HERMES_TOOL_POLICY_PRESET")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "balanced".to_string());
+            .unwrap_or_else(|| "off".to_string());
         let counters = app.tool_registry.policy_counters();
         let dashboard_status = {
             let raw = app
@@ -7498,12 +7790,12 @@ async fn handle_ops_command(app: &mut App, args: &[&str]) -> Result<CommandResul
         let autopilot_profile = std::env::var("HERMES_PERF_AUTOPILOT_PROFILE")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "balanced".to_string());
+            .unwrap_or_else(|| "off".to_string());
         let repo_review_budget = RepoReviewBudgetRuntime::from_env();
         let tool_profile_mode = std::env::var("HERMES_REPO_REVIEW_TOOL_PROFILE_MODE")
             .ok()
             .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| "balanced".to_string());
+            .unwrap_or_else(|| "off".to_string());
 
         let out = format!(
             "Operator Control Plane\n\
@@ -7682,6 +7974,7 @@ struct BackgroundJobRecord {
     id: String,
     status: String,
     task: String,
+    pid: Option<u32>,
     attempts: u64,
     created_at: String,
     started_at: String,
@@ -7728,6 +8021,10 @@ fn collect_background_jobs(limit: usize) -> Vec<BackgroundJobRecord> {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let pid = map
+            .get("pid")
+            .and_then(|v| v.as_u64())
+            .and_then(|raw| u32::try_from(raw).ok());
         let attempts = map.get("attempts").and_then(|v| v.as_u64()).unwrap_or(0);
         let created_at = map
             .get("created_at")
@@ -7753,6 +8050,7 @@ fn collect_background_jobs(limit: usize) -> Vec<BackgroundJobRecord> {
             id,
             status,
             task,
+            pid,
             attempts,
             created_at,
             started_at,
@@ -7810,12 +8108,14 @@ fn render_background_status(limit: usize) -> String {
     }
     out.push_str("\nRecent background jobs:\n");
     for (idx, row) in rows.iter().enumerate() {
+        let pid_suffix = row.pid.map(|pid| format!(" pid={pid}")).unwrap_or_default();
         let _ = writeln!(
             out,
-            "{}. {} [{}] attempts={} task={}",
+            "{}. {} [{}{}] attempts={} task={}",
             idx + 1,
             row.id,
             row.status,
+            pid_suffix,
             row.attempts,
             truncate_chars(row.task.trim(), 84)
         );
@@ -8828,7 +9128,7 @@ fn trigger_triage_mode() -> String {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .map(|v| v.trim().to_ascii_lowercase())
-        .unwrap_or_else(|| "balanced".to_string())
+        .unwrap_or_else(|| "off".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9661,6 +9961,7 @@ fn handle_background_command(app: &mut App, args: &[&str]) -> Result<CommandResu
             "Usage: /background <message>\n\
              - /background status|list\n\
              - /background tail <job-id> [N]\n\
+             - /background stop <job-id>\n\
              - /background event <source> <payload>\n\
              Queues a task to run in the background while you continue chatting.",
         );
@@ -9727,6 +10028,30 @@ fn handle_background_command(app: &mut App, args: &[&str]) -> Result<CommandResu
         );
         return Ok(CommandResult::Handled);
     }
+    if sub == "stop" || sub == "cancel" || sub == "kill" {
+        let requested_id = args
+            .get(1)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                collect_background_jobs(200).into_iter().find_map(|job| {
+                    if matches!(job.status.as_str(), "running" | "queued") {
+                        Some(job.id)
+                    } else {
+                        None
+                    }
+                })
+            });
+        let Some(id_or_prefix) = requested_id else {
+            emit_command_output(
+                app,
+                "Usage: /background stop <job-id>\nNo running/queued jobs found.",
+            );
+            return Ok(CommandResult::Handled);
+        };
+        emit_command_output(app, terminate_background_job(&id_or_prefix)?);
+        return Ok(CommandResult::Handled);
+    }
     if sub == "event" {
         let Some(source) = args.get(1).copied() else {
             emit_command_output(app, "Usage: /background event <source> <payload>");
@@ -9757,6 +10082,116 @@ fn handle_background_command(app: &mut App, args: &[&str]) -> Result<CommandResu
         ),
     );
     Ok(CommandResult::Handled)
+}
+
+#[cfg(unix)]
+fn process_running(pid: u32) -> bool {
+    // SAFETY: libc::kill with signal 0 only performs existence/permission check.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if rc == 0 {
+        true
+    } else {
+        matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        )
+    }
+}
+
+#[cfg(not(unix))]
+fn process_running(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn terminate_pid(pid: u32) -> std::io::Result<()> {
+    // SAFETY: pid is sourced from our own status record; SIGTERM is best-effort.
+    let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_pid(_pid: u32) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "Process termination is unsupported on this platform.",
+    ))
+}
+
+fn terminate_background_job(id_or_prefix: &str) -> Result<String, AgentError> {
+    let Some(job) = resolve_background_job(id_or_prefix) else {
+        return Ok(format!(
+            "Background job '{}' not found. Use `/background status`.",
+            id_or_prefix
+        ));
+    };
+    let mut map = read_json_map(&job.status_path);
+    if map.is_empty() {
+        return Err(AgentError::Io(format!(
+            "Status file missing or unreadable: {}",
+            job.status_path.display()
+        )));
+    }
+    let status = map
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_ascii_lowercase();
+    if status == "completed" || status == "failed" || status == "canceled" {
+        return Ok(format!(
+            "Background job {} already {}.\nStatus file: {}",
+            job.id,
+            status,
+            job.status_path.display()
+        ));
+    }
+
+    let mut termination_note = String::new();
+    if let Some(pid) = map
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .and_then(|raw| u32::try_from(raw).ok())
+    {
+        if process_running(pid) {
+            match terminate_pid(pid) {
+                Ok(()) => termination_note = format!("Sent SIGTERM to pid {}.", pid),
+                Err(err) => termination_note = format!("Failed to terminate pid {}: {}.", pid, err),
+            }
+        } else {
+            termination_note = format!("Pid {} was not running.", pid);
+        }
+    }
+
+    map.insert(
+        "status".into(),
+        serde_json::Value::String("canceled".into()),
+    );
+    map.insert(
+        "finished_at".into(),
+        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    map.insert(
+        "error".into(),
+        serde_json::Value::String("canceled by operator".into()),
+    );
+    map.insert("pid".into(), serde_json::Value::Null);
+    write_json_map(&job.status_path, &map)
+        .map_err(|e| AgentError::Io(format!("Failed to update background status: {}", e)))?;
+
+    Ok(format!(
+        "Canceled background job {}\nStatus file: {}\n{}",
+        job.id,
+        job.status_path.display(),
+        if termination_note.is_empty() {
+            "No active child pid recorded.".to_string()
+        } else {
+            termination_note
+        }
+    ))
 }
 
 fn claim_queued_background_job(
@@ -9829,12 +10264,38 @@ fn schedule_background_job_execution(status_path: PathBuf, log_path: PathBuf, ta
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // Ensure detached children do not survive runtime/session teardown.
+        cmd.kill_on_drop(true);
 
         if let Ok(home) = std::env::var("HERMES_HOME") {
             cmd.env("HERMES_HOME", home);
         }
 
-        let out = cmd.output().await;
+        let child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                let mut failed = queued.clone();
+                failed.insert("status".into(), serde_json::Value::String("failed".into()));
+                failed.insert(
+                    "finished_at".into(),
+                    serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+                );
+                failed.insert(
+                    "error".into(),
+                    serde_json::Value::String(format!("spawn failed: {}", e)),
+                );
+                failed.insert("pid".into(), serde_json::Value::Null);
+                let _ = write_json_map(&status_path, &failed);
+                return;
+            }
+        };
+        if let Some(pid) = child.id() {
+            let mut running = queued.clone();
+            running.insert("pid".into(), serde_json::json!(pid));
+            let _ = write_json_map(&status_path, &running);
+        }
+
+        let out = child.wait_with_output().await;
         match out {
             Ok(output) => {
                 let exit = output.status.code().unwrap_or(-1);
@@ -9868,6 +10329,7 @@ fn schedule_background_job_execution(status_path: PathBuf, log_path: PathBuf, ta
                     serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
                 );
                 done.insert("exit_code".into(), serde_json::json!(exit));
+                done.insert("pid".into(), serde_json::Value::Null);
                 let _ = write_json_map(&status_path, &done);
             }
             Err(e) => {
@@ -9881,6 +10343,7 @@ fn schedule_background_job_execution(status_path: PathBuf, log_path: PathBuf, ta
                     "error".into(),
                     serde_json::Value::String(format!("spawn/output failed: {}", e)),
                 );
+                failed.insert("pid".into(), serde_json::Value::Null);
                 let _ = write_json_map(&status_path, &failed);
             }
         }
@@ -10852,7 +11315,7 @@ fn resolve_policy_profile(input: &str) -> Option<PolicyProfile> {
 fn current_policy_profile_name() -> &'static str {
     let preset = std::env::var("HERMES_TOOL_POLICY_PRESET")
         .ok()
-        .unwrap_or_else(|| "balanced".to_string())
+        .unwrap_or_else(|| "off".to_string())
         .trim()
         .to_ascii_lowercase();
     match preset.as_str() {
@@ -12571,13 +13034,13 @@ fn apply_task_depth_profile(profile: TaskDepthProfile) {
             std::env::set_var("HERMES_REPO_REVIEW_BUDGET_PROFILE", "aggressive");
         }
         TaskDepthProfile::Balanced => {
-            set_env_var_u64("HERMES_MAX_ITERATIONS", 50);
-            set_env_var_u64("HERMES_TOOL_CALL_MAX_CONCURRENCY", 8);
-            set_env_var_u64("HERMES_MAX_DELEGATE_DEPTH", 2);
+            set_env_var_u64("HERMES_MAX_ITERATIONS", 250);
+            set_env_var_u64("HERMES_TOOL_CALL_MAX_CONCURRENCY", 12);
+            set_env_var_u64("HERMES_MAX_DELEGATE_DEPTH", 4);
             set_env_var_u64("HERMES_PERF_GOV_WINDOW", 8);
             set_env_var_f64("HERMES_PERF_GOV_LATENCY_WARN_MS", 3500.0);
             set_env_var_f64("HERMES_PERF_GOV_LATENCY_CRITICAL_MS", 6500.0);
-            std::env::set_var("HERMES_REPO_REVIEW_BUDGET_PROFILE", "balanced");
+            std::env::set_var("HERMES_REPO_REVIEW_BUDGET_PROFILE", "off");
         }
         TaskDepthProfile::Deep => {
             set_env_var_u64("HERMES_MAX_ITERATIONS", 120);
@@ -12610,13 +13073,13 @@ fn current_task_depth_profile() -> TaskDepthProfile {
 
 fn task_depth_runtime_summary() -> String {
     let profile = current_task_depth_profile();
-    let max_iters = std::env::var("HERMES_MAX_ITERATIONS").unwrap_or_else(|_| "50".to_string());
+    let max_iters = std::env::var("HERMES_MAX_ITERATIONS").unwrap_or_else(|_| "250".to_string());
     let tool_concurrency =
-        std::env::var("HERMES_TOOL_CALL_MAX_CONCURRENCY").unwrap_or_else(|_| "8".to_string());
+        std::env::var("HERMES_TOOL_CALL_MAX_CONCURRENCY").unwrap_or_else(|_| "12".to_string());
     let delegate_depth =
-        std::env::var("HERMES_MAX_DELEGATE_DEPTH").unwrap_or_else(|_| "2".to_string());
-    let repo_budget = std::env::var("HERMES_REPO_REVIEW_BUDGET_PROFILE")
-        .unwrap_or_else(|_| "balanced".to_string());
+        std::env::var("HERMES_MAX_DELEGATE_DEPTH").unwrap_or_else(|_| "4".to_string());
+    let repo_budget =
+        std::env::var("HERMES_REPO_REVIEW_BUDGET_PROFILE").unwrap_or_else(|_| "off".to_string());
     format!(
         "task_depth profile={} max_iterations={} tool_concurrency={} max_delegate_depth={} repo_budget_profile={}",
         profile.as_str(),
@@ -14494,10 +14957,10 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
         }
         "voters" => {
             let Some(raw) = args.get(1) else {
-                emit_command_output(app, "Usage: /quorum voters <2..5>");
+                emit_command_output(app, "Usage: /quorum voters <2..8>");
                 return Ok(CommandResult::Handled);
             };
-            let voters = raw.parse::<usize>().ok().unwrap_or(3).clamp(2, 5);
+            let voters = raw.parse::<usize>().ok().unwrap_or(3).clamp(2, 8);
             let current = load_quorum_policy()?;
             let policy = set_quorum_policy(current.enabled, Some(voters), None)?;
             if policy.enabled {
@@ -14612,7 +15075,7 @@ async fn handle_quorum_command(app: &mut App, args: &[&str]) -> Result<CommandRe
         }
         _ => emit_command_output(
             app,
-            "Usage: /quorum [status|on|off|voters <2..5>|models <a,b,c>|run]",
+            "Usage: /quorum [status|on|off|voters <2..8>|models <a,b,c>|run]",
         ),
     }
     Ok(CommandResult::Handled)
@@ -14632,11 +15095,12 @@ fn parse_swarm_mode(input: Option<&str>) -> SwarmExecutionMode {
 }
 
 fn read_swarm_pass_cap() -> usize {
-    std::env::var("HERMES_QUORUM_VOTER_PASSES")
-        .ok()
-        .and_then(|raw| raw.trim().parse::<usize>().ok())
-        .unwrap_or(3)
-        .clamp(1, 8)
+    let raw = std::env::var("HERMES_QUORUM_VOTER_PASSES").unwrap_or_else(|_| "6".to_string());
+    let normalized = raw.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "0" | "off" | "unlimited" | "infinite") {
+        return 64;
+    }
+    normalized.parse::<usize>().ok().unwrap_or(6).clamp(1, 64)
 }
 
 fn latest_quorum_artifact_path(app: &App) -> Option<PathBuf> {
@@ -14760,7 +15224,7 @@ async fn handle_swarm_command(app: &mut App, args: &[&str]) -> Result<CommandRes
             let pass_override = args
                 .get(1)
                 .and_then(|raw| raw.trim().parse::<usize>().ok())
-                .map(|v| v.clamp(1, 8));
+                .map(|v| v.clamp(1, 64));
             let mode = if pass_override.is_some() {
                 parse_swarm_mode(args.get(2).copied())
             } else {
@@ -14827,7 +15291,7 @@ async fn handle_swarm_command(app: &mut App, args: &[&str]) -> Result<CommandRes
         | "models" => return handle_quorum_command(app, args).await,
         _ => emit_command_output(
             app,
-            "Usage: /swarm [status|plan [mode]|run [passes] [mode]|cancel|artifact|on|off|voters <2..5>|models <a,b,c>]",
+            "Usage: /swarm [status|plan [mode]|run [passes] [mode]|cancel|artifact|on|off|voters <2..8>|models <a,b,c>]",
         ),
     }
     Ok(CommandResult::Handled)
@@ -16266,19 +16730,31 @@ fn handle_clear_queue_command(app: &mut App) -> Result<CommandResult, AgentError
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            let status = std::fs::read_to_string(&path)
+            let map = std::fs::read_to_string(&path)
                 .ok()
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .and_then(|v| {
-                    v.get("status")
-                        .and_then(|x| x.as_str())
-                        .map(|s| s.to_string())
-                })
+                .and_then(|v| v.as_object().cloned())
                 .unwrap_or_default();
+            let status = map
+                .get("status")
+                .and_then(|x| x.as_str())
+                .unwrap_or_default()
+                .to_string();
             if matches!(
                 status.as_str(),
                 "queued" | "running" | "failed" | "completed"
             ) {
+                if status == "running" {
+                    let pid = map
+                        .get("pid")
+                        .and_then(|v| v.as_u64())
+                        .and_then(|raw| u32::try_from(raw).ok());
+                    if let Some(pid) = pid {
+                        if process_running(pid) {
+                            let _ = terminate_pid(pid);
+                        }
+                    }
+                }
                 if std::fs::remove_file(&path).is_ok() {
                     removed += 1;
                 }
@@ -23789,6 +24265,27 @@ mod tests {
     fn test_autocomplete_partial() {
         let results = autocomplete("/m");
         assert!(results.contains(&"/model"));
+    }
+
+    #[test]
+    fn test_contextual_autocomplete_swarm_subcommands() {
+        let results = autocomplete_contextual("/swarm ");
+        assert!(results.contains(&"/swarm status ".to_string()));
+        assert!(results.contains(&"/swarm run ".to_string()));
+    }
+
+    #[test]
+    fn test_contextual_autocomplete_swarm_nested_modes() {
+        let results = autocomplete_contextual("/swarm plan ");
+        assert!(results.contains(&"/swarm plan graph ".to_string()));
+        assert!(results.contains(&"/swarm plan sequential ".to_string()));
+    }
+
+    #[test]
+    fn test_contextual_autocomplete_objective_behavior_modes() {
+        let results = autocomplete_contextual("/objective behavior ");
+        assert!(results.contains(&"/objective behavior strict ".to_string()));
+        assert!(results.contains(&"/objective behavior sigma ".to_string()));
     }
 
     #[tokio::test]
