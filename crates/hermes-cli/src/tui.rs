@@ -5509,7 +5509,8 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         state.stream_muted = false;
                         state.stream_needs_break = false;
                         state.active_tools.clear();
-                        needs_redraw = true;
+                        app.running = false;
+                        break;
                     }
                     Some(Event::Shutdown) => {
                         app.interrupt_controller.interrupt(None);

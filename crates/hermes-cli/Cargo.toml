@@ -10,6 +10,7 @@ autobins = false
 [features]
 default = []
 otlp = ["hermes-telemetry/otlp"]
+swarms = ["hermes-intelligence/swarms"]
 
 [[bin]]
 name = "hermes"
