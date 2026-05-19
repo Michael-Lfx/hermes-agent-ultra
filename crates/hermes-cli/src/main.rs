@@ -248,9 +248,73 @@ fn oneshot_auto_verify_oauth_provider(
     None
 }
 
-#[tokio::main]
-async fn main() {
-    let cli = Cli::parse();
+fn main() {
+    let builder = std::thread::Builder::new()
+        .name("hermes-main".to_string())
+        .stack_size(main_thread_stack_size());
+    let handle = match builder.spawn(|| {
+        if cfg!(debug_assertions) {
+            if std::env::var("HERMES_CLI_PARSE_PROBE")
+                .ok()
+                .as_deref()
+                == Some("1")
+            {
+                eprintln!("[probe] before Cli::try_parse()");
+                let parse_result = Cli::try_parse();
+                eprintln!("[probe] after Cli::try_parse()");
+                match parse_result {
+                    Ok(_) => {
+                        eprintln!("[probe] parse ok");
+                        return;
+                    }
+                    Err(err) => err.exit(),
+                }
+            }
+        }
+
+        let cli = Cli::parse();
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                eprintln!("Error: failed to initialize async runtime: {err}");
+                std::process::exit(1);
+            }
+        };
+        runtime.block_on(async_main(cli));
+    }) {
+        Ok(handle) => handle,
+        Err(err) => {
+            eprintln!("Error: failed to spawn hermes main thread: {err}");
+            std::process::exit(1);
+        }
+    };
+
+    if handle.join().is_err() {
+        eprintln!("Error: hermes main thread panicked");
+        std::process::exit(1);
+    }
+}
+
+fn main_thread_stack_size() -> usize {
+    std::env::var("HERMES_MAIN_STACK_SIZE")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|v| *v >= 2 * 1024 * 1024)
+        .unwrap_or(if cfg!(debug_assertions) {
+            64 * 1024 * 1024
+        } else {
+            8 * 1024 * 1024
+        })
+}
+
+async fn async_main(cli: Cli) {
+    run(cli).await;
+}
+
+async fn run(cli: Cli) {
     if let Some(config_dir) = cli.config_dir.as_deref() {
         std::env::set_var("HERMES_HOME", config_dir);
     }
@@ -422,33 +486,16 @@ async fn main() {
             preload_skill,
             yolo,
         } => {
-            if let Some(prompt) = query.clone() {
-                match handle_local_slash_query(cli.clone(), &prompt).await {
-                    Ok(true) => Ok(()),
-                    Ok(false) => {
-                        hermes_cli::commands::handle_cli_chat(
-                            query,
-                            preload_skill,
-                            yolo,
-                            global_model_override.clone(),
-                            global_provider_override.clone(),
-                            global_allow_tools_override,
-                        )
-                        .await
-                    }
-                    Err(err) => Err(err),
-                }
-            } else {
-                hermes_cli::commands::handle_cli_chat(
-                    query,
-                    preload_skill,
-                    yolo,
-                    global_model_override.clone(),
-                    global_provider_override.clone(),
-                    global_allow_tools_override,
-                )
-                .await
-            }
+            run_chat_command(
+                cli,
+                query,
+                preload_skill,
+                yolo,
+                global_model_override.clone(),
+                global_provider_override.clone(),
+                global_allow_tools_override,
+            )
+            .await
         }
         CliCommand::Model { provider_model } => run_model(cli, provider_model).await,
         CliCommand::Tools {
@@ -469,7 +516,7 @@ async fn main() {
             yes,
             deep,
         } => {
-            run_gateway(
+            run_gateway_command(
                 cli,
                 action,
                 system,
@@ -543,7 +590,7 @@ async fn main() {
             no_alias,
             no_skills,
         } => {
-            run_profile(
+            run_profile_command(
                 cli,
                 action,
                 name,
@@ -742,6 +789,108 @@ async fn main() {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}
+
+async fn run_chat_command(
+    cli: Cli,
+    query: Option<String>,
+    preload_skill: Option<String>,
+    yolo: bool,
+    global_model_override: Option<String>,
+    global_provider_override: Option<String>,
+    global_allow_tools_override: bool,
+) -> Result<(), AgentError> {
+    if let Some(prompt) = query.clone() {
+        match handle_local_slash_query(cli, &prompt).await {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                hermes_cli::commands::handle_cli_chat(
+                    query,
+                    preload_skill,
+                    yolo,
+                    global_model_override,
+                    global_provider_override,
+                    global_allow_tools_override,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        }
+    } else {
+        hermes_cli::commands::handle_cli_chat(
+            query,
+            preload_skill,
+            yolo,
+            global_model_override,
+            global_provider_override,
+            global_allow_tools_override,
+        )
+        .await
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_gateway_command(
+    cli: Cli,
+    action: Option<String>,
+    system: bool,
+    all: bool,
+    force: bool,
+    run_as_user: Option<String>,
+    replace: bool,
+    dry_run: bool,
+    yes: bool,
+    deep: bool,
+) -> Result<(), AgentError> {
+    run_gateway(
+        cli,
+        action,
+        system,
+        all,
+        force,
+        run_as_user,
+        replace,
+        dry_run,
+        yes,
+        deep,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_profile_command(
+    cli: Cli,
+    action: Option<String>,
+    name: Option<String>,
+    secondary: Option<String>,
+    output: Option<String>,
+    import_name: Option<String>,
+    alias_name: Option<String>,
+    remove: bool,
+    yes: bool,
+    clone: bool,
+    clone_all: bool,
+    clone_from: Option<String>,
+    no_alias: bool,
+    no_skills: bool,
+) -> Result<(), AgentError> {
+    run_profile(
+        cli,
+        action,
+        name,
+        secondary,
+        output,
+        import_name,
+        alias_name,
+        remove,
+        yes,
+        clone,
+        clone_all,
+        clone_from,
+        no_alias,
+        no_skills,
+    )
+    .await
 }
 
 /// Initialize the tracing subscriber with env filter.
