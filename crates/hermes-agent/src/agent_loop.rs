@@ -553,7 +553,7 @@ pub struct AgentConfig {
     #[serde(default = "default_invalid_tool_json_max_retries")]
     pub invalid_tool_json_max_retries: u32,
 
-    /// Max retries when streaming assembles truncated tool arguments (`finish_reason=length` parity).
+    /// Max retries when the model returns truncated tool arguments (`finish_reason=length` parity).
     #[serde(default = "default_truncated_tool_call_max_retries")]
     pub truncated_tool_call_max_retries: u32,
 
@@ -4010,6 +4010,23 @@ impl AgentLoop {
             .map_err(|e| e.to_string())
     }
 
+    fn tool_call_arguments_look_truncated(tc: &ToolCall) -> bool {
+        let trimmed = tc.function.arguments.trim();
+        !trimmed.is_empty() && serde_json::from_str::<Value>(trimmed).is_err()
+    }
+
+    fn upgrade_finish_reason_for_truncated_tool_args(response: &mut LlmResponse) {
+        let truncated = response
+            .message
+            .tool_calls
+            .as_ref()
+            .map(|calls| calls.iter().any(Self::tool_call_arguments_look_truncated))
+            .unwrap_or(false);
+        if truncated {
+            response.finish_reason = Some("length".to_string());
+        }
+    }
+
     fn extra_body_for_api_mode(&self, api_mode: &ApiMode) -> Option<Value> {
         let mut body = self.config().extra_body
             .clone()
@@ -4713,11 +4730,10 @@ impl AgentLoop {
                 on_chunk(chunk);
             }
 
-            let has_truncated_tool_args = tool_calls.iter().any(|tc| {
-                let trimmed = tc.function.arguments.trim();
-                !trimmed.is_empty() && serde_json::from_str::<Value>(trimmed).is_err()
-            });
-            if has_truncated_tool_args {
+            if tool_calls
+                .iter()
+                .any(Self::tool_call_arguments_look_truncated)
+            {
                 finish_reason = Some("length".to_string());
             }
 
@@ -4917,6 +4933,7 @@ impl AgentLoop {
         let mut last_checkpoint_messages: Option<Vec<Message>> = None;
         let mut invalid_tool_retries: u32 = 0;
         let mut invalid_json_retries: u32 = 0;
+        let mut truncated_tool_call_retries: u32 = 0;
         let mut last_content_with_tools: Option<String> = None;
         let mut context_pressure_warned_at: f64 = 0.0;
         let mut context_pressure_last_warn_at: Option<Instant> = None;
@@ -5185,6 +5202,7 @@ impl AgentLoop {
                 }
                 break r;
             };
+            Self::upgrade_finish_reason_for_truncated_tool_args(&mut response);
             let api_elapsed = api_start.elapsed().as_millis() as u64;
             _total_api_time_ms += api_elapsed;
             self.update_route_learning(
@@ -5299,6 +5317,25 @@ impl AgentLoop {
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty());
             }
+            if response.finish_reason.as_deref() == Some("length")
+                && assistant_msg
+                    .tool_calls
+                    .as_ref()
+                    .map_or(false, |calls| !calls.is_empty())
+                && truncated_tool_call_retries < self.config().truncated_tool_call_max_retries
+            {
+                truncated_tool_call_retries = truncated_tool_call_retries.saturating_add(1);
+                self.emit_status(
+                    "lifecycle",
+                    &format!(
+                        "Truncated tool arguments ??? retrying ({}/{})",
+                        truncated_tool_call_retries, self.config().truncated_tool_call_max_retries
+                    ),
+                );
+                let _ = ctx.get_messages_mut().pop();
+                continue;
+            }
+            truncated_tool_call_retries = 0;
 
             // Step complete callback
             if let Some(ref cb) = self.callbacks.on_step_complete {
@@ -6358,6 +6395,7 @@ impl AgentLoop {
                 }
                 break r;
             };
+            Self::upgrade_finish_reason_for_truncated_tool_args(&mut response);
             let _api_elapsed_ms = api_start.elapsed().as_millis() as u64;
             self.update_route_learning(
                 turn_runtime_route.as_ref(),
@@ -10804,6 +10842,109 @@ mod tests {
         let rows = captured.lock().expect("captured lock");
         assert!(!rows.iter().any(|(kind, msg)| {
             kind == "lifecycle" && msg.contains("Empty assistant response ??? retrying")
+        }));
+    }
+
+    #[tokio::test]
+    async fn run_truncated_tool_call_retries_before_tool_execution() {
+        use futures::stream::BoxStream;
+        use hermes_core::{FunctionCall, ToolCall};
+
+        #[derive(Default)]
+        struct TruncatedThenOkProvider {
+            calls: std::sync::Mutex<u32>,
+        }
+
+        #[async_trait::async_trait]
+        impl LlmProvider for TruncatedThenOkProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermes_core::LlmResponse, AgentError> {
+                let mut n = self.calls.lock().expect("calls lock");
+                *n += 1;
+                if *n == 1 {
+                    Ok(hermes_core::LlmResponse {
+                        message: Message::assistant_with_tool_calls(
+                            None,
+                            vec![ToolCall {
+                                id: "call_trunc".to_string(),
+                                function: FunctionCall {
+                                    name: "echo".to_string(),
+                                    arguments: "{\"path\":\"/tmp/x\",".to_string(),
+                                },
+                                extra_content: None,
+                            }],
+                        ),
+                        usage: None,
+                        model: "dummy".into(),
+                        finish_reason: Some("stop".into()),
+                    })
+                } else {
+                    Ok(hermes_core::LlmResponse {
+                        message: Message::assistant("done"),
+                        usage: None,
+                        model: "dummy".into(),
+                        finish_reason: Some("stop".into()),
+                    })
+                }
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let captured = Arc::new(std::sync::Mutex::new(Vec::<(String, String)>::new()));
+        let cap_ref = captured.clone();
+        let callbacks = AgentCallbacks {
+            status_callback: Some(Arc::new(move |kind, msg| {
+                cap_ref
+                    .lock()
+                    .expect("status callback lock")
+                    .push((kind.to_string(), msg.to_string()));
+            })),
+            ..Default::default()
+        };
+
+        let provider = Arc::new(TruncatedThenOkProvider::default());
+        let mut registry = ToolRegistry::new();
+        registry.register(
+            "echo",
+            hermes_core::tool_schema(
+                "echo",
+                "Echo input",
+                hermes_core::JsonSchema::new("object"),
+            ),
+            Arc::new(|_| Ok("{}".to_string())),
+        );
+        let cfg = AgentConfig {
+            max_turns: 3,
+            truncated_tool_call_max_retries: 1,
+            ..AgentConfig::default()
+        };
+        let agent = AgentLoop::new(cfg, Arc::new(registry), provider.clone())
+            .with_callbacks(callbacks);
+
+        let result = agent.run(vec![Message::user("hello")], None).await;
+        assert!(result.is_ok());
+        assert_eq!(*provider.calls.lock().expect("calls lock"), 2);
+        let rows = captured.lock().expect("captured lock");
+        assert!(rows.iter().any(|(kind, msg)| {
+            kind == "lifecycle" && msg.contains("Truncated tool arguments")
         }));
     }
 
