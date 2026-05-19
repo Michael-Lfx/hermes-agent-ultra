@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "fixture_group": "error_classifier",
+  "python_module": "agent/error_classifier.py",
+  "cases": [
+    {
+      "id": "rate_limit_error",
+      "op": "classify_error",
+      "input": { "error_type": "RateLimited", "retry_after_secs": 30 },
+      "expected": { "category": "RateLimit", "strategy": "RetryWithBackoff" }
+    },
+    {
+      "id": "auth_failed",
+      "op": "classify_error",
+      "input": { "error_type": "AuthFailed", "message": "Invalid API key" },
+      "expected": { "category": "AuthFailed", "strategy": "NoRetry" }
+    },
+    {
+      "id": "context_too_long",
+      "op": "classify_error",
+      "input": { "error_type": "ContextTooLong" },
+      "expected": { "category": "ContextTooLong", "strategy": "UseFallbackModel" }
+    },
+    {
+      "id": "timeout",
+      "op": "classify_error",
+      "input": { "error_type": "Timeout", "message": "request timed out" },
+      "expected": { "category": "Timeout", "strategy": "RetryOnce" }
+    },
+    {
+      "id": "server_error_500",
+      "op": "classify_error",
+      "input": { "error_type": "LlmApi", "message": "status 500: internal server error" },
+      "expected": { "category": "ServerError", "strategy": "RetryWithBackoff" }
+    },
+    {
+      "id": "overloaded",
+      "op": "classify_error",
+      "input": { "error_type": "LlmApi", "message": "overloaded" },
+      "expected": { "category": "ModelOverloaded", "strategy": "UseFallbackModel" }
+    }
+  ]
+}

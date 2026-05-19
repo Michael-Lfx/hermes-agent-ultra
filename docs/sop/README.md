@@ -17,5 +17,10 @@
 | `anthropic_adapter` | [anthropic_adapter.md](anthropic_adapter.md) |
 | `hermes_core_tool_format` | [hermes_core_tool_format.md](hermes_core_tool_format.md) |
 | `checkpoint_manager` | [checkpoint_manager.md](checkpoint_manager.md) |
+| `model_metadata` | [model_metadata.md](model_metadata.md) |
+| `usage_pricing` | [usage_pricing.md](usage_pricing.md) |
+| `approval` | [approval.md](approval.md) |
+| `v4a_patch` | [v4a_patch.md](v4a_patch.md) |
+| `error_classifier` | [error_classifier.md](error_classifier.md) |
 
 路线图与 Prompt 长文保留在 [`PARITY_PLAN.md`](../../PARITY_PLAN.md)；本目录只写**可执行**步骤与验证命令。

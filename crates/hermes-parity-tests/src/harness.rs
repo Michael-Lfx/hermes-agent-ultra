@@ -9,6 +9,13 @@ use hermes_intelligence::anthropic_adapter::{
     common_betas_for_base_url, default_anthropic_beta_list, fast_mode_request_beta_list,
     is_oauth_token, normalize_model_name, sanitize_tool_id,
 };
+use hermes_intelligence::usage_pricing::resolve_billing_route;
+use hermes_intelligence::{
+    estimate_tokens_rough, get_model_context_length, infer_provider_from_url, supports_tools,
+    supports_vision, ErrorCategory, ErrorClassifier, RetryStrategy,
+};
+use hermes_tools::approval::{check_approval, ApprovalDecision};
+use hermes_tools::v4a_patch::{parse_v4a_patch, OperationType};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -254,6 +261,153 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
                 .ok_or_else(|| "missing input.abs_path".to_string())?;
             Ok(Value::String(checkpoint_shadow_dir_id(abs)))
         }
+
+        // -- model_metadata ops --
+        "get_model_context_length" => {
+            let model = input
+                .get("model")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.model".to_string())?;
+            Ok(json!(get_model_context_length(model)))
+        }
+        "supports_vision" => {
+            let model = input
+                .get("model")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.model".to_string())?;
+            Ok(json!(supports_vision(model)))
+        }
+        "supports_tools" => {
+            let model = input
+                .get("model")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.model".to_string())?;
+            Ok(json!(supports_tools(model)))
+        }
+        "estimate_tokens_rough" => {
+            let text = input
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.text".to_string())?;
+            Ok(json!(estimate_tokens_rough(text)))
+        }
+        "infer_provider_from_url" => {
+            let base_url = input
+                .get("base_url")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.base_url".to_string())?;
+            match infer_provider_from_url(base_url) {
+                Some(p) => Ok(json!(p)),
+                None => Ok(Value::Null),
+            }
+        }
+
+        // -- usage_pricing ops --
+        "resolve_billing_route" => {
+            let model_name = input
+                .get("model_name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.model_name".to_string())?;
+            let provider = input.get("provider").and_then(|v| v.as_str());
+            let base_url = input.get("base_url").and_then(|v| v.as_str());
+            let route = resolve_billing_route(model_name, provider, base_url);
+            Ok(serde_json::to_value(route).map_err(|e| e.to_string())?)
+        }
+
+        // -- approval ops --
+        "check_approval" => {
+            let command = input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.command".to_string())?;
+            let decision = check_approval(command);
+            let label = match decision {
+                ApprovalDecision::Approved => "Approved",
+                ApprovalDecision::Denied => "Denied",
+                ApprovalDecision::RequiresConfirmation => "RequiresConfirmation",
+            };
+            Ok(json!(label))
+        }
+
+        // -- error_classifier ops --
+        "classify_error" => {
+            let error_type = input
+                .get("error_type")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.error_type".to_string())?;
+            let message = input.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let retry_after = input.get("retry_after_secs").and_then(|v| v.as_u64());
+
+            let error = match error_type {
+                "RateLimited" => hermes_core::AgentError::RateLimited {
+                    retry_after_secs: retry_after,
+                },
+                "AuthFailed" => hermes_core::AgentError::AuthFailed(message.to_string()),
+                "ContextTooLong" => hermes_core::AgentError::ContextTooLong,
+                "Timeout" => hermes_core::AgentError::Timeout(message.to_string()),
+                "LlmApi" => hermes_core::AgentError::LlmApi(message.to_string()),
+                "Gateway" => hermes_core::AgentError::Gateway(message.to_string()),
+                "Io" => hermes_core::AgentError::Io(message.to_string()),
+                other => return Err(format!("unknown error_type: {}", other)),
+            };
+
+            let classifier = ErrorClassifier::new();
+            let category = classifier.classify(&error);
+            let strategy = classifier.recommend_strategy(&category);
+
+            let cat_label = match &category {
+                ErrorCategory::RateLimit { .. } => "RateLimit",
+                ErrorCategory::AuthFailed => "AuthFailed",
+                ErrorCategory::ContextTooLong => "ContextTooLong",
+                ErrorCategory::ServerError { .. } => "ServerError",
+                ErrorCategory::NetworkError => "NetworkError",
+                ErrorCategory::InvalidRequest => "InvalidRequest",
+                ErrorCategory::ModelOverloaded => "ModelOverloaded",
+                ErrorCategory::Timeout => "Timeout",
+                ErrorCategory::Unknown => "Unknown",
+            };
+            let strat_label = match &strategy {
+                RetryStrategy::RetryWithBackoff { .. } => "RetryWithBackoff",
+                RetryStrategy::RetryOnce => "RetryOnce",
+                RetryStrategy::NoRetry => "NoRetry",
+                RetryStrategy::UseFallbackModel => "UseFallbackModel",
+            };
+
+            Ok(json!({
+                "category": cat_label,
+                "strategy": strat_label,
+            }))
+        }
+
+        // -- v4a_patch ops --
+        "parse_v4a_patch" => {
+            let patch = input
+                .get("patch")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.patch".to_string())?;
+            let (ops, _err) = parse_v4a_patch(patch);
+            let ops_json: Vec<Value> = ops
+                .iter()
+                .map(|op| {
+                    json!({
+                        "operation": match op.operation {
+                            OperationType::Add => "add",
+                            OperationType::Update => "update",
+                            OperationType::Delete => "delete",
+                            OperationType::Move => "move",
+                        },
+                        "file_path": op.file_path,
+                        "new_path": op.new_path,
+                        "hunks_count": op.hunks.len(),
+                    })
+                })
+                .collect();
+            Ok(json!({
+                "ops_count": ops.len(),
+                "ops": ops_json,
+            }))
+        }
+
         _ => Err(format!("unknown op: {}", op)),
     }
 }
@@ -275,6 +429,33 @@ mod tests {
     #[test]
     fn parity_hermes_core_fixtures() {
         run_fixtures_in_dir(&fixtures_dir().join("hermes_core")).expect("core fixtures");
+    }
+
+    #[test]
+    fn parity_model_metadata_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("model_metadata"))
+            .expect("model_metadata fixtures");
+    }
+
+    #[test]
+    fn parity_usage_pricing_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("usage_pricing")).expect("usage_pricing fixtures");
+    }
+
+    #[test]
+    fn parity_approval_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("approval")).expect("approval fixtures");
+    }
+
+    #[test]
+    fn parity_v4a_patch_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("v4a_patch")).expect("v4a_patch fixtures");
+    }
+
+    #[test]
+    fn parity_error_classifier_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("error_classifier"))
+            .expect("error_classifier fixtures");
     }
 
     #[test]

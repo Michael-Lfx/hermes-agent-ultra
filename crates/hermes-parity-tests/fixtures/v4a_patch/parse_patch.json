@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "fixture_group": "v4a_patch",
+  "python_module": "tools/patch_parser.py",
+  "cases": [
+    {
+      "id": "update_single_file",
+      "op": "parse_v4a_patch",
+      "input": {
+        "patch": "*** Begin Patch\n*** Update File: src/main.rs\n@@ fn main @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }\n*** End Patch"
+      },
+      "expected": {
+        "ops_count": 1,
+        "ops": [
+          {
+            "operation": "update",
+            "file_path": "src/main.rs",
+            "new_path": null,
+            "hunks_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "add_file",
+      "op": "parse_v4a_patch",
+      "input": {
+        "patch": "*** Begin Patch\n*** Add File: new_file.txt\n+line 1\n+line 2\n*** End Patch"
+      },
+      "expected": {
+        "ops_count": 1,
+        "ops": [
+          {
+            "operation": "add",
+            "file_path": "new_file.txt",
+            "new_path": null,
+            "hunks_count": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "delete_file",
+      "op": "parse_v4a_patch",
+      "input": {
+        "patch": "*** Begin Patch\n*** Delete File: old.txt\n*** End Patch"
+      },
+      "expected": {
+        "ops_count": 1,
+        "ops": [
+          {
+            "operation": "delete",
+            "file_path": "old.txt",
+            "new_path": null,
+            "hunks_count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "move_file",
+      "op": "parse_v4a_patch",
+      "input": {
+        "patch": "*** Begin Patch\n*** Move File: old.rs -> new.rs\n*** End Patch"
+      },
+      "expected": {
+        "ops_count": 1,
+        "ops": [
+          {
+            "operation": "move",
+            "file_path": "old.rs",
+            "new_path": "new.rs",
+            "hunks_count": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "multi_operation",
+      "op": "parse_v4a_patch",
+      "input": {
+        "patch": "*** Begin Patch\n*** Update File: a.rs\n fn a() {\n-    old();\n+    new();\n }\n*** Add File: b.rs\n+fn b() {}\n*** Delete File: c.rs\n*** End Patch"
+      },
+      "expected": {
+        "ops_count": 3,
+        "ops": [
+          { "operation": "update", "file_path": "a.rs", "new_path": null, "hunks_count": 1 },
+          { "operation": "add", "file_path": "b.rs", "new_path": null, "hunks_count": 1 },
+          { "operation": "delete", "file_path": "c.rs", "new_path": null, "hunks_count": 0 }
+        ]
+      }
+    }
+  ]
+}

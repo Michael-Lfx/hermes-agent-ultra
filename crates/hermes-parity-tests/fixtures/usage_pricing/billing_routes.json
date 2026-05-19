@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "fixture_group": "usage_pricing",
+  "python_module": "agent/usage_pricing.py",
+  "cases": [
+    {
+      "id": "anthropic_billing_route",
+      "op": "resolve_billing_route",
+      "input": {
+        "model_name": "anthropic/claude-opus-4-6",
+        "provider": "anthropic",
+        "base_url": null
+      },
+      "expected": {
+        "provider": "anthropic",
+        "model": "claude-opus-4-6",
+        "base_url": "",
+        "billing_mode": "OfficialDocsSnapshot"
+      }
+    },
+    {
+      "id": "openai_billing_route",
+      "op": "resolve_billing_route",
+      "input": {
+        "model_name": "gpt-4o",
+        "provider": "openai",
+        "base_url": null
+      },
+      "expected": {
+        "provider": "openai",
+        "model": "gpt-4o",
+        "base_url": "",
+        "billing_mode": "OfficialDocsSnapshot"
+      }
+    },
+    {
+      "id": "openrouter_billing_route",
+      "op": "resolve_billing_route",
+      "input": {
+        "model_name": "google/gemini-pro",
+        "provider": "openrouter",
+        "base_url": null
+      },
+      "expected": {
+        "provider": "openrouter",
+        "model": "google/gemini-pro",
+        "base_url": "",
+        "billing_mode": "ProviderModelsApi"
+      }
+    },
+    {
+      "id": "codex_subscription_route",
+      "op": "resolve_billing_route",
+      "input": {
+        "model_name": "codex-mini",
+        "provider": "openai-codex",
+        "base_url": null
+      },
+      "expected": {
+        "provider": "openai-codex",
+        "model": "codex-mini",
+        "base_url": "",
+        "billing_mode": "SubscriptionIncluded"
+      }
+    }
+  ]
+}

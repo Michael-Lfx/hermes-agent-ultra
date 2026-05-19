@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "fixture_group": "model_metadata",
+  "python_module": "agent/model_metadata.py",
+  "cases": [
+    {
+      "id": "claude_opus_context",
+      "op": "get_model_context_length",
+      "input": { "model": "claude-opus-4-6" },
+      "expected": 1000000
+    },
+    {
+      "id": "claude_sonnet_context",
+      "op": "get_model_context_length",
+      "input": { "model": "claude-sonnet-4-6" },
+      "expected": 1000000
+    },
+    {
+      "id": "gpt4_context",
+      "op": "get_model_context_length",
+      "input": { "model": "gpt-4" },
+      "expected": 128000
+    },
+    {
+      "id": "gpt41_context",
+      "op": "get_model_context_length",
+      "input": { "model": "gpt-4.1" },
+      "expected": 1047576
+    },
+    {
+      "id": "deepseek_context",
+      "op": "get_model_context_length",
+      "input": { "model": "deepseek-chat" },
+      "expected": 128000
+    },
+    {
+      "id": "unknown_model_fallback",
+      "op": "get_model_context_length",
+      "input": { "model": "totally-unknown-model-xyz" },
+      "expected": 128000
+    },
+    {
+      "id": "claude_supports_vision",
+      "op": "supports_vision",
+      "input": { "model": "claude-opus-4-6" },
+      "expected": true
+    },
+    {
+      "id": "claude_supports_tools",
+      "op": "supports_tools",
+      "input": { "model": "claude-opus-4-6" },
+      "expected": true
+    },
+    {
+      "id": "estimate_tokens_short",
+      "op": "estimate_tokens_rough",
+      "input": { "text": "Hello world" },
+      "expected": 3
+    },
+    {
+      "id": "estimate_tokens_empty",
+      "op": "estimate_tokens_rough",
+      "input": { "text": "" },
+      "expected": 0
+    },
+    {
+      "id": "infer_provider_openai",
+      "op": "infer_provider_from_url",
+      "input": { "base_url": "https://api.openai.com/v1" },
+      "expected": "openai"
+    },
+    {
+      "id": "infer_provider_anthropic",
+      "op": "infer_provider_from_url",
+      "input": { "base_url": "https://api.anthropic.com" },
+      "expected": "anthropic"
+    },
+    {
+      "id": "infer_provider_unknown",
+      "op": "infer_provider_from_url",
+      "input": { "base_url": "https://my-custom-llm.example.com" },
+      "expected": null
+    }
+  ]
+}
