@@ -8,7 +8,6 @@ use aes_gcm::Aes256Gcm;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use clap::CommandFactory;
-use clap::Parser;
 use clap_complete::{generate, Shell as CompletionShell};
 use hermes_agent::session_persistence::SessionPersistence;
 use hermes_agent::{leading_system_prompt_for_persist, AgentCallbacks, AgentLoop};
@@ -249,65 +248,37 @@ fn oneshot_auto_verify_oauth_provider(
 }
 
 fn main() {
-    let builder = std::thread::Builder::new()
-        .name("hermes-main".to_string())
-        .stack_size(main_thread_stack_size());
-    let handle = match builder.spawn(|| {
-        if cfg!(debug_assertions) {
-            if std::env::var("HERMES_CLI_PARSE_PROBE")
-                .ok()
-                .as_deref()
-                == Some("1")
-            {
-                eprintln!("[probe] before Cli::try_parse()");
-                let parse_result = Cli::try_parse();
-                eprintln!("[probe] after Cli::try_parse()");
-                match parse_result {
-                    Ok(_) => {
-                        eprintln!("[probe] parse ok");
-                        return;
-                    }
-                    Err(err) => err.exit(),
+    if cfg!(debug_assertions) {
+        if std::env::var("HERMES_CLI_PARSE_PROBE")
+            .ok()
+            .as_deref()
+            == Some("1")
+        {
+            eprintln!("[probe] before Cli::try_parse()");
+            let parse_result = Cli::try_parse();
+            eprintln!("[probe] after Cli::try_parse()");
+            match parse_result {
+                Ok(_) => {
+                    eprintln!("[probe] parse ok");
+                    return;
                 }
+                Err(err) => err.exit(),
             }
         }
+    }
 
-        let cli = Cli::parse();
-        let runtime = match tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-        {
-            Ok(runtime) => runtime,
-            Err(err) => {
-                eprintln!("Error: failed to initialize async runtime: {err}");
-                std::process::exit(1);
-            }
-        };
-        runtime.block_on(async_main(cli));
-    }) {
-        Ok(handle) => handle,
+    let cli = Cli::parse();
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
         Err(err) => {
-            eprintln!("Error: failed to spawn hermes main thread: {err}");
+            eprintln!("Error: failed to initialize async runtime: {err}");
             std::process::exit(1);
         }
     };
-
-    if handle.join().is_err() {
-        eprintln!("Error: hermes main thread panicked");
-        std::process::exit(1);
-    }
-}
-
-fn main_thread_stack_size() -> usize {
-    std::env::var("HERMES_MAIN_STACK_SIZE")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|v| *v >= 2 * 1024 * 1024)
-        .unwrap_or(if cfg!(debug_assertions) {
-            64 * 1024 * 1024
-        } else {
-            8 * 1024 * 1024
-        })
+    runtime.block_on(async_main(cli));
 }
 
 async fn async_main(cli: Cli) {
