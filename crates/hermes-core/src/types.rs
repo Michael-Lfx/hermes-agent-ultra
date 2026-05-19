@@ -286,6 +286,9 @@ pub struct AgentResult {
     /// Hook / plugin parity: `on_session_start` ran this run (new session, not restored prompt).
     #[serde(default, skip_serializing_if = "is_false")]
     pub session_started_hooks_fired: bool,
+    /// Steer text that could not be injected into a tool result (Python `pending_steer`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_steer: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

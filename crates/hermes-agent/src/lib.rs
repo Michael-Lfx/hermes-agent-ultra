@@ -23,6 +23,7 @@ pub mod memory_plugins;
 pub mod oauth;
 pub mod plugins;
 pub mod shell_hooks;
+pub mod steer;
 pub mod provider;
 pub mod providers_extra;
 pub mod python_alignment;
@@ -69,6 +70,7 @@ pub use reasoning::parse_reasoning;
 
 // Re-export interrupt controller
 pub use interrupt::InterruptController;
+pub use steer::{PendingSteer, STEER_GUIDANCE_MARKER};
 
 // Re-export memory manager
 pub use memory_manager::{

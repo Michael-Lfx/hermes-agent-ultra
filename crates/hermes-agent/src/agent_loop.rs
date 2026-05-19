@@ -53,6 +53,7 @@ use crate::python_alignment::{
     strip_think_blocks_for_ack, CODEX_CONTINUE_USER_MESSAGE,
 };
 use crate::fallback::TurnFallbackState;
+use crate::steer::PendingSteer;
 use crate::skill_orchestrator::SkillOrchestrator;
 use crate::smart_model_routing::{
     detect_api_mode_for_url, resolve_turn_route, PrimaryRuntime, ResolveTurnOutcome,
@@ -1673,6 +1674,8 @@ pub struct AgentLoop {
     /// When set, tool calls use this async path instead of sync `ToolRegistry` handlers
     /// (avoids `block_in_place` + `block_on` from inside `JoinSet` tasks on the gateway).
     async_tool_dispatch: Option<AsyncToolDispatch>,
+    /// Mid-run `/steer` queue (Python `_pending_steer`).
+    pending_steer: PendingSteer,
 }
 
 /// Async tool execution hook (gateway: `hermes_tools::ToolRegistry::dispatch_async`).
@@ -1756,6 +1759,7 @@ impl AgentLoop {
         session_started_hooks_fired: bool,
         persist_user_idx: Option<usize>,
     ) -> AgentResult {
+        self.pending_steer.clear();
         self.session_end_hooks(ctx.get_messages(), false, true);
         AgentResult {
             messages: self.messages_for_persisted_result(ctx, persist_user_idx),
@@ -1766,7 +1770,20 @@ impl AgentLoop {
             interrupted: true,
             session_cost_usd: Some(session_cost_usd),
             session_started_hooks_fired,
+            pending_steer: None,
         }
+    }
+
+    fn finalize_agent_result(&self, mut result: AgentResult) -> AgentResult {
+        if result.pending_steer.is_none() {
+            result.pending_steer = self.pending_steer.drain();
+        }
+        result
+    }
+
+    /// Inject mid-run user guidance without interrupting (Python `AIAgent.steer`).
+    pub fn steer(&self, text: &str) -> bool {
+        self.pending_steer.steer(text)
     }
 
     fn primary_runtime_from_config(config: &AgentConfig) -> PrimaryRuntime {
@@ -1992,6 +2009,7 @@ impl AgentLoop {
             active_runtime,
             turn_fallback: Mutex::new(TurnFallbackState::new()),
             async_tool_dispatch: None,
+            pending_steer: PendingSteer::new(),
         }
     }
 
@@ -2046,6 +2064,7 @@ impl AgentLoop {
             active_runtime,
             turn_fallback: Mutex::new(TurnFallbackState::new()),
             async_tool_dispatch: None,
+            pending_steer: PendingSteer::new(),
         }
     }
 
@@ -3548,7 +3567,9 @@ impl AgentLoop {
         }
     }
 
-    fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
+    fn messages_for_api_call(&self, ctx: &mut ContextManager) -> Vec<Message> {
+        self.pending_steer
+            .drain_pre_api_into_messages(ctx.get_messages_mut());
         let mut messages = ctx.get_messages().to_vec();
         if let Some(ephemeral) = self.config().ephemeral_system_prompt
             .as_deref()
@@ -4049,7 +4070,7 @@ impl AgentLoop {
 
     fn call_llm_with_retry<'a>(
         &'a self,
-        ctx: &'a ContextManager,
+        ctx: &'a mut ContextManager,
         tool_schemas: &'a [ToolSchema],
         route: Option<&'a TurnRuntimeRoute>,
         max_tokens_override: Option<u32>,
@@ -4072,7 +4093,7 @@ impl AgentLoop {
 
     async fn call_llm_with_retry_inner(
         &self,
-        ctx: &ContextManager,
+        ctx: &mut ContextManager,
         tool_schemas: &[ToolSchema],
         route: Option<&TurnRuntimeRoute>,
         max_tokens_override: Option<u32>,
@@ -4504,7 +4525,7 @@ impl AgentLoop {
     /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
     async fn collect_stream_llm_response(
         &self,
-        ctx: &ContextManager,
+        ctx: &mut ContextManager,
         tool_schemas: &[ToolSchema],
         route: Option<&TurnRuntimeRoute>,
         active_model: &str,
@@ -4980,7 +5001,7 @@ impl AgentLoop {
                             "session_cost_usd": session_cost_usd,
                         }),
                     );
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -4989,7 +5010,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
             }
 
@@ -5115,7 +5137,7 @@ impl AgentLoop {
                 }
                 let r = match self
                     .call_llm_with_retry(
-                        &ctx,
+                        &mut ctx,
                         &tool_schemas,
                         turn_runtime_route.as_ref(),
                         llm_governor.max_tokens,
@@ -5278,7 +5300,7 @@ impl AgentLoop {
                         session_cost_usd, limit
                     )));
                     self.session_end_hooks(ctx.get_messages(), false, false);
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -5287,7 +5309,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
             }
 
@@ -5484,7 +5507,7 @@ impl AgentLoop {
                         "session_cost_usd": session_cost_usd,
                     }),
                 );
-                return Ok(AgentResult {
+                return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: true,
                     total_turns,
@@ -5493,7 +5516,8 @@ impl AgentLoop {
                     interrupted: false,
                     session_cost_usd: Some(session_cost_usd),
                     session_started_hooks_fired,
-                });
+                    pending_steer: None,
+                }));
             };
 
             codex_ack_continuations = 0;
@@ -5552,7 +5576,7 @@ impl AgentLoop {
                         self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
                     self.session_end_hooks(ctx.get_messages(), false, false);
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -5561,7 +5585,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
                 for tc in &tool_calls {
                     let content = if self.tool_registry.get(&tc.function.name).is_none() {
@@ -5791,6 +5816,7 @@ impl AgentLoop {
             }
             let lsp_note = self.lsp_context_note(&tool_calls, &results);
 
+            let num_tool_msgs = results.len();
             for result in results {
                 replay.record(
                     "tool_result",
@@ -5803,6 +5829,8 @@ impl AgentLoop {
                 );
                 ctx.add_message(Message::tool_result(&result.tool_call_id, &result.content));
             }
+            self.pending_steer
+                .apply_to_tool_results(ctx.get_messages_mut(), num_tool_msgs);
             if let Some(note) = lsp_note {
                 ctx.add_message(Message::system(note));
             }
@@ -5839,7 +5867,7 @@ impl AgentLoop {
                     ctx.add_message(summary);
                 }
                 self.session_end_hooks(ctx.get_messages(), false, false);
-                return Ok(AgentResult {
+                return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: false,
                     total_turns,
@@ -5848,7 +5876,8 @@ impl AgentLoop {
                     interrupted: false,
                     session_cost_usd: Some(session_cost_usd),
                     session_started_hooks_fired,
-                });
+                    pending_steer: None,
+                }));
             }
             if !tool_calls.is_empty()
                 && tool_calls
@@ -6128,7 +6157,7 @@ impl AgentLoop {
                             "session_cost_usd": session_cost_usd,
                         }),
                     );
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -6137,7 +6166,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
             }
 
@@ -6260,7 +6290,7 @@ impl AgentLoop {
                 let r = if inner_attempt == 0 {
                     match self
                         .collect_stream_llm_response(
-                            &ctx,
+                            &mut ctx,
                             &tool_schemas,
                             turn_runtime_route.as_ref(),
                             active_model,
@@ -6305,7 +6335,7 @@ impl AgentLoop {
                 } else {
                     match self
                         .call_llm_with_retry(
-                            &ctx,
+                            &mut ctx,
                             &tool_schemas,
                             turn_runtime_route.as_ref(),
                             llm_governor.max_tokens,
@@ -6477,7 +6507,7 @@ impl AgentLoop {
                             "session_cost_usd": session_cost_usd,
                         }),
                     );
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -6486,7 +6516,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
             }
 
@@ -6696,7 +6727,7 @@ impl AgentLoop {
                         usage: None,
                     });
                 }
-                return Ok(AgentResult {
+                return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: true,
                     total_turns,
@@ -6705,7 +6736,8 @@ impl AgentLoop {
                     interrupted: false,
                     session_cost_usd: Some(session_cost_usd),
                     session_started_hooks_fired,
-                });
+                    pending_steer: None,
+                }));
             }
 
             codex_ack_continuations = 0;
@@ -6787,7 +6819,7 @@ impl AgentLoop {
                         self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
                     self.session_end_hooks(ctx.get_messages(), false, false);
-                    return Ok(AgentResult {
+                    return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
                         total_turns,
@@ -6796,7 +6828,8 @@ impl AgentLoop {
                         interrupted: false,
                         session_cost_usd: Some(session_cost_usd),
                         session_started_hooks_fired,
-                    });
+                        pending_steer: None,
+                    }));
                 }
                 for tc in &tool_calls {
                     let content = if self.tool_registry.get(&tc.function.name).is_none() {
@@ -7017,6 +7050,7 @@ impl AgentLoop {
             }
             let lsp_note = self.lsp_context_note(&tool_calls, &results);
 
+            let num_tool_msgs = results.len();
             for result in results {
                 replay.record(
                     "tool_result",
@@ -7029,6 +7063,8 @@ impl AgentLoop {
                 );
                 ctx.add_message(Message::tool_result(&result.tool_call_id, &result.content));
             }
+            self.pending_steer
+                .apply_to_tool_results(ctx.get_messages_mut(), num_tool_msgs);
             if let Some(note) = lsp_note {
                 ctx.add_message(Message::system(note));
             }
@@ -7079,7 +7115,7 @@ impl AgentLoop {
                     });
                 }
                 self.session_end_hooks(ctx.get_messages(), false, false);
-                return Ok(AgentResult {
+                return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: false,
                     total_turns,
@@ -7088,7 +7124,8 @@ impl AgentLoop {
                     interrupted: false,
                     session_cost_usd: Some(session_cost_usd),
                     session_started_hooks_fired,
-                });
+                    pending_steer: None,
+                }));
             }
             if !tool_calls.is_empty()
                 && tool_calls
@@ -10326,7 +10363,7 @@ mod tests {
 
         let mut api_call_count = 0u32;
         let resp = agent
-            .call_llm_with_retry_inner(&ctx, &[], None, None, &mut api_call_count)
+            .call_llm_with_retry_inner(&mut ctx, &[], None, None, &mut api_call_count)
             .await
             .expect("fallback should recover");
         assert_eq!(resp.message.content.as_deref(), Some("ok"));
@@ -10509,7 +10546,7 @@ mod tests {
 
         let mut api_call_count = 0u32;
         match agent
-            .call_llm_with_retry_inner(&ctx, &[], None, None, &mut api_call_count)
+            .call_llm_with_retry_inner(&mut ctx, &[], None, None, &mut api_call_count)
             .await
         {
             Ok(_) => ChaosHarnessRun {
@@ -11116,7 +11153,7 @@ mod tests {
 
         let out = agent
             .collect_stream_llm_response(
-                &ctx,
+                &mut ctx,
                 &[],
                 None,
                 "dummy-model",
@@ -11168,7 +11205,7 @@ mod tests {
 
         let out = agent
             .collect_stream_llm_response(
-                &ctx,
+                &mut ctx,
                 &[],
                 None,
                 "dummy-model",
@@ -11213,7 +11250,7 @@ mod tests {
 
         let out = agent
             .collect_stream_llm_response(
-                &ctx,
+                &mut ctx,
                 &[],
                 None,
                 "dummy-model",
