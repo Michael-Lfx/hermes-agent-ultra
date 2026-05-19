@@ -139,23 +139,24 @@ fn default_memory_home() -> String {
 /// This keeps ContextLattice-first and multi-provider memory behavior enabled
 /// consistently across CLI, gateway, HTTP, and cron execution surfaces.
 pub fn attach_discovered_memory(mut agent: AgentLoop) -> AgentLoop {
-    if agent.config.skip_memory {
+    if agent.config().skip_memory {
         return agent;
     }
     let session_id = agent
-        .config
+        .config()
         .session_id
         .clone()
         .unwrap_or_else(|| "session-default".to_string());
     let hermes_home = agent
-        .config
+        .config()
         .hermes_home
         .clone()
         .unwrap_or_else(default_memory_home);
+    let memory_nudge_interval = agent.config().memory_nudge_interval;
     if let Some(manager) = memory_plugins::build_initialized_memory_manager(
         &session_id,
         &hermes_home,
-        agent.config.memory_nudge_interval,
+        memory_nudge_interval,
     ) {
         agent = agent.with_memory(manager);
     }

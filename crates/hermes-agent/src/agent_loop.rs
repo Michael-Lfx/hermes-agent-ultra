@@ -52,6 +52,7 @@ use crate::python_alignment::{
     looks_like_codex_intermediate_ack, sanitize_surrogates, strip_budget_warnings_from_messages,
     strip_think_blocks_for_ack, CODEX_CONTINUE_USER_MESSAGE,
 };
+use crate::fallback::TurnFallbackState;
 use crate::skill_orchestrator::SkillOrchestrator;
 use crate::smart_model_routing::{
     detect_api_mode_for_url, resolve_turn_route, PrimaryRuntime, ResolveTurnOutcome,
@@ -239,7 +240,7 @@ const FINALIZER_ACTION_EXECUTION_MAX_RETRIES: u32 = 2;
 // Python `AIAgent._MEMORY_REVIEW_PROMPT` / `_SKILL_REVIEW_PROMPT` / `_COMBINED_REVIEW_PROMPT` (v2026.4.13)
 const MEMORY_REVIEW_PROMPT: &str = "Review the conversation above and consider saving to memory if appropriate.\n\n\
 Focus on:\n\
-1. Has the user revealed things about themselves — their persona, desires, preferences, or personal details worth remembering?\n\
+1. Has the user revealed things about themselves ??? their persona, desires, preferences, or personal details worth remembering?\n\
 2. Has the user expressed expectations about how you should behave, their work style, or ways they want you to operate?\n\n\
 If something stands out, save it using the memory tool. \
 If nothing is worth saving, just say 'Nothing to save.' and stop.";
@@ -254,7 +255,7 @@ Otherwise, create a new skill if the approach is reusable.\n\
 If nothing is worth saving, just say 'Nothing to save.' and stop.";
 
 const COMBINED_REVIEW_PROMPT: &str = "Review the conversation above and consider two things:\n\n\
-**Memory**: Has the user revealed things about themselves — their persona, \
+**Memory**: Has the user revealed things about themselves ??? their persona, \
 desires, preferences, or personal details? Has the user expressed expectations \
 about how you should behave, their work style, or ways they want you to operate? \
 If so, save using the memory tool.\n\n\
@@ -341,7 +342,7 @@ fn should_inject_tool_enforcement_for_model(_model: &str) -> bool {
 /// Configuration for the agent loop.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
-    /// Maximum number of LLM → tool → LLM iterations.
+    /// Maximum number of LLM ??? tool ??? LLM iterations.
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
 
@@ -353,7 +354,7 @@ pub struct AgentConfig {
     #[serde(default = "default_model")]
     pub model: String,
 
-    /// API mode — selects the request format for the LLM provider.
+    /// API mode ??? selects the request format for the LLM provider.
     #[serde(default)]
     pub api_mode: ApiMode,
 
@@ -398,11 +399,11 @@ pub struct AgentConfig {
     #[serde(default = "default_memory_flush_interval")]
     pub memory_flush_interval: u32,
 
-    /// Session identifier — used for memory and persistence.
+    /// Session identifier ??? used for memory and persistence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 
-    /// HERMES_HOME path — used by memory plugins for config resolution.
+    /// HERMES_HOME path ??? used by memory plugins for config resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes_home: Option<String>,
 
@@ -511,11 +512,11 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stored_system_prompt: Option<String>,
 
-    /// Progress ratio (0–1) at which Python emits a *caution* budget nudge (`_budget_caution_threshold`).
+    /// Progress ratio (0???1) at which Python emits a *caution* budget nudge (`_budget_caution_threshold`).
     #[serde(default = "default_budget_caution_threshold")]
     pub budget_caution_threshold: f64,
 
-    /// Progress ratio (0–1) at which Python emits an urgent budget warning (`_budget_warning_threshold`).
+    /// Progress ratio (0???1) at which Python emits an urgent budget warning (`_budget_warning_threshold`).
     #[serde(default = "default_budget_warning_threshold")]
     pub budget_warning_threshold: f64,
 
@@ -886,7 +887,7 @@ fn maybe_nous_401_diagnostic(
         .join("auth.json");
 
     Some(format!(
-        "Nous 401 — Portal authentication failed.\n\
+        "Nous 401 ??? Portal authentication failed.\n\
          Response: {response_snippet}\n\
          Most likely: Portal OAuth expired, account out of credits, or agent key revoked.\n\
          Troubleshooting:\n\
@@ -1612,7 +1613,7 @@ fn governor_for_turn(
 /// Owns the configuration, a tool registry, and an LLM provider.
 /// Call `run()` or `run_stream()` to begin an autonomous loop.
 pub struct AgentLoop {
-    pub config: AgentConfig,
+    config_runtime: tokio::sync::RwLock<AgentConfig>,
     pub tool_registry: Arc<ToolRegistry>,
     pub llm_provider: Arc<dyn LlmProvider>,
     pub interrupt: InterruptController,
@@ -1640,6 +1641,12 @@ pub struct AgentLoop {
     lsp_context: LspContextConfig,
     /// Rolling per-route performance state for online smart-routing adaptation.
     route_learning: Arc<Mutex<HashMap<String, RouteLearningStats>>>,
+    /// Frozen primary runtime at session start (Python `_primary_runtime`).
+    stored_primary_runtime: PrimaryRuntime,
+    /// Effective model/provider for the current turn (restored at turn boundaries).
+    active_runtime: Mutex<PrimaryRuntime>,
+    /// Turn-scoped fallback activation (Python `_fallback_activated` / chain index).
+    turn_fallback: Mutex<TurnFallbackState>,
 }
 
 #[derive(Debug, Clone)]
@@ -1690,7 +1697,7 @@ impl AgentLoop {
         let mut msgs = ctx.get_messages().to_vec();
         if let (Some(idx), Some(override_text)) = (
             persist_user_idx,
-            self.config.persist_user_message.as_deref(),
+            self.config().persist_user_message.as_deref(),
         ) {
             if let Some(msg) = msgs.get_mut(idx) {
                 if msg.role == MessageRole::User {
@@ -1724,6 +1731,192 @@ impl AgentLoop {
         }
     }
 
+    fn primary_runtime_from_config(config: &AgentConfig) -> PrimaryRuntime {
+        let provider = config
+            .provider
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let base_url = provider
+            .as_ref()
+            .and_then(|p| config.runtime_providers.get(p))
+            .and_then(|c| {
+                c.base_url
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+            });
+        let mut command = config
+            .acp_command
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let mut args: Vec<String> = config
+            .acp_args
+            .iter()
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty())
+            .collect();
+        if let Some(provider) = provider.as_deref() {
+            if let Some(cfg) = config.runtime_providers.get(provider) {
+                if let Some(cmd) = cfg
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    command = Some(cmd.to_string());
+                }
+                if !cfg.args.is_empty() {
+                    args = cfg
+                        .args
+                        .iter()
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .collect();
+                }
+            }
+        }
+        PrimaryRuntime {
+            model: config.model.clone(),
+            provider,
+            base_url,
+            api_mode: config.api_mode.clone(),
+            command,
+            args,
+            credential_pool: None,
+        }
+    }
+
+    /// Restore primary model/provider at the start of a new turn (Python `run_conversation` prelude).
+    fn restore_primary_runtime_at_turn_start(&self) {
+        let mut active = match self.active_runtime.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let mut fallback = match self.turn_fallback.lock() {
+            Ok(guard) => guard,
+            Err(_) => return,
+        };
+        let restored =
+            fallback.restore_primary_runtime(&self.stored_primary_runtime, &mut active);
+        if restored {
+            drop(fallback);
+            drop(active);
+            self.sync_config_from_active_runtime();
+        }
+    }
+
+    fn sync_config_from_active_runtime(&self) {
+        let Ok(active) = self.active_runtime.lock() else {
+            return;
+        };
+        let mut cfg = self.config_runtime.blocking_write();
+        cfg.model = active.model.clone();
+        cfg.provider = active.provider.clone();
+        cfg.api_mode = active.api_mode.clone();
+    }
+
+    fn primary_runtime_for_failover_model(&self, model_id: &str) -> PrimaryRuntime {
+        let cfg = self.config();
+        let mut rt = Self::primary_runtime_from_config(&cfg);
+        let (provider, _) = self.extract_provider_and_model(model_id);
+        rt.model = model_id.trim().to_string();
+        if !provider.is_empty() {
+            rt.provider = Some(provider);
+        }
+        if let Some(p) = rt.provider.as_deref() {
+            if let Some(rcfg) = cfg.runtime_providers.get(p) {
+                if let Some(url) = rcfg
+                    .base_url
+                    .as_ref()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                {
+                    rt.base_url = Some(url);
+                }
+                if let Some(cmd) = rcfg
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    rt.command = Some(cmd.to_string());
+                }
+                if !rcfg.args.is_empty() {
+                    rt.args = rcfg
+                        .args
+                        .iter()
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .collect();
+                }
+            }
+        }
+        if let Some(url) = rt.base_url.as_deref() {
+            if let Some(mode) = detect_api_mode_for_url(url) {
+                rt.api_mode = mode;
+            }
+        }
+        rt.credential_pool = self.primary_credential_pool.clone();
+        rt
+    }
+
+    fn note_primary_rate_limited_if_applicable(&self) {
+        let already = self
+            .turn_fallback
+            .lock()
+            .map(|fb| fb.is_fallback_activated())
+            .unwrap_or(false);
+        let primary_prov = self
+            .stored_primary_runtime
+            .provider
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let active_prov = self
+            .primary_runtime_snapshot()
+            .provider
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if already && !primary_prov.is_empty() && active_prov != primary_prov {
+            return;
+        }
+        if let Ok(mut fb) = self.turn_fallback.lock() {
+            fb.note_primary_rate_limited();
+        }
+    }
+
+    fn active_model(&self) -> String {
+        self.active_runtime
+            .lock()
+            .map(|rt| rt.model.clone())
+            .unwrap_or_else(|_| self.config().model.clone())
+    }
+
+    /// Apply an in-session fallback runtime (Python `_try_activate_fallback` outcome).
+    pub(crate) fn activate_runtime_fallback(&self, runtime: PrimaryRuntime) {
+        if let Ok(mut active) = self.active_runtime.lock() {
+            *active = runtime;
+        }
+        if let Ok(mut fb) = self.turn_fallback.lock() {
+            fb.mark_fallback_activated();
+        }
+        self.sync_config_from_active_runtime();
+    }
+
+    /// Read-only agent config; `model` / `provider` / `api_mode` track active runtime after fallback.
+    pub fn config(&self) -> tokio::sync::RwLockReadGuard<'_, AgentConfig> {
+        self.config_runtime.blocking_read()
+    }
+
+    pub fn config_snapshot(&self) -> AgentConfig {
+        self.config().clone()
+    }
+
     /// Create a new agent loop.
     pub fn new(
         config: AgentConfig,
@@ -1733,8 +1926,10 @@ impl AgentLoop {
         let route_learning = Arc::new(Mutex::new(Self::load_route_learning_state(&config)));
         let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
+        let stored_primary_runtime = Self::primary_runtime_from_config(&config);
+        let active_runtime = Mutex::new(stored_primary_runtime.clone());
         Self {
-            config,
+            config_runtime: tokio::sync::RwLock::new(config),
             tool_registry,
             llm_provider,
             interrupt: InterruptController::new(),
@@ -1749,6 +1944,9 @@ impl AgentLoop {
             code_index,
             lsp_context,
             route_learning,
+            stored_primary_runtime,
+            active_runtime,
+            turn_fallback: Mutex::new(TurnFallbackState::new()),
         }
     }
 
@@ -1762,8 +1960,10 @@ impl AgentLoop {
         let route_learning = Arc::new(Mutex::new(Self::load_route_learning_state(&config)));
         let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
+        let stored_primary_runtime = Self::primary_runtime_from_config(&config);
+        let active_runtime = Mutex::new(stored_primary_runtime.clone());
         Self {
-            config,
+            config_runtime: tokio::sync::RwLock::new(config),
             tool_registry,
             llm_provider,
             interrupt,
@@ -1778,6 +1978,9 @@ impl AgentLoop {
             code_index,
             lsp_context,
             route_learning,
+            stored_primary_runtime,
+            active_runtime,
+            turn_fallback: Mutex::new(TurnFallbackState::new()),
         }
     }
 
@@ -1832,7 +2035,7 @@ impl AgentLoop {
     }
 
     fn save_route_learning_state(&self, entries: &HashMap<String, RouteLearningStats>) {
-        let path = route_learning_state_path(&self.config);
+        let path = route_learning_state_path(&*self.config());
         if let Some(parent) = path.parent() {
             if let Err(err) = std::fs::create_dir_all(parent) {
                 tracing::warn!(
@@ -2016,9 +2219,7 @@ impl AgentLoop {
     }
 
     fn hook_context_spill_dir(&self) -> PathBuf {
-        let hermes_home = self
-            .config
-            .hermes_home
+        let hermes_home = self.config().hermes_home
             .as_deref()
             .map(PathBuf::from)
             .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
@@ -2050,7 +2251,7 @@ impl AgentLoop {
     // -- Memory helpers ----------------------------------------------------
 
     fn memory_prefetch(&self, query: &str, session_id: &str) -> String {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return String::new();
         }
         if let Some(ref mm) = self.memory_manager {
@@ -2062,7 +2263,7 @@ impl AgentLoop {
     }
 
     fn memory_sync(&self, user: &str, assistant: &str, session_id: &str) {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return;
         }
         if let Some(ref mm) = self.memory_manager {
@@ -2113,7 +2314,7 @@ impl AgentLoop {
     }
 
     fn notify_memory_writes(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return;
         }
         let Some(ref mm) = self.memory_manager else {
@@ -2167,7 +2368,7 @@ impl AgentLoop {
     }
 
     fn notify_delegations(&self, tool_calls: &[ToolCall], results: &[ToolResult]) {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return;
         }
         let Some(ref mm) = self.memory_manager else {
@@ -2197,7 +2398,7 @@ impl AgentLoop {
     }
 
     fn memory_system_prompt(&self) -> String {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return String::new();
         }
         if let Some(ref mm) = self.memory_manager {
@@ -2209,7 +2410,7 @@ impl AgentLoop {
     }
 
     fn memory_pre_compress_note(&self, messages: &[Message]) -> Option<String> {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return None;
         }
         let Some(ref mm) = self.memory_manager else {
@@ -2231,7 +2432,7 @@ impl AgentLoop {
     }
 
     fn memory_on_session_end(&self, messages: &[Message]) {
-        if self.config.skip_memory {
+        if self.config().skip_memory {
             return;
         }
         let Some(ref mm) = self.memory_manager else {
@@ -2255,8 +2456,8 @@ impl AgentLoop {
             return None;
         };
         let rendered = idx.render_repo_map(
-            Some(self.config.code_index_max_files),
-            Some(self.config.code_index_max_symbols),
+            Some(self.config().code_index_max_files),
+            Some(self.config().code_index_max_symbols),
         );
         if rendered.trim().is_empty() {
             None
@@ -2283,9 +2484,7 @@ impl AgentLoop {
     }
 
     fn platform_hint_text(&self) -> Option<&'static str> {
-        let platform_key = self
-            .config
-            .platform
+        let platform_key = self.config().platform
             .as_deref()
             .map(|s| s.trim().to_lowercase())
             .unwrap_or_default();
@@ -2301,7 +2500,7 @@ impl AgentLoop {
     }
 
     fn effective_provider_for_prompt(&self, model: &str) -> Option<String> {
-        if let Some(ref p) = self.config.provider {
+        if let Some(ref p) = self.config().provider {
             let trimmed = p.trim();
             if !trimmed.is_empty() {
                 return Some(trimmed.to_string());
@@ -2397,7 +2596,7 @@ impl AgentLoop {
             return None;
         }
         let mut orch = SkillOrchestrator::default_dir();
-        orch.set_enabled_disabled(&self.config.enabled_skills, &self.config.disabled_skills);
+        orch.set_enabled_disabled(&self.config().enabled_skills, &self.config().disabled_skills);
         let commands = orch.scan_skill_commands();
         if commands.is_empty() {
             return Some(
@@ -2447,7 +2646,7 @@ impl AgentLoop {
     }
 
     fn context_files_prompt(&self) -> Option<String> {
-        if self.config.skip_context_files {
+        if self.config().skip_context_files {
             return None;
         }
         let cwd = std::env::var("TERMINAL_CWD")
@@ -2462,9 +2661,7 @@ impl AgentLoop {
             sections.push(format!("## Workspace Context\n{}", workspace));
         }
 
-        let hermes_home = self
-            .config
-            .hermes_home
+        let hermes_home = self.config().hermes_home
             .as_deref()
             .map(std::path::PathBuf::from)
             .or_else(|| {
@@ -2495,9 +2692,7 @@ impl AgentLoop {
                 return (p.to_string(), m);
             }
         }
-        let fallback_provider = self
-            .config
-            .provider
+        let fallback_provider = self.config().provider
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -2531,7 +2726,7 @@ impl AgentLoop {
                 }
             }
         }
-        if let Some(cfg) = self.config.runtime_providers.get(provider) {
+        if let Some(cfg) = self.config().runtime_providers.get(provider) {
             if let Some(ref key) = cfg.api_key {
                 let trimmed = key.trim();
                 if let Some(env_ref) = trimmed.strip_prefix("${").and_then(|s| s.strip_suffix('}'))
@@ -2615,7 +2810,7 @@ impl AgentLoop {
         if let Some(b) = route_base_url.map(str::trim).filter(|s| !s.is_empty()) {
             return Some(b.to_string());
         }
-        self.config
+        self.config()
             .runtime_providers
             .get(provider)
             .and_then(|c| c.base_url.as_ref())
@@ -2745,22 +2940,18 @@ impl AgentLoop {
 
     fn oauth_refresh_config(&self, provider_key: &str) -> Option<(String, String)> {
         // Preferred source: unified provider config centre (runtime_providers).
-        let cfg_token_url = self
-            .config
-            .runtime_providers
+        let cfg_token_url = self.config().runtime_providers
             .get(provider_key)
             .and_then(|c| c.oauth_token_url.as_deref())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
-        let cfg_client_id = self
-            .config
-            .runtime_providers
+        let cfg_client_id = self.config().runtime_providers
             .get(provider_key)
             .and_then(|c| c.oauth_client_id.as_deref())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
-        // Env fallback — keeps previous behavior working when config centre is empty.
+        // Env fallback ??? keeps previous behavior working when config centre is empty.
         let (token_url_env, client_id_env) = match provider_key {
             "openai" => (
                 "HERMES_OPENAI_OAUTH_TOKEN_URL",
@@ -2878,9 +3069,7 @@ impl AgentLoop {
     }
 
     fn auth_tokens_path(&self) -> PathBuf {
-        let hermes_home = self
-            .config
-            .hermes_home
+        let hermes_home = self.config().hermes_home
             .as_deref()
             .map(PathBuf::from)
             .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
@@ -2890,9 +3079,7 @@ impl AgentLoop {
     }
 
     fn objective_runtime_ledger_path(&self) -> PathBuf {
-        let hermes_home = self
-            .config
-            .hermes_home
+        let hermes_home = self.config().hermes_home
             .as_deref()
             .map(PathBuf::from)
             .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
@@ -2904,9 +3091,7 @@ impl AgentLoop {
     }
 
     fn objective_eval_trend_path(&self) -> PathBuf {
-        let hermes_home = self
-            .config
-            .hermes_home
+        let hermes_home = self.config().hermes_home
             .as_deref()
             .map(PathBuf::from)
             .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
@@ -3038,23 +3223,19 @@ impl AgentLoop {
         &self,
         provider: Option<&str>,
     ) -> (Option<String>, Vec<String>) {
-        let mut command = self
-            .config
-            .acp_command
+        let mut command = self.config().acp_command
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string);
-        let mut args: Vec<String> = self
-            .config
-            .acp_args
+        let mut args: Vec<String> = self.config().acp_args
             .iter()
             .map(|a| a.trim().to_string())
             .filter(|a| !a.is_empty())
             .collect();
 
         if let Some(provider) = provider {
-            if let Some(cfg) = self.config.runtime_providers.get(provider) {
+            if let Some(cfg) = self.config().runtime_providers.get(provider) {
                 if let Some(cmd) = cfg
                     .command
                     .as_deref()
@@ -3117,7 +3298,8 @@ impl AgentLoop {
                 ))
             })?;
         let base_url = self.resolve_runtime_base_url(provider, route_base_url);
-        let mode = api_mode.unwrap_or(&self.config.api_mode);
+        let cfg_api_mode = self.config().api_mode.clone();
+        let mode = api_mode.unwrap_or(&cfg_api_mode);
 
         let provider_obj: Arc<dyn LlmProvider> = match provider {
             "openai" | "codex" | "openai-codex" => {
@@ -3226,9 +3408,7 @@ impl AgentLoop {
 
     fn messages_for_api_call(&self, ctx: &ContextManager) -> Vec<Message> {
         let mut messages = ctx.get_messages().to_vec();
-        if let Some(ephemeral) = self
-            .config
-            .ephemeral_system_prompt
+        if let Some(ephemeral) = self.config().ephemeral_system_prompt
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
@@ -3244,9 +3424,7 @@ impl AgentLoop {
         if messages.is_empty() {
             return;
         }
-        let provider = self
-            .config
-            .provider
+        let provider = self.config().provider
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase();
@@ -3291,7 +3469,7 @@ impl AgentLoop {
     ) -> String {
         let soul = load_soul_md();
         let mut builder = SystemPromptBuilder::new().with_personality(soul.as_deref());
-        if let Some(base) = self.config.system_prompt.as_deref() {
+        if let Some(base) = self.config().system_prompt.as_deref() {
             builder = builder.with_system_message(base);
         }
         builder = builder.with_block(CONVERSATIONAL_SUPPORT_GUIDANCE);
@@ -3326,13 +3504,13 @@ impl AgentLoop {
             builder = builder.with_block(CONTEXTLATTICE_OPERATIONAL_GUIDANCE);
         }
 
-        if let Some(ref personality) = self.config.personality {
+        if let Some(ref personality) = self.config().personality {
             let requested = personality.trim();
             if !requested.is_empty() {
                 if requested.eq_ignore_ascii_case("default") {
                     // "default" means keep SOUL/default identity only.
                 } else if let Some(profile) =
-                    resolve_personality(requested, self.config.hermes_home.as_deref())
+                    resolve_personality(requested, self.config().hermes_home.as_deref())
                 {
                     builder = builder
                         .with_block(&format!("## Active Personality ({requested})\n{profile}"));
@@ -3351,9 +3529,9 @@ impl AgentLoop {
             }
         }
 
-        if !self.config.skip_memory {
+        if !self.config().skip_memory {
             let (memory_block, user_block) =
-                load_builtin_memory_snapshot(self.config.hermes_home.as_deref());
+                load_builtin_memory_snapshot(self.config().hermes_home.as_deref());
             if let Some(block) = memory_block {
                 builder = builder.with_block(&block);
             }
@@ -3382,8 +3560,8 @@ impl AgentLoop {
         builder = builder.with_timestamp(Some(model_for_prompt), provider.as_deref());
 
         let mut timestamp_extras = String::new();
-        if self.config.pass_session_id {
-            if let Some(ref sid) = self.config.session_id {
+        if self.config().pass_session_id {
+            if let Some(ref sid) = self.config().session_id {
                 if !sid.trim().is_empty() {
                     timestamp_extras.push_str(&format!("Session ID: {}\n", sid.trim()));
                 }
@@ -3411,20 +3589,20 @@ impl AgentLoop {
         builder.build().to_string()
     }
 
-    /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+    /// Returns `(prompt, restored_from_storage)` ??? restored prompts skip fresh `build_system_prompt`.
     fn resolve_initial_system_prompt(
         &self,
         task_hint: &str,
         tool_schemas: &[ToolSchema],
     ) -> (String, bool) {
-        if let Some(ref s) = self.config.stored_system_prompt {
+        if let Some(ref s) = self.config().stored_system_prompt {
             let t = s.trim();
             if !t.is_empty() {
                 return (s.clone(), true);
             }
         }
         (
-            self.build_system_prompt(task_hint, tool_schemas, &self.config.model),
+            self.build_system_prompt(task_hint, tool_schemas, &self.active_model()),
             false,
         )
     }
@@ -3473,11 +3651,14 @@ impl AgentLoop {
         };
 
         let session = self
-            .config
+            .config()
             .session_id
             .as_deref()
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or("session");
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "session".to_string());
+        let session = session.as_str();
         let topic = format!("runbooks/alpha/compaction/{}", session);
         let pressure_before = ((before_chars as f64 / max_context_chars as f64) * 100.0).round();
         let pressure_after = ((after_chars as f64 / max_context_chars as f64) * 100.0).round();
@@ -3591,7 +3772,7 @@ impl AgentLoop {
     }
 
     fn emit_status(&self, event_type: &str, message: &str) {
-        if self.config.quiet_mode {
+        if self.config().quiet_mode {
             return;
         }
         if let Some(cb) = self.callbacks.status_callback.as_ref() {
@@ -3688,13 +3869,11 @@ impl AgentLoop {
     }
 
     fn extra_body_for_api_mode(&self, api_mode: &ApiMode) -> Option<Value> {
-        let mut body = self
-            .config
-            .extra_body
+        let mut body = self.config().extra_body
             .clone()
             .unwrap_or_else(|| serde_json::json!({}));
         if !body.is_object() {
-            return self.config.extra_body.clone();
+            return self.config().extra_body.clone();
         }
         if !matches!(api_mode, ApiMode::CodexResponses) {
             if body.get("strict_tool_calls").is_none()
@@ -3732,9 +3911,10 @@ impl AgentLoop {
         route: Option<&TurnRuntimeRoute>,
         max_tokens_override: Option<u32>,
     ) -> Result<hermes_core::LlmResponse, AgentError> {
+        let default_model = self.active_model();
         let model = route
             .map(|r| r.model.as_str())
-            .unwrap_or(self.config.model.as_str());
+            .unwrap_or(default_model.as_str());
         let (inferred_provider, model_name) = self.extract_provider_and_model(model);
         let route_provider_hint = route
             .and_then(|r| r.provider.as_deref())
@@ -3756,17 +3936,19 @@ impl AgentLoop {
             }
         }
         let api_messages = self.messages_for_api_call(ctx);
-        let retry = &self.config.retry;
+        let retry = self.config().retry.clone();
         let (effective_max_retries, effective_base_delay_ms) =
             (retry.max_retries, retry.base_delay_ms);
-        let default_extra_body = self.extra_body_for_api_mode(&self.config.api_mode);
-        let effective_max_tokens = max_tokens_override.or(self.config.max_tokens);
+        let active_runtime = self.primary_runtime_snapshot();
+        let default_api_mode = active_runtime.api_mode.clone();
+        let default_extra_body = self.extra_body_for_api_mode(&default_api_mode);
+        let effective_max_tokens = max_tokens_override.or(self.config().max_tokens);
 
         for attempt in 0..=effective_max_retries {
             self.interrupt.check_interrupt()?;
             let result = if let Some(rt) = route {
                 let (provider_name, _) = self.extract_provider_and_model(model);
-                let mode = rt.api_mode.as_ref().unwrap_or(&self.config.api_mode);
+                let mode = rt.api_mode.as_ref().unwrap_or(&default_api_mode);
                 let extra_body_for_call = self.extra_body_for_api_mode(mode);
                 let pool = self.credential_pool_for_route(rt);
                 let routed_provider = self.build_runtime_provider(
@@ -3785,7 +3967,7 @@ impl AgentLoop {
                                 &api_messages,
                                 tool_schemas,
                                 effective_max_tokens,
-                                self.config.temperature,
+                                self.config().temperature,
                                 Some(&effective_model_name),
                                 extra_body_for_call.as_ref(),
                             )
@@ -3802,7 +3984,7 @@ impl AgentLoop {
                                 &api_messages,
                                 tool_schemas,
                                 effective_max_tokens,
-                                self.config.temperature,
+                                self.config().temperature,
                                 Some(&effective_model_name),
                                 default_extra_body.as_ref(),
                             )
@@ -3815,7 +3997,7 @@ impl AgentLoop {
                         &api_messages,
                         tool_schemas,
                         effective_max_tokens,
-                        self.config.temperature,
+                        self.config().temperature,
                         Some(&effective_model_name),
                         default_extra_body.as_ref(),
                     )
@@ -3839,7 +4021,7 @@ impl AgentLoop {
                             if let Some(diag) = maybe_nous_401_diagnostic(
                                 active_provider.as_str(),
                                 &err_str,
-                                self.config.hermes_home.as_deref(),
+                                self.config().hermes_home.as_deref(),
                             ) {
                                 self.emit_status("lifecycle", &diag);
                                 return Err(AgentError::LlmApi(format!("{err_str}\n\n{diag}")));
@@ -3869,7 +4051,7 @@ impl AgentLoop {
                                             let mode = rt
                                                 .api_mode
                                                 .as_ref()
-                                                .unwrap_or(&self.config.api_mode);
+                                                .unwrap_or(&default_api_mode);
                                             let extra_body_for_call =
                                                 self.extra_body_for_api_mode(mode);
                                             let pool = self.credential_pool_for_route(rt);
@@ -3890,7 +4072,7 @@ impl AgentLoop {
                                                             &api_messages,
                                                             tool_schemas,
                                                             effective_max_tokens,
-                                                            self.config.temperature,
+                                                            self.config().temperature,
                                                             Some(&fallback_model_name),
                                                             extra_body_for_call.as_ref(),
                                                         )
@@ -3914,7 +4096,7 @@ impl AgentLoop {
                                                             &api_messages,
                                                             tool_schemas,
                                                             effective_max_tokens,
-                                                            self.config.temperature,
+                                                            self.config().temperature,
                                                             Some(&fallback_model_name),
                                                             default_extra_body.as_ref(),
                                                         )
@@ -3949,7 +4131,7 @@ impl AgentLoop {
                                 );
                                 let no_tools_result = if let Some(rt) = route {
                                     let mode =
-                                        rt.api_mode.as_ref().unwrap_or(&self.config.api_mode);
+                                        rt.api_mode.as_ref().unwrap_or(&default_api_mode);
                                     let extra_body_for_call = self.extra_body_for_api_mode(mode);
                                     let pool = self.credential_pool_for_route(rt);
                                     match self.build_runtime_provider(
@@ -3967,7 +4149,7 @@ impl AgentLoop {
                                                     &api_messages,
                                                     &[],
                                                     effective_max_tokens,
-                                                    self.config.temperature,
+                                                    self.config().temperature,
                                                     Some(model_name),
                                                     extra_body_for_call.as_ref(),
                                                 )
@@ -3979,10 +4161,10 @@ impl AgentLoop {
                                                     &api_messages,
                                                     &[],
                                                     effective_max_tokens,
-                                                    self.config.temperature,
+                                                    self.config().temperature,
                                                     Some(
                                                         self.extract_provider_and_model(
-                                                            self.config.model.as_str(),
+                                                            self.active_model().as_str(),
                                                         )
                                                         .1,
                                                     ),
@@ -3997,7 +4179,7 @@ impl AgentLoop {
                                             &api_messages,
                                             &[],
                                             effective_max_tokens,
-                                            self.config.temperature,
+                                            self.config().temperature,
                                             Some(model_name),
                                             default_extra_body.as_ref(),
                                         )
@@ -4023,10 +4205,17 @@ impl AgentLoop {
                         }
                         ErrorClass::RateLimit | ErrorClass::Retryable => {
                             if attempt >= effective_max_retries {
+                                if matches!(class, ErrorClass::RateLimit) {
+                                    self.note_primary_rate_limited_if_applicable();
+                                }
                                 let failover_chain = self.resolve_retry_failover_chain(model);
                                 if !failover_chain.is_empty() {
                                     let mut failover_errors = Vec::new();
                                     for fallback in failover_chain {
+                                        if let Ok(mut fb) = self.turn_fallback.lock() {
+                                            fb.fallback_chain_index =
+                                                fb.fallback_chain_index.saturating_add(1);
+                                        }
                                         tracing::info!(
                                             "All retries exhausted on {}. Trying fallback: {}",
                                             model,
@@ -4038,13 +4227,18 @@ impl AgentLoop {
                                                 &api_messages,
                                                 tool_schemas,
                                                 effective_max_tokens,
-                                                self.config.temperature,
+                                                self.config().temperature,
                                                 Some(self.extract_provider_and_model(&fallback).1),
                                                 default_extra_body.as_ref(),
                                             )
                                             .await;
                                         match fallback_result {
                                             Ok(resp) => {
+                                                self.activate_runtime_fallback(
+                                                    self.primary_runtime_for_failover_model(
+                                                        &fallback,
+                                                    ),
+                                                );
                                                 self.emit_status(
                                                     "lifecycle",
                                                     &format!(
@@ -4134,18 +4328,19 @@ impl AgentLoop {
     ) -> Result<StreamCollectOutcome, AgentError> {
         let api_messages = self.messages_for_api_call(ctx);
         let (_, active_model_name) = self.extract_provider_and_model(active_model);
-        let default_extra_body = self.extra_body_for_api_mode(&self.config.api_mode);
-        let effective_max_tokens = max_tokens_override.or(self.config.max_tokens);
+        let default_api_mode = self.primary_runtime_snapshot().api_mode.clone();
+        let default_extra_body = self.extra_body_for_api_mode(&default_api_mode);
+        let effective_max_tokens = max_tokens_override.or(self.config().max_tokens);
         let max_stream_retries = std::env::var("HERMES_STREAM_RETRIES")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())
             .map(|v| v.min(10))
-            .unwrap_or(self.config.stream_read_max_retries.min(10));
+            .unwrap_or(self.config().stream_read_max_retries.min(10));
 
         'stream_attempt: for stream_attempt in 0..=max_stream_retries {
             let mut stream = if let Some(rt) = route {
                 let (provider_name, model_name) = self.extract_provider_and_model(active_model);
-                let mode = rt.api_mode.as_ref().unwrap_or(&self.config.api_mode);
+                let mode = rt.api_mode.as_ref().unwrap_or(&default_api_mode);
                 let extra_body_for_call = self.extra_body_for_api_mode(mode);
                 let pool = self.credential_pool_for_route(rt);
                 match self.build_runtime_provider(
@@ -4161,7 +4356,7 @@ impl AgentLoop {
                         &api_messages,
                         tool_schemas,
                         effective_max_tokens,
-                        self.config.temperature,
+                        self.config().temperature,
                         Some(model_name),
                         extra_body_for_call.as_ref(),
                     ),
@@ -4175,9 +4370,9 @@ impl AgentLoop {
                             &api_messages,
                             tool_schemas,
                             effective_max_tokens,
-                            self.config.temperature,
+                            self.config().temperature,
                             Some(
-                                self.extract_provider_and_model(self.config.model.as_str())
+                                self.extract_provider_and_model(self.active_model().as_str())
                                     .1,
                             ),
                             default_extra_body.as_ref(),
@@ -4189,7 +4384,7 @@ impl AgentLoop {
                     &api_messages,
                     tool_schemas,
                     effective_max_tokens,
-                    self.config.temperature,
+                    self.config().temperature,
                     Some(active_model_name),
                     default_extra_body.as_ref(),
                 )
@@ -4354,7 +4549,7 @@ impl AgentLoop {
         ))
     }
 
-    /// Expand `@file:` / `@diff` / … tokens in user messages before the LLM sees them.
+    /// Expand `@file:` / `@diff` / ??? tokens in user messages before the LLM sees them.
     ///
     /// Mirrors Python `agent.context_references.preprocess_context_references_async`
     /// (also invoked from gateway/CLI before `run_conversation` on some paths). Both
@@ -4371,7 +4566,7 @@ impl AgentLoop {
 
     async fn preprocess_user_message_context_references(&self, messages: &mut [Message]) {
         let cwd = Self::context_reference_workspace_root();
-        let context_length = get_model_context_length(&self.config.model);
+        let context_length = get_model_context_length(&self.active_model());
         for msg in messages.iter_mut() {
             if msg.role != MessageRole::User {
                 continue;
@@ -4405,7 +4600,12 @@ impl AgentLoop {
     ) -> Result<AgentResult, AgentError> {
         let mut ctx = ContextManager::default_budget();
         let mut tool_errors: Vec<hermes_core::ToolErrorRecord> = Vec::new();
-        let session_id = self.config.session_id.as_deref().unwrap_or("");
+        let session_id_owned = self
+            .config()
+            .session_id
+            .clone()
+            .unwrap_or_default();
+        let session_id = session_id_owned.as_str();
         let mut messages = messages;
         for msg in messages.iter_mut() {
             if let Some(ref mut c) = msg.content {
@@ -4415,6 +4615,7 @@ impl AgentLoop {
         strip_budget_warnings_from_messages(&mut messages);
         self.preprocess_user_message_context_references(&mut messages)
             .await;
+        self.restore_primary_runtime_at_turn_start();
 
         let task_hint = messages
             .iter()
@@ -4434,8 +4635,8 @@ impl AgentLoop {
         let mut session_started_hooks_fired = false;
         if !restored_system {
             let hook_ctx = serde_json::json!({
-                "session_id": self.config.session_id,
-                "model": self.config.model,
+                "session_id": self.config().session_id,
+                "model": self.active_model(),
             });
             let _results = self.invoke_hook(HookType::OnSessionStart, &hook_ctx);
             self.inject_hook_context(&_results, &mut ctx);
@@ -4462,7 +4663,7 @@ impl AgentLoop {
             ctx.add_message(Message::system(hint));
         }
 
-        let persist_user_idx = if self.config.persist_user_message.is_some() {
+        let persist_user_idx = if self.config().persist_user_message.is_some() {
             ctx.get_messages()
                 .iter()
                 .enumerate()
@@ -4475,12 +4676,12 @@ impl AgentLoop {
         let mut codex_ack_continuations: u32 = 0;
 
         let mut review_memory_at_end = false;
-        if self.config.memory_nudge_interval > 0
+        if self.config().memory_nudge_interval > 0
             && self.tool_registry.names().iter().any(|n| n == "memory")
         {
             if let Ok(mut c) = self.evolution_counters.lock() {
                 c.turns_since_memory = c.turns_since_memory.saturating_add(1);
-                if c.turns_since_memory >= self.config.memory_nudge_interval {
+                if c.turns_since_memory >= self.config().memory_nudge_interval {
                     review_memory_at_end = true;
                     c.turns_since_memory = 0;
                 }
@@ -4500,18 +4701,18 @@ impl AgentLoop {
             ctx.add_message(Message::system(&mem_ctx_raw));
         }
 
-        if self.config.preflight_context_compress {
+        if self.config().preflight_context_compress {
             self.preflight_context_compress_with_status(&mut ctx);
         }
-        let replay = ReplayRecorder::for_session(&self.config, session_id);
-        let max_turns_limit = effective_max_turns(self.config.max_turns);
+        let replay = ReplayRecorder::for_session(&*self.config(), session_id);
+        let max_turns_limit = effective_max_turns(self.config().max_turns);
         replay.record(
             "session_start",
             serde_json::json!({
                 "session_id": session_id,
                 "mode": "run",
-                "model": self.config.model,
-                "max_turns": self.config.max_turns,
+                "model": self.active_model(),
+                "max_turns": self.config().max_turns,
                 "max_turns_effective": max_turns_limit,
                 "max_turns_unlimited": max_turns_limit.is_none(),
             }),
@@ -4592,8 +4793,8 @@ impl AgentLoop {
             // Refresh oauth-backed runtime credentials before routing/provider selection.
             self.refresh_oauth_store_tokens_if_needed().await;
 
-            // Skill nudge counter — Python `run_agent.py`: increment at the start of each inner API iteration.
-            if self.config.skill_creation_nudge_interval > 0
+            // Skill nudge counter ??? Python `run_agent.py`: increment at the start of each inner API iteration.
+            if self.config().skill_creation_nudge_interval > 0
                 && self
                     .tool_registry
                     .names()
@@ -4605,8 +4806,8 @@ impl AgentLoop {
                 }
             }
 
-            if self.config.checkpoint_interval_turns > 0
-                && (total_turns - 1) % self.config.checkpoint_interval_turns == 0
+            if self.config().checkpoint_interval_turns > 0
+                && (total_turns - 1) % self.config().checkpoint_interval_turns == 0
             {
                 last_checkpoint_messages = Some(ctx.get_messages().to_vec());
             }
@@ -4615,7 +4816,7 @@ impl AgentLoop {
             self.memory_on_turn_start(total_turns, "");
 
             // Memory sync at flush interval
-            if total_turns % self.config.memory_flush_interval == 0 && total_turns > 0 {
+            if total_turns % self.config().memory_flush_interval == 0 && total_turns > 0 {
                 let msgs = ctx.get_messages();
                 let (u, a) = extract_last_user_assistant(msgs);
                 self.memory_sync(&u, &a, session_id);
@@ -4625,17 +4826,18 @@ impl AgentLoop {
             let turn_runtime_route = forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
+            let turn_default_model = self.active_model();
             let active_model = turn_runtime_route
                 .as_ref()
                 .map(|r| r.model.as_str())
-                .unwrap_or(self.config.model.as_str());
+                .unwrap_or(turn_default_model.as_str());
             let turn_governor_runtime = governor_runtime_state(
                 &governor_llm_latency_window,
                 &governor_tool_error_window,
                 governor_consecutive_error_turns,
             );
             let llm_governor =
-                governor_for_turn(&self.config, &ctx, 0, Some(&turn_governor_runtime));
+                governor_for_turn(&*self.config(), &ctx, 0, Some(&turn_governor_runtime));
             if forced_runtime_route.is_none()
                 && (turn_governor_runtime.consecutive_error_turns >= 2
                     || turn_governor_runtime
@@ -4754,14 +4956,14 @@ impl AgentLoop {
                     break r;
                 }
                 if Self::assistant_has_reasoning(&r.message)
-                    && inner_thinking < self.config.thinking_prefill_max_retries
+                    && inner_thinking < self.config().thinking_prefill_max_retries
                 {
                     inner_thinking += 1;
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Reasoning-only response — retrying ({}/{})",
-                            inner_thinking, self.config.thinking_prefill_max_retries
+                            "Reasoning-only response ??? retrying ({}/{})",
+                            inner_thinking, self.config().thinking_prefill_max_retries
                         ),
                     );
                     ctx.add_message(r.message.clone());
@@ -4775,19 +4977,19 @@ impl AgentLoop {
                     break r;
                 }
                 if !Self::assistant_has_reasoning(&r.message)
-                    && inner_empty < self.config.empty_content_max_retries
+                    && inner_empty < self.config().empty_content_max_retries
                 {
                     inner_empty += 1;
                     tracing::warn!(
-                        "empty assistant response — retrying ({}/{})",
+                        "empty assistant response ??? retrying ({}/{})",
                         inner_empty,
-                        self.config.empty_content_max_retries
+                        self.config().empty_content_max_retries
                     );
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Empty assistant response — retrying ({}/{})",
-                            inner_empty, self.config.empty_content_max_retries
+                            "Empty assistant response ??? retrying ({}/{})",
+                            inner_empty, self.config().empty_content_max_retries
                         ),
                     );
                     continue;
@@ -4837,15 +5039,15 @@ impl AgentLoop {
             if let Some(ref usage) = turn_usage_acc {
                 accumulated_usage = Some(merge_usage(accumulated_usage, usage));
                 if let Some(cost) =
-                    estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
+                    estimate_usage_cost_usd(usage, response.model.as_str(), &*self.config())
                 {
                     session_cost_usd += cost;
                 }
             }
 
-            if let Some(limit) = self.config.max_cost_usd {
+            if let Some(limit) = self.config().max_cost_usd {
                 if !cost_warned
-                    && session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
+                    && session_cost_usd >= limit * self.config().cost_guard_degrade_at_ratio
                 {
                     cost_warned = true;
                     if forced_runtime_route.is_none() {
@@ -5106,22 +5308,22 @@ impl AgentLoop {
                 self.emit_status(
                     "lifecycle",
                     &format!(
-                        "Invalid tool call detected — retrying ({}/{})",
-                        invalid_tool_retries, self.config.invalid_tool_call_max_retries
+                        "Invalid tool call detected ??? retrying ({}/{})",
+                        invalid_tool_retries, self.config().invalid_tool_call_max_retries
                     ),
                 );
                 let available = self.tool_registry.names().join(", ");
-                if invalid_tool_retries >= self.config.invalid_tool_call_max_retries {
+                if invalid_tool_retries >= self.config().invalid_tool_call_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
                             "Max invalid tool retries reached ({})",
-                            self.config.invalid_tool_call_max_retries
+                            self.config().invalid_tool_call_max_retries
                         ),
                     );
                     ctx.add_message(Message::system(format!(
                         "Max invalid tool retries reached ({}). Last invalid tool: {}",
-                        self.config.invalid_tool_call_max_retries, invalid_tool_calls[0]
+                        self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
                     self.memory_on_session_end(ctx.get_messages());
                     return Ok(AgentResult {
@@ -5158,12 +5360,12 @@ impl AgentLoop {
             }
             if !invalid_json_args.is_empty() {
                 invalid_json_retries = invalid_json_retries.saturating_add(1);
-                if invalid_json_retries < self.config.invalid_tool_json_max_retries {
+                if invalid_json_retries < self.config().invalid_tool_json_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Invalid tool JSON arguments — retrying ({}/{})",
-                            invalid_json_retries, self.config.invalid_tool_json_max_retries
+                            "Invalid tool JSON arguments ??? retrying ({}/{})",
+                            invalid_json_retries, self.config().invalid_tool_json_max_retries
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
@@ -5173,7 +5375,7 @@ impl AgentLoop {
                     "lifecycle",
                     &format!(
                         "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
+                        self.config().invalid_tool_json_max_retries
                     ),
                 );
                 invalid_json_retries = 0;
@@ -5249,20 +5451,22 @@ impl AgentLoop {
             }
             let tool_start = Instant::now();
             let tool_governor = governor_for_turn(
-                &self.config,
+                &*self.config(),
                 &ctx,
                 tool_calls.len(),
                 Some(&turn_governor_runtime),
             );
+            let parent_budget_remaining_usd = self
+                .config()
+                .max_cost_usd
+                .map(|limit| (limit - session_cost_usd).max(0.0));
             let results = self
                 .execute_tool_calls(
                     &tool_calls,
                     total_turns,
                     tool_governor.tool_concurrency,
                     contextlattice_connect_intent,
-                    self.config
-                        .max_cost_usd
-                        .map(|limit| (limit - session_cost_usd).max(0.0)),
+                    parent_budget_remaining_usd,
                     &mut tool_errors,
                 )
                 .await;
@@ -5309,8 +5513,8 @@ impl AgentLoop {
                 ctx.get_messages(),
                 &results,
             );
-            if self.config.rollback_on_tool_error_threshold > 0
-                && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
+            if self.config().rollback_on_tool_error_threshold > 0
+                && turn_tool_error_count >= self.config().rollback_on_tool_error_threshold
             {
                 if let Some(snapshot) = last_checkpoint_messages.clone() {
                     *ctx.get_messages_mut() = snapshot;
@@ -5344,15 +5548,15 @@ impl AgentLoop {
 
             // Enforce budget on tool results
             let mut results = results;
-            budget::enforce_budget(&mut results, &self.config.budget);
+            budget::enforce_budget(&mut results, &self.config().budget);
 
             if !results.is_empty() {
                 let w = budget_pressure_text(
                     total_turns,
-                    self.config.max_turns,
-                    self.config.budget_caution_threshold,
-                    self.config.budget_warning_threshold,
-                    self.config.budget_pressure_enabled,
+                    self.config().max_turns,
+                    self.config().budget_caution_threshold,
+                    self.config().budget_warning_threshold,
+                    self.config().budget_pressure_enabled,
                 );
                 if let Some(ref text) = w {
                     tracing::info!("{}", text);
@@ -5527,7 +5731,12 @@ impl AgentLoop {
 
         let mut ctx = ContextManager::default_budget();
         let mut tool_errors: Vec<hermes_core::ToolErrorRecord> = Vec::new();
-        let session_id = self.config.session_id.as_deref().unwrap_or("");
+        let session_id_owned = self
+            .config()
+            .session_id
+            .clone()
+            .unwrap_or_default();
+        let session_id = session_id_owned.as_str();
         let mut messages = messages;
         for msg in messages.iter_mut() {
             if let Some(ref mut c) = msg.content {
@@ -5537,6 +5746,7 @@ impl AgentLoop {
         strip_budget_warnings_from_messages(&mut messages);
         self.preprocess_user_message_context_references(&mut messages)
             .await;
+        self.restore_primary_runtime_at_turn_start();
 
         let task_hint = messages
             .iter()
@@ -5553,8 +5763,8 @@ impl AgentLoop {
         let mut session_started_hooks_fired = false;
         if !restored_system {
             let hook_ctx = serde_json::json!({
-                "session_id": self.config.session_id,
-                "model": self.config.model,
+                "session_id": self.config().session_id,
+                "model": self.active_model(),
             });
             let _results = self.invoke_hook(HookType::OnSessionStart, &hook_ctx);
             self.inject_hook_context(&_results, &mut ctx);
@@ -5580,7 +5790,7 @@ impl AgentLoop {
             ctx.add_message(Message::system(hint));
         }
 
-        let persist_user_idx = if self.config.persist_user_message.is_some() {
+        let persist_user_idx = if self.config().persist_user_message.is_some() {
             ctx.get_messages()
                 .iter()
                 .enumerate()
@@ -5593,12 +5803,12 @@ impl AgentLoop {
         let mut codex_ack_continuations: u32 = 0;
 
         let mut review_memory_at_end = false;
-        if self.config.memory_nudge_interval > 0
+        if self.config().memory_nudge_interval > 0
             && self.tool_registry.names().iter().any(|n| n == "memory")
         {
             if let Ok(mut c) = self.evolution_counters.lock() {
                 c.turns_since_memory = c.turns_since_memory.saturating_add(1);
-                if c.turns_since_memory >= self.config.memory_nudge_interval {
+                if c.turns_since_memory >= self.config().memory_nudge_interval {
                     review_memory_at_end = true;
                     c.turns_since_memory = 0;
                 }
@@ -5618,18 +5828,18 @@ impl AgentLoop {
             ctx.add_message(Message::system(&mem_ctx_raw));
         }
 
-        if self.config.preflight_context_compress {
+        if self.config().preflight_context_compress {
             self.preflight_context_compress_with_status(&mut ctx);
         }
-        let replay = ReplayRecorder::for_session(&self.config, session_id);
-        let max_turns_limit = effective_max_turns(self.config.max_turns);
+        let replay = ReplayRecorder::for_session(&*self.config(), session_id);
+        let max_turns_limit = effective_max_turns(self.config().max_turns);
         replay.record(
             "session_start",
             serde_json::json!({
                 "session_id": session_id,
                 "mode": "stream",
-                "model": self.config.model,
-                "max_turns": self.config.max_turns,
+                "model": self.active_model(),
+                "max_turns": self.config().max_turns,
                 "max_turns_effective": max_turns_limit,
                 "max_turns_unlimited": max_turns_limit.is_none(),
             }),
@@ -5709,7 +5919,7 @@ impl AgentLoop {
             // Refresh oauth-backed runtime credentials before routing/provider selection.
             self.refresh_oauth_store_tokens_if_needed().await;
 
-            if self.config.skill_creation_nudge_interval > 0
+            if self.config().skill_creation_nudge_interval > 0
                 && self
                     .tool_registry
                     .names()
@@ -5723,13 +5933,13 @@ impl AgentLoop {
 
             self.memory_on_turn_start(total_turns, "");
 
-            if self.config.checkpoint_interval_turns > 0
-                && (total_turns - 1) % self.config.checkpoint_interval_turns == 0
+            if self.config().checkpoint_interval_turns > 0
+                && (total_turns - 1) % self.config().checkpoint_interval_turns == 0
             {
                 last_checkpoint_messages = Some(ctx.get_messages().to_vec());
             }
 
-            if total_turns % self.config.memory_flush_interval == 0 && total_turns > 0 {
+            if total_turns % self.config().memory_flush_interval == 0 && total_turns > 0 {
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
             }
@@ -5738,17 +5948,18 @@ impl AgentLoop {
             let turn_runtime_route = forced_runtime_route
                 .clone()
                 .or_else(|| self.resolve_smart_runtime_route(ctx.get_messages()));
+            let turn_default_model = self.active_model();
             let active_model = turn_runtime_route
                 .as_ref()
                 .map(|r| r.model.as_str())
-                .unwrap_or(self.config.model.as_str());
+                .unwrap_or(turn_default_model.as_str());
             let turn_governor_runtime = governor_runtime_state(
                 &governor_llm_latency_window,
                 &governor_tool_error_window,
                 governor_consecutive_error_turns,
             );
             let llm_governor =
-                governor_for_turn(&self.config, &ctx, 0, Some(&turn_governor_runtime));
+                governor_for_turn(&*self.config(), &ctx, 0, Some(&turn_governor_runtime));
             if forced_runtime_route.is_none()
                 && (turn_governor_runtime.consecutive_error_turns >= 2
                     || turn_governor_runtime
@@ -5837,7 +6048,7 @@ impl AgentLoop {
                             if let Some(ref u) = partial.usage {
                                 accumulated_usage = Some(merge_usage(accumulated_usage.clone(), u));
                                 if let Some(cost) =
-                                    estimate_usage_cost_usd(u, partial.model.as_str(), &self.config)
+                                    estimate_usage_cost_usd(u, partial.model.as_str(), &*self.config())
                                 {
                                     session_cost_usd += cost;
                                 }
@@ -5916,14 +6127,14 @@ impl AgentLoop {
                     break r;
                 }
                 if Self::assistant_has_reasoning(&r.message)
-                    && inner_thinking < self.config.thinking_prefill_max_retries
+                    && inner_thinking < self.config().thinking_prefill_max_retries
                 {
                     inner_thinking += 1;
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Reasoning-only response — retrying ({}/{})",
-                            inner_thinking, self.config.thinking_prefill_max_retries
+                            "Reasoning-only response ??? retrying ({}/{})",
+                            inner_thinking, self.config().thinking_prefill_max_retries
                         ),
                     );
                     ctx.add_message(r.message.clone());
@@ -5937,19 +6148,19 @@ impl AgentLoop {
                     break r;
                 }
                 if !Self::assistant_has_reasoning(&r.message)
-                    && inner_empty < self.config.empty_content_max_retries
+                    && inner_empty < self.config().empty_content_max_retries
                 {
                     inner_empty += 1;
                     tracing::warn!(
-                        "empty assistant response (stream path) — retrying ({}/{})",
+                        "empty assistant response (stream path) ??? retrying ({}/{})",
                         inner_empty,
-                        self.config.empty_content_max_retries
+                        self.config().empty_content_max_retries
                     );
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Empty assistant response — retrying ({}/{})",
-                            inner_empty, self.config.empty_content_max_retries
+                            "Empty assistant response ??? retrying ({}/{})",
+                            inner_empty, self.config().empty_content_max_retries
                         ),
                     );
                     continue;
@@ -5997,15 +6208,15 @@ impl AgentLoop {
             if let Some(ref usage) = turn_usage_acc {
                 accumulated_usage = Some(merge_usage(accumulated_usage, usage));
                 if let Some(cost) =
-                    estimate_usage_cost_usd(usage, response.model.as_str(), &self.config)
+                    estimate_usage_cost_usd(usage, response.model.as_str(), &*self.config())
                 {
                     session_cost_usd += cost;
                 }
             }
 
-            if let Some(limit) = self.config.max_cost_usd {
+            if let Some(limit) = self.config().max_cost_usd {
                 if !cost_warned
-                    && session_cost_usd >= limit * self.config.cost_guard_degrade_at_ratio
+                    && session_cost_usd >= limit * self.config().cost_guard_degrade_at_ratio
                 {
                     cost_warned = true;
                     if forced_runtime_route.is_none() {
@@ -6081,14 +6292,14 @@ impl AgentLoop {
                     .tool_calls
                     .as_ref()
                     .map_or(false, |calls| !calls.is_empty())
-                && truncated_tool_call_retries < self.config.truncated_tool_call_max_retries
+                && truncated_tool_call_retries < self.config().truncated_tool_call_max_retries
             {
                 truncated_tool_call_retries = truncated_tool_call_retries.saturating_add(1);
                 self.emit_status(
                     "lifecycle",
                     &format!(
-                        "Truncated tool arguments — retrying ({}/{})",
-                        truncated_tool_call_retries, self.config.truncated_tool_call_max_retries
+                        "Truncated tool arguments ??? retrying ({}/{})",
+                        truncated_tool_call_retries, self.config().truncated_tool_call_max_retries
                     ),
                 );
                 let _ = ctx.get_messages_mut().pop();
@@ -6329,22 +6540,22 @@ impl AgentLoop {
                 self.emit_status(
                     "lifecycle",
                     &format!(
-                        "Invalid tool call detected — retrying ({}/{})",
-                        invalid_tool_retries, self.config.invalid_tool_call_max_retries
+                        "Invalid tool call detected ??? retrying ({}/{})",
+                        invalid_tool_retries, self.config().invalid_tool_call_max_retries
                     ),
                 );
                 let available = self.tool_registry.names().join(", ");
-                if invalid_tool_retries >= self.config.invalid_tool_call_max_retries {
+                if invalid_tool_retries >= self.config().invalid_tool_call_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
                             "Max invalid tool retries reached ({})",
-                            self.config.invalid_tool_call_max_retries
+                            self.config().invalid_tool_call_max_retries
                         ),
                     );
                     ctx.add_message(Message::system(format!(
                         "Max invalid tool retries reached ({}). Last invalid tool: {}",
-                        self.config.invalid_tool_call_max_retries, invalid_tool_calls[0]
+                        self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
                     self.memory_on_session_end(ctx.get_messages());
                     return Ok(AgentResult {
@@ -6381,12 +6592,12 @@ impl AgentLoop {
             }
             if !invalid_json_args.is_empty() {
                 invalid_json_retries = invalid_json_retries.saturating_add(1);
-                if invalid_json_retries < self.config.invalid_tool_json_max_retries {
+                if invalid_json_retries < self.config().invalid_tool_json_max_retries {
                     self.emit_status(
                         "lifecycle",
                         &format!(
-                            "Invalid tool JSON arguments — retrying ({}/{})",
-                            invalid_json_retries, self.config.invalid_tool_json_max_retries
+                            "Invalid tool JSON arguments ??? retrying ({}/{})",
+                            invalid_json_retries, self.config().invalid_tool_json_max_retries
                         ),
                     );
                     let _ = ctx.get_messages_mut().pop();
@@ -6396,7 +6607,7 @@ impl AgentLoop {
                     "lifecycle",
                     &format!(
                         "Max invalid JSON retries reached ({}); returning tool errors",
-                        self.config.invalid_tool_json_max_retries
+                        self.config().invalid_tool_json_max_retries
                     ),
                 );
                 invalid_json_retries = 0;
@@ -6470,14 +6681,14 @@ impl AgentLoop {
                     &tool_calls,
                     total_turns,
                     governor_for_turn(
-                        &self.config,
+                        &*self.config(),
                         &ctx,
                         tool_calls.len(),
                         Some(&turn_governor_runtime),
                     )
                     .tool_concurrency,
                     contextlattice_connect_intent,
-                    self.config
+                    self.config()
                         .max_cost_usd
                         .map(|limit| (limit - session_cost_usd).max(0.0)),
                     &mut tool_errors,
@@ -6517,7 +6728,7 @@ impl AgentLoop {
                     "turn": total_turns,
                     "tool_count": tool_calls.len(),
                     "tool_concurrency": governor_for_turn(
-                        &self.config,
+                        &*self.config(),
                         &ctx,
                         tool_calls.len(),
                         Some(&turn_governor_runtime),
@@ -6532,8 +6743,8 @@ impl AgentLoop {
                 ctx.get_messages(),
                 &results,
             );
-            if self.config.rollback_on_tool_error_threshold > 0
-                && turn_tool_error_count >= self.config.rollback_on_tool_error_threshold
+            if self.config().rollback_on_tool_error_threshold > 0
+                && turn_tool_error_count >= self.config().rollback_on_tool_error_threshold
             {
                 if let Some(snapshot) = last_checkpoint_messages.clone() {
                     *ctx.get_messages_mut() = snapshot;
@@ -6560,15 +6771,15 @@ impl AgentLoop {
             self.notify_memory_writes(&tool_calls, &results);
             self.notify_delegations(&tool_calls, &results);
 
-            budget::enforce_budget(&mut results, &self.config.budget);
+            budget::enforce_budget(&mut results, &self.config().budget);
 
             if !results.is_empty() {
                 let w = budget_pressure_text(
                     total_turns,
-                    self.config.max_turns,
-                    self.config.budget_caution_threshold,
-                    self.config.budget_warning_threshold,
-                    self.config.budget_pressure_enabled,
+                    self.config().max_turns,
+                    self.config().budget_caution_threshold,
+                    self.config().budget_warning_threshold,
+                    self.config().budget_pressure_enabled,
                 );
                 if let Some(ref text) = w {
                     tracing::info!("{}", text);
@@ -6731,7 +6942,7 @@ impl AgentLoop {
         let target = tc.function.name.to_lowercase();
 
         if let Some(name) = names.iter().find(|n| n.to_lowercase() == target) {
-            tracing::info!("Repaired tool call: '{}' → '{}'", tc.function.name, name);
+            tracing::info!("Repaired tool call: '{}' ??? '{}'", tc.function.name, name);
             tc.function.name = name.clone();
             return true;
         }
@@ -6741,7 +6952,7 @@ impl AgentLoop {
             .find(|n| n.to_lowercase().contains(&target) || target.contains(&n.to_lowercase()))
         {
             tracing::info!(
-                "Repaired tool call (fuzzy): '{}' → '{}'",
+                "Repaired tool call (fuzzy): '{}' ??? '{}'",
                 tc.function.name,
                 name
             );
@@ -6756,10 +6967,17 @@ impl AgentLoop {
         if tc.function.name != "session_search" {
             return;
         }
-        let Some(session_id) = self.config.session_id.as_deref() else {
+        let Some(session_id) = self
+            .config()
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+        else {
             return;
         };
-        let session_id = session_id.trim();
+        let session_id = session_id.as_str();
         if session_id.is_empty() {
             return;
         }
@@ -6798,32 +7016,13 @@ impl AgentLoop {
     }
 
     fn primary_runtime_snapshot(&self) -> PrimaryRuntime {
-        let provider = self
-            .config
-            .provider
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        let base_url = provider
-            .as_ref()
-            .and_then(|p| self.config.runtime_providers.get(p))
-            .and_then(|c| {
-                c.base_url
-                    .as_ref()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-            });
-        let (command, args) = self.resolve_runtime_command_args(provider.as_deref());
-        PrimaryRuntime {
-            model: self.config.model.clone(),
-            provider,
-            base_url,
-            api_mode: self.config.api_mode.clone(),
-            command,
-            args,
-            credential_pool: self.primary_credential_pool.clone(),
-        }
+        let mut snap = self
+            .active_runtime
+            .lock()
+            .map(|rt| rt.clone())
+            .unwrap_or_else(|_| self.stored_primary_runtime.clone());
+        snap.credential_pool = self.primary_credential_pool.clone();
+        snap
     }
 
     fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
@@ -6981,7 +7180,8 @@ impl AgentLoop {
         if let Some(rt) = route {
             return self.route_learning_key(rt.provider.as_deref(), rt.model.as_str());
         }
-        self.route_learning_key(self.config.provider.as_deref(), self.config.model.as_str())
+        let snap = self.primary_runtime_snapshot();
+        self.route_learning_key(snap.provider.as_deref(), snap.model.as_str())
     }
 
     fn route_learning_stats_for_key(&self, key: &str) -> Option<RouteLearningStats> {
@@ -7090,7 +7290,7 @@ impl AgentLoop {
         let primary = self.primary_runtime_snapshot();
         let outcome = resolve_turn_route(
             text,
-            &self.config.smart_model_routing,
+            &self.config().smart_model_routing,
             &primary,
             |cheap, explicit_key| self.try_build_cheap_runtime(cheap, explicit_key),
         );
@@ -7125,7 +7325,7 @@ impl AgentLoop {
                     );
                     return None;
                 }
-                let cheap = self.config.smart_model_routing.cheap_model.as_ref()?;
+                let cheap = self.config().smart_model_routing.cheap_model.clone()?;
                 Some(TurnRuntimeRoute {
                     model,
                     provider: Some(runtime.provider.clone()),
@@ -7155,17 +7355,17 @@ impl AgentLoop {
     /// Resolve the model used for automatic degradation when nearing
     /// `max_cost_usd`.
     fn resolve_cost_degrade_model(&self) -> Option<String> {
-        if let Some(ref m) = self.config.cost_guard_degrade_model {
+        if let Some(ref m) = self.config().cost_guard_degrade_model {
             if !m.trim().is_empty() {
                 return Some(m.trim().to_string());
             }
         }
-        if let Some(ref m) = self.config.retry.fallback_model {
+        if let Some(ref m) = self.config().retry.fallback_model {
             if !m.trim().is_empty() {
                 return Some(m.trim().to_string());
             }
         }
-        if self.config.model.trim() != "openai:gpt-4o-mini" {
+        if self.active_model().trim() != "openai:gpt-4o-mini" {
             return Some("openai:gpt-4o-mini".to_string());
         }
         None
@@ -7176,14 +7376,15 @@ impl AgentLoop {
         active_model: &str,
         route: Option<&TurnRuntimeRoute>,
     ) -> Option<String> {
-        if let Some(ref fallback) = self.config.retry.fallback_model {
+        if let Some(ref fallback) = self.config().retry.fallback_model {
             if !fallback.trim().is_empty() && !fallback.eq_ignore_ascii_case(active_model) {
                 return Some(fallback.trim().to_string());
             }
         }
+        let config_provider = self.config().provider.clone();
         let provider_hint = route
             .and_then(|r| r.provider.as_deref())
-            .or(self.config.provider.as_deref())
+            .or(config_provider.as_deref())
             .unwrap_or("openai");
         let (_, active_model_id) = self.extract_provider_and_model(active_model);
         if let Some(candidate) =
@@ -7223,10 +7424,10 @@ impl AgentLoop {
             }
         };
 
-        for model in &self.config.retry.fallback_models {
+        for model in &self.config().retry.fallback_models {
             push_candidate(model);
         }
-        if let Some(ref fallback) = self.config.retry.fallback_model {
+        if let Some(ref fallback) = self.config().retry.fallback_model {
             push_candidate(fallback);
         }
         if let Some(dynamic) = self.resolve_reliability_degrade_model(active_model, None) {
@@ -7245,16 +7446,17 @@ impl AgentLoop {
             "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
              what was accomplished and any remaining tasks.",
         ));
-        let (_, model_name) = self.extract_provider_and_model(self.config.model.as_str());
+        let runtime = self.primary_runtime_snapshot();
+        let (_, model_name) = self.extract_provider_and_model(runtime.model.as_str());
         let response = self
             .llm_provider
             .chat_completion(
                 ctx.get_messages(),
                 &[],
-                self.config.max_tokens,
-                self.config.temperature,
+                self.config().max_tokens,
+                self.config().temperature,
                 Some(model_name),
-                self.extra_body_for_api_mode(&self.config.api_mode).as_ref(),
+                self.extra_body_for_api_mode(&runtime.api_mode).as_ref(),
             )
             .await
             .map_err(|e| AgentError::LlmApi(e.to_string()))?;
@@ -7272,16 +7474,17 @@ impl AgentLoop {
             "[SYSTEM] Tool-loop guard triggered after {} consecutive error turn(s). Latest turn failed {}/{} tool call(s). Stop calling tools and provide a concise final response with what succeeded, what failed, and precise next manual step(s).",
             consecutive_error_turns, failed_calls, total_calls
         )));
-        let (_, model_name) = self.extract_provider_and_model(self.config.model.as_str());
+        let runtime = self.primary_runtime_snapshot();
+        let (_, model_name) = self.extract_provider_and_model(runtime.model.as_str());
         let response = self
             .llm_provider
             .chat_completion(
                 ctx.get_messages(),
                 &[],
-                self.config.max_tokens,
-                self.config.temperature,
+                self.config().max_tokens,
+                self.config().temperature,
                 Some(model_name),
-                self.extra_body_for_api_mode(&self.config.api_mode).as_ref(),
+                self.extra_body_for_api_mode(&runtime.api_mode).as_ref(),
             )
             .await
             .map_err(|e| AgentError::LlmApi(e.to_string()))?;
@@ -7306,7 +7509,7 @@ impl AgentLoop {
         let orchestrator = self.sub_agent_orchestrator.clone();
 
         // Run orchestrated `delegate_task` calls sequentially in the caller's
-        // task — this keeps the inner AgentLoop future out of the Send-bound
+        // task ??? this keeps the inner AgentLoop future out of the Send-bound
         // JoinSet and preserves the requested concurrency cap which is already
         // applied upstream via `cap_delegates`.
         let mut orchestrated: Vec<ToolResult> = Vec::new();
@@ -7581,16 +7784,16 @@ impl AgentLoop {
             .iter()
             .filter(|tc| tc.function.name == "delegate_task")
             .count() as u32;
-        if delegate_count > self.config.max_concurrent_delegates {
+        if delegate_count > self.config().max_concurrent_delegates {
             tracing::warn!(
                 "Capping delegate_task calls from {} to {}",
                 delegate_count,
-                self.config.max_concurrent_delegates
+                self.config().max_concurrent_delegates
             );
             let mut kept_delegates = 0u32;
             tool_calls.retain(|tc| {
                 if tc.function.name == "delegate_task" {
-                    if kept_delegates < self.config.max_concurrent_delegates {
+                    if kept_delegates < self.config().max_concurrent_delegates {
                         kept_delegates += 1;
                         true
                     } else {
@@ -7604,7 +7807,7 @@ impl AgentLoop {
     }
 
     fn emit_background_review_metrics(&self, turn: u32, ctx: &ContextManager) {
-        if !self.config.background_review_metrics_enabled {
+        if !self.config().background_review_metrics_enabled {
             return;
         }
         let snapshot = ctx.get_messages().to_vec();
@@ -7625,11 +7828,11 @@ impl AgentLoop {
     /// Metrics (always) + optional Python-style memory/skill review LLM pass on session end.
     fn spawn_background_review(&self, turn: u32, ctx: &ContextManager, review_memory_at_end: bool) {
         self.emit_background_review_metrics(turn, ctx);
-        if !self.config.background_review_enabled {
+        if !self.config().background_review_enabled {
             return;
         }
         let mut review_skills = false;
-        if self.config.skill_creation_nudge_interval > 0
+        if self.config().skill_creation_nudge_interval > 0
             && self
                 .tool_registry
                 .names()
@@ -7637,7 +7840,7 @@ impl AgentLoop {
                 .any(|n| n == "skill_manage")
         {
             if let Ok(mut c) = self.evolution_counters.lock() {
-                if c.iters_since_skill >= self.config.skill_creation_nudge_interval {
+                if c.iters_since_skill >= self.config().skill_creation_nudge_interval {
                     review_skills = true;
                     c.iters_since_skill = 0;
                 }
@@ -7655,7 +7858,7 @@ impl AgentLoop {
         };
         let mut hist = ctx.get_messages().to_vec();
         hist.push(Message::user(prompt));
-        let mut cfg = self.config.clone();
+        let mut cfg = self.config().clone();
         cfg.background_review_enabled = false;
         cfg.background_review_metrics_enabled = false;
         cfg.memory_nudge_interval = 0;
@@ -8965,7 +9168,7 @@ fn summarize_background_review_result(messages: &[Message]) -> Option<String> {
             deduped.push(action);
         }
     }
-    Some(format!("💾 {}", deduped.join(" · ")))
+    Some(format!("???? {}", deduped.join(" ? ")))
 }
 
 fn default_model_cost_per_million(model: &str) -> Option<(f64, f64)> {
@@ -9084,6 +9287,65 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env test lock poisoned")
+    }
+
+    #[test]
+    fn restore_primary_runtime_at_turn_start_after_fallback() {
+        struct NoopProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for NoopProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<LlmResponse, AgentError> {
+                Err(AgentError::LlmApi("noop".into()))
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                Box::pin(futures::stream::empty())
+            }
+        }
+
+        let config = AgentConfig::default();
+        let agent = AgentLoop::new(
+            config,
+            Arc::new(ToolRegistry::new()),
+            Arc::new(NoopProvider),
+        );
+        agent.activate_runtime_fallback(PrimaryRuntime {
+            model: "anthropic/claude-sonnet-4".to_string(),
+            provider: Some("openrouter".to_string()),
+            base_url: None,
+            api_mode: ApiMode::ChatCompletions,
+            command: None,
+            args: Vec::new(),
+            credential_pool: None,
+        });
+        assert_eq!(agent.active_model(), "anthropic/claude-sonnet-4");
+        assert_eq!(agent.config().model, "anthropic/claude-sonnet-4");
+        agent.restore_primary_runtime_at_turn_start();
+        assert_eq!(agent.active_model(), "gpt-4o");
+        assert_eq!(agent.config().model, "gpt-4o");
+        assert!(
+            !agent
+                .turn_fallback
+                .lock()
+                .expect("lock")
+                .is_fallback_activated()
+        );
     }
 
     #[tokio::test]
@@ -9293,7 +9555,7 @@ mod tests {
             Some("/tmp/hermes-home"),
         )
         .expect("nous 401 should produce diagnostics");
-        assert!(diag.contains("Nous 401 — Portal authentication failed."));
+        assert!(diag.contains("Nous 401 ??? Portal authentication failed."));
         assert!(diag.contains("hermes auth login nous"));
         assert!(diag.contains("portal.nousresearch.com"));
         assert!(diag.contains("/tmp/hermes-home/auth.json"));
@@ -9329,7 +9591,7 @@ mod tests {
             Message::tool_result("tc_skip", "{\"success\":false,\"message\":\"failed\"}"),
         ];
         let out = summarize_background_review_result(&msgs).expect("summary should exist");
-        assert!(out.starts_with("💾 "));
+        assert!(out.starts_with("???? "));
         assert!(out.contains("Skill 'prospect-scanner' created."));
         assert!(out.contains("Memory updated"));
     }
@@ -10193,7 +10455,7 @@ mod tests {
         assert!(result.is_ok());
         let rows = captured.lock().expect("captured lock");
         assert!(rows.iter().any(|(kind, msg)| {
-            kind == "lifecycle" && msg.contains("Empty assistant response — retrying")
+            kind == "lifecycle" && msg.contains("Empty assistant response ??? retrying")
         }));
     }
 
@@ -10266,7 +10528,7 @@ mod tests {
         assert_eq!(*provider.calls.lock().expect("calls lock"), 1);
         let rows = captured.lock().expect("captured lock");
         assert!(!rows.iter().any(|(kind, msg)| {
-            kind == "lifecycle" && msg.contains("Empty assistant response — retrying")
+            kind == "lifecycle" && msg.contains("Empty assistant response ??? retrying")
         }));
     }
 
@@ -10823,7 +11085,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let messages = vec![Message::user("帮我总结一下今天要做什么")];
+        let messages = vec![Message::user("???????????????????????")];
         let selected = agent.resolve_smart_runtime_route(&messages);
         assert_eq!(
             selected.as_ref().map(|r| r.model.as_str()),
@@ -11285,7 +11547,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let messages = vec![Message::user("总结一下这个需求")];
+        let messages = vec![Message::user("?????????????????")];
         let selected = agent.resolve_smart_runtime_route(&messages);
         assert_eq!(
             selected.as_ref().map(|r| r.model.as_str()),
@@ -11373,7 +11635,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("给我一段简短总结")]);
+        let selected = agent.resolve_smart_runtime_route(&[Message::user("??????????????????")]);
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("qwen-oauth")
@@ -11543,7 +11805,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = agent.resolve_smart_runtime_route(&[Message::user("?????????????")]);
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("openai-codex")
@@ -11943,7 +12205,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = agent.resolve_smart_runtime_route(&[Message::user("?????????????")]);
         assert!(
             selected.is_none(),
             "missing ACP CLI should fail cheap-route and fall back"
@@ -12022,7 +12284,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = agent.resolve_smart_runtime_route(&[Message::user("?????????????")]);
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("copilot-acp")
@@ -12086,7 +12348,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let messages = vec![Message::user("请帮我 debug 这段 traceback 并修复错误")];
+        let messages = vec![Message::user("????? debug ??? traceback ???????")];
         let selected = agent.resolve_smart_runtime_route(&messages);
         assert!(selected.is_none());
     }
@@ -12322,7 +12584,7 @@ mod tests {
 
         let agent = AgentLoop::new(config, registry, Arc::new(DummyProvider));
 
-        let max = agent.config.max_turns;
+        let max = agent.config().max_turns;
         assert!(budget_pressure_text(6, max, 0.7, 0.9, true).is_none());
         assert!(budget_pressure_text(7, max, 0.7, 0.9, true).is_some());
         let w = budget_pressure_text(9, max, 0.7, 0.9, true).unwrap();
@@ -12475,7 +12737,7 @@ mod tests {
             Arc::new(DummyProvider),
         );
 
-        // Set conflicting env values — config must win.
+        // Set conflicting env values ??? config must win.
         std::env::set_var("HERMES_QWEN_OAUTH_TOKEN_URL", "https://env.example.com/tok");
         std::env::set_var("HERMES_QWEN_OAUTH_CLIENT_ID", "env-client");
 
