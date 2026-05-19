@@ -4175,71 +4175,7 @@ fn build_gateway_platform_access_policies(
 }
 
 fn gateway_requirement_issues(config: &hermes_config::GatewayConfig) -> Vec<String> {
-    let mut issues = Vec::new();
-
-    let check = |enabled: bool, cond: bool| enabled && !cond;
-
-    if let Some(p) = config.platforms.get("telegram") {
-        if check(p.enabled, platform_token_or_extra(p).is_some()) {
-            issues.push("telegram.enabled=true 但缺少 token".to_string());
-        }
-    }
-    if let Some(p) = config.platforms.get("weixin") {
-        let account_id = extra_string(p, "account_id").is_some();
-        let token = platform_token_or_extra(p).is_some();
-        if check(p.enabled, account_id && token) {
-            issues.push("weixin.enabled=true 但缺少 account_id 或 token".to_string());
-        }
-    }
-    if let Some(p) = config.platforms.get("discord") {
-        if check(p.enabled, platform_token_or_extra(p).is_some()) {
-            issues.push("discord.enabled=true 但缺少 token".to_string());
-        }
-    }
-    if let Some(p) = config.platforms.get("slack") {
-        if check(p.enabled, platform_token_or_extra(p).is_some()) {
-            issues.push("slack.enabled=true 但缺少 token".to_string());
-        }
-    }
-    if let Some(p) = config
-        .platforms
-        .get("qqbot")
-        .or_else(|| config.platforms.get("qq"))
-    {
-        let app_id = extra_string(p, "app_id").is_some();
-        let secret = extra_string(p, "client_secret").is_some();
-        if check(p.enabled, app_id && secret) {
-            issues.push("qqbot.enabled=true 但缺少 app_id 或 client_secret".to_string());
-        }
-    }
-    if let Some(p) = config.platforms.get("wecom") {
-        let bot_id = extra_string(p, "bot_id").is_some()
-            || !std::env::var("WECOM_BOT_ID").unwrap_or_default().trim().is_empty();
-        let secret = extra_string(p, "secret").is_some()
-            || !std::env::var("WECOM_SECRET").unwrap_or_default().trim().is_empty();
-        if check(p.enabled, bot_id && secret) {
-            issues.push(
-                "wecom.enabled=true 但缺少 bot_id/secret（或 WECOM_BOT_ID/WECOM_SECRET）".to_string(),
-            );
-        }
-    }
-    if let Some(p) = config.platforms.get("wecom_callback") {
-        let ready = extra_string(p, "corp_id").is_some()
-            && extra_string(p, "corp_secret").is_some()
-            && extra_string(p, "agent_id").is_some()
-            && platform_token_or_extra(p)
-                .or_else(|| extra_string(p, "token"))
-                .is_some()
-            && extra_string(p, "encoding_aes_key").is_some();
-        if check(p.enabled, ready) {
-            issues.push(
-                "wecom_callback.enabled=true 但缺少 corp_id/corp_secret/agent_id/token/encoding_aes_key"
-                    .to_string(),
-            );
-        }
-    }
-
-    issues
+    hermes_gateway::gateway_requirement_issues(config)
 }
 
 fn build_api_server_config(platform_cfg: &PlatformConfig) -> ApiServerConfig {
@@ -10267,6 +10203,28 @@ async fn run_doctor(
         "ok": config_yaml_ok,
         "path": config_path.display().to_string()
     }));
+
+    if let Ok(cfg) = hermes_config::load_config(None) {
+        for issue in hermes_gateway::evaluate_gateway_requirements(
+            &cfg,
+            hermes_gateway::RequirementScope::Doctor,
+        ) {
+            let ok = issue.severity != hermes_gateway::RequirementSeverity::Fatal;
+            let label = format!("Gateway / {}", issue.platform);
+            print!("{}... ", label);
+            if ok {
+                println!("✓");
+            } else {
+                println!("✗ ({})", issue.message);
+            }
+            checks.push(serde_json::json!({
+                "name": label,
+                "ok": ok,
+                "code": issue.code,
+                "detail": issue.message,
+            }));
+        }
+    }
 
     let env_path = config_dir.join(".env");
     let project_env = std::env::current_dir()

@@ -144,6 +144,30 @@ impl PlatformConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Shared parsing helpers (`extra` map + token; Python / YAML–compatible)
+// ---------------------------------------------------------------------------
+
+/// `extra[key]` as a trimmed, non-empty string when the value is a JSON string.
+pub fn extra_string(cfg: &PlatformConfig, key: &str) -> Option<String> {
+    cfg.extra
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
+/// Bot token from [`PlatformConfig::token`] or `extra["token"]`, trimmed.
+pub fn platform_token_or_extra(cfg: &PlatformConfig) -> Option<String> {
+    cfg.token
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| extra_string(cfg, "token"))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

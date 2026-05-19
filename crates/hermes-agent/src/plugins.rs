@@ -68,6 +68,115 @@ impl HookType {
 }
 
 // ---------------------------------------------------------------------------
+// Hook payload schema validation
+// ---------------------------------------------------------------------------
+
+fn expect_obj(ctx: &Value, hook: HookType) -> Result<&serde_json::Map<String, Value>, String> {
+    ctx.as_object()
+        .ok_or_else(|| format!("{} context must be a JSON object", hook.as_str()))
+}
+
+fn require_type(
+    obj: &serde_json::Map<String, Value>,
+    key: &str,
+    type_name: &str,
+    check: impl Fn(&Value) -> bool,
+) -> Result<(), String> {
+    let Some(v) = obj.get(key) else {
+        return Err(format!("missing required field: {}", key));
+    };
+    if !check(v) {
+        return Err(format!("field '{}' must be {}", key, type_name));
+    }
+    Ok(())
+}
+
+fn optional_string_or_null(obj: &serde_json::Map<String, Value>, key: &str) -> Result<(), String> {
+    if let Some(v) = obj.get(key) {
+        if !(v.is_null() || v.is_string()) {
+            return Err(format!("field '{}' must be string|null", key));
+        }
+    }
+    Ok(())
+}
+
+fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(), String> {
+    let obj = expect_obj(context, hook)?;
+    match hook {
+        HookType::PreToolCall => {
+            require_type(obj, "tool", "string", Value::is_string)?;
+            require_type(obj, "turn", "number", Value::is_number)?;
+        }
+        HookType::PostToolCall => {
+            require_type(obj, "tool", "string", Value::is_string)?;
+            require_type(obj, "is_error", "boolean", Value::is_boolean)?;
+            require_type(obj, "turn", "number", Value::is_number)?;
+        }
+        HookType::PreLlmCall => {
+            require_type(obj, "turn", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+        }
+        HookType::PostLlmCall => {
+            require_type(obj, "turn", "number", Value::is_number)?;
+            require_type(obj, "api_time_ms", "number", Value::is_number)?;
+            require_type(obj, "has_tool_calls", "boolean", Value::is_boolean)?;
+        }
+        HookType::PreApiRequest => {
+            require_type(obj, "attempt", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+            require_type(obj, "stream", "boolean", Value::is_boolean)?;
+            optional_string_or_null(obj, "route_label")?;
+        }
+        HookType::PostApiRequest => {
+            require_type(obj, "attempt", "number", Value::is_number)?;
+            require_type(obj, "model", "string", Value::is_string)?;
+            require_type(obj, "stream", "boolean", Value::is_boolean)?;
+            require_type(obj, "ok", "boolean", Value::is_boolean)?;
+            optional_string_or_null(obj, "finish_reason")?;
+            optional_string_or_null(obj, "error")?;
+            if let Some(v) = obj.get("has_tool_calls") {
+                if !v.is_boolean() {
+                    return Err("field 'has_tool_calls' must be boolean".to_string());
+                }
+            }
+            if let Some(v) = obj.get("interrupted") {
+                if !v.is_boolean() {
+                    return Err("field 'interrupted' must be boolean".to_string());
+                }
+            }
+        }
+        HookType::OnSessionStart => {
+            require_type(obj, "model", "string", Value::is_string)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionEnd => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "finished_naturally", "boolean", Value::is_boolean)?;
+            require_type(obj, "interrupted", "boolean", Value::is_boolean)?;
+            require_type(
+                obj,
+                "session_started_hooks_fired",
+                "boolean",
+                Value::is_boolean,
+            )?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionFinalize => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "tool_errors", "number", Value::is_number)?;
+            require_type(obj, "session_cost_usd", "number", Value::is_number)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::OnSessionReset => {
+            require_type(obj, "turns", "number", Value::is_number)?;
+            require_type(obj, "source", "string", Value::is_string)?;
+            optional_string_or_null(obj, "session_id")?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // HookResult
 // ---------------------------------------------------------------------------
 
@@ -336,6 +445,13 @@ impl PluginManager {
         let Some(callbacks) = self.context.hooks.get(&hook) else {
             return Vec::new();
         };
+        if let Err(err) = validate_hook_payload(hook, context) {
+            tracing::warn!(
+                hook = %hook.as_str(),
+                error = %err,
+                "Hook payload does not match recommended schema"
+            );
+        }
         callbacks.iter().map(|cb| cb(context)).collect()
     }
 
@@ -883,5 +999,42 @@ dependencies:
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].manifest.name, "user_bundle");
         assert_eq!(discovered[0].source, PluginDiscoverySource::User);
+    }
+
+    #[test]
+    fn test_validate_hook_payload_accepts_pre_api_request() {
+        let ctx = serde_json::json!({
+            "attempt": 0,
+            "model": "gpt-4o",
+            "stream": false,
+            "route_label": null
+        });
+        assert!(validate_hook_payload(HookType::PreApiRequest, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_validate_hook_payload_rejects_missing_required_field() {
+        let ctx = serde_json::json!({
+            "model": "gpt-4o",
+            "stream": false
+        });
+        let err = validate_hook_payload(HookType::PreApiRequest, &ctx).unwrap_err();
+        assert!(err.contains("missing required field: attempt"));
+    }
+
+    #[test]
+    fn test_invoke_hook_keeps_backward_compat_even_with_invalid_payload() {
+        let mut mgr = PluginManager::new();
+        let hit = Arc::new(std::sync::Mutex::new(0u32));
+        let hit_ref = hit.clone();
+        mgr.context.hooks.insert(
+            HookType::PreApiRequest,
+            vec![Arc::new(move |_ctx| {
+                *hit_ref.lock().expect("counter lock") += 1;
+                HookResult::Ok
+            })],
+        );
+        let _ = mgr.invoke_hook(HookType::PreApiRequest, &serde_json::json!({}));
+        assert_eq!(*hit.lock().expect("counter lock"), 1);
     }
 }

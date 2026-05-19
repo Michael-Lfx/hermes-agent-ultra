@@ -19,11 +19,14 @@ pub mod delivery;
 pub mod dm;
 pub mod format;
 pub mod gateway;
+pub mod gateway_requirements;
+pub mod hook_payloads;
 pub mod hooks;
 pub mod markdown_split;
 pub mod media;
 pub mod mirror;
 pub mod pairing;
+pub mod platform_requirements;
 pub mod platforms;
 pub mod session;
 pub mod ssrf;
@@ -51,6 +54,12 @@ pub use media::MediaCache;
 
 // Re-export SSRF protection
 pub use ssrf::{is_safe_url, validate_url};
+
+// Gateway credential preflight (single source of truth)
+pub use gateway_requirements::gateway_requirement_issues;
+pub use platform_requirements::{
+    evaluate_gateway_requirements, RequirementIssue, RequirementScope, RequirementSeverity,
+};
 
 // Re-export DM management
 pub use channel_directory::{ChannelDirectory, ChannelEntry};

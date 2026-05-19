@@ -46,7 +46,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+use tokio::sync::Semaphore;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -118,6 +121,24 @@ struct HookManifest {
 
 const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 30;
 
+/// Counters for hook handler invocations (best-effort, relaxed atomics).
+#[derive(Debug, Default)]
+pub struct HookEmitStats {
+    pub invoked: AtomicU64,
+    pub succeeded: AtomicU64,
+    pub failed: AtomicU64,
+}
+
+impl HookEmitStats {
+    pub fn snapshot(&self) -> (u64, u64, u64) {
+        (
+            self.invoked.load(Ordering::Relaxed),
+            self.succeeded.load(Ordering::Relaxed),
+            self.failed.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// Discovers, loads, and fires event hooks. Cheaply cloneable via `Arc`.
 ///
 /// ```ignore
@@ -129,6 +150,8 @@ const DEFAULT_HOOK_TIMEOUT_SECS: u64 = 30;
 pub struct HookRegistry {
     handlers: HashMap<String, Vec<Arc<dyn HookHandler>>>,
     loaded: Vec<LoadedHookInfo>,
+    hook_semaphore: Option<Arc<Semaphore>>,
+    pub stats: Arc<HookEmitStats>,
 }
 
 impl HookRegistry {
@@ -136,7 +159,24 @@ impl HookRegistry {
         Self {
             handlers: HashMap::new(),
             loaded: Vec::new(),
+            hook_semaphore: None,
+            stats: Arc::new(HookEmitStats {
+                invoked: AtomicU64::new(0),
+                succeeded: AtomicU64::new(0),
+                failed: AtomicU64::new(0),
+            }),
         }
+    }
+
+    /// Limit concurrent hook handler executions across the registry.
+    pub fn set_execution_limits(&mut self, max_concurrent_handlers: Option<usize>) {
+        self.hook_semaphore = max_concurrent_handlers
+            .filter(|&n| n > 0)
+            .map(|n| Arc::new(Semaphore::new(n)));
+    }
+
+    pub fn stats_snapshot(&self) -> (u64, u64, u64) {
+        self.stats.snapshot()
     }
 
     /// Returns metadata for every loaded hook (built-ins + on-disk).
@@ -301,10 +341,26 @@ impl HookRegistry {
             }
         }
 
+        let stats = self.stats.clone();
         for handler in to_call {
+            let _permit = match &self.hook_semaphore {
+                Some(sem) => match sem.clone().acquire_owned().await {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        tracing::warn!(
+                            event = %event.event_type,
+                            "Hook semaphore closed; skipping handler"
+                        );
+                        continue;
+                    }
+                },
+                None => None,
+            };
+
             // Catch panics so a misbehaving hook can't kill the gateway.
             let name = handler.name().to_string();
             let evt_for_call = event.clone();
+            stats.invoked.fetch_add(1, Ordering::Relaxed);
             let result =
                 std::panic::AssertUnwindSafe(async move { handler.handle(&evt_for_call).await });
             // Note: we deliberately don't use catch_unwind here because
@@ -316,8 +372,11 @@ impl HookRegistry {
             // spawn. Keeping the AssertUnwindSafe wrapping for future-
             // proofing.
             match result.0.await {
-                Ok(()) => {}
+                Ok(()) => {
+                    stats.succeeded.fetch_add(1, Ordering::Relaxed);
+                }
                 Err(e) => {
+                    stats.failed.fetch_add(1, Ordering::Relaxed);
                     tracing::warn!(
                         hook = %name,
                         event = %event.event_type,
