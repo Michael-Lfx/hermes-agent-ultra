@@ -776,6 +776,8 @@ pub fn load_from_json(path: &Path) -> Result<GatewayConfig, ConfigError> {
 ///   OPENAI_API_KEY             -> llm_providers["openai"].api_key (legacy fallback)
 ///   ANTHROPIC_API_KEY          -> llm_providers["anthropic"].api_key
 ///   OPENROUTER_API_KEY         -> llm_providers["openrouter"].api_key
+///   OPENROUTER_BASE_URL        -> llm_providers["openrouter"].base_url
+///   MINIMAX_BASE_URL           -> llm_providers["minimax"].base_url
 ///   DASHSCOPE_API_KEY          -> llm_providers["qwen"].api_key
 ///   MOONSHOT_API_KEY           -> llm_providers["kimi"].api_key
 ///   MINIMAX_API_KEY            -> llm_providers["minimax"].api_key
@@ -890,6 +892,25 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             for provider in config.llm_providers.values_mut() {
                 provider.base_url = Some(v.clone());
             }
+        }
+    }
+
+    if let Ok(v) = std::env::var("OPENROUTER_BASE_URL") {
+        if !v.trim().is_empty() {
+            config
+                .llm_providers
+                .entry("openrouter".to_string())
+                .or_insert_with(LlmProviderConfig::default)
+                .base_url = Some(v);
+        }
+    }
+    if let Ok(v) = std::env::var("MINIMAX_BASE_URL") {
+        if !v.trim().is_empty() {
+            config
+                .llm_providers
+                .entry("minimax".to_string())
+                .or_insert_with(LlmProviderConfig::default)
+                .base_url = Some(v);
         }
     }
 

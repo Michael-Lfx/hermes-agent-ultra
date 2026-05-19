@@ -3500,6 +3500,9 @@ impl AgentLoop {
             }
             "openrouter" => {
                 let mut p = OpenRouterProvider::new(&api_key).with_model(model_name);
+                if let Some(url) = base_url {
+                    p = p.with_base_url(url);
+                }
                 if let Some(pool) = credential_pool {
                     p = p.with_credential_pool(pool.clone());
                 }
