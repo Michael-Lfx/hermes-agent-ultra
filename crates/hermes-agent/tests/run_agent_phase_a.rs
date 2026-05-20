@@ -574,3 +574,28 @@ async fn phase_a10_agent_result_sets_interrupted_on_graceful_interrupt() {
 }
 
 // --- Phase A-13: steer pre-API inject during run ----------------------------
+
+#[tokio::test]
+async fn phase_a13_steer_pre_api_injects_into_last_tool_during_run() {
+    let provider = Arc::new(ToolThenStopProvider::new(1));
+    let cfg = AgentConfig {
+        max_turns: 3,
+        ..AgentConfig::default()
+    };
+    let agent = AgentLoop::new(cfg, Arc::new(echo_tool_registry()), provider);
+    assert!(agent.steer("focus on error handling"));
+
+    let result = agent.run(vec![Message::user("go")], None).await;
+    assert!(result.is_ok(), "{result:?}");
+    let msgs = &result.unwrap().messages;
+    let tool_with_guidance = msgs.iter().find(|m| {
+        m.role == MessageRole::Tool
+            && m.content
+                .as_deref()
+                .is_some_and(|c| c.contains("User guidance:") && c.contains("focus on error handling"))
+    });
+    assert!(
+        tool_with_guidance.is_some(),
+        "steer should inject into last tool result during run"
+    );
+}
