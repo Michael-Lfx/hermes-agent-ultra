@@ -43,6 +43,7 @@ use hermes_cli::model_switch::{
 };
 use hermes_cli::platform_toolsets::{resolve_platform_tool_schemas, tool_definition_summary};
 use hermes_cli::providers::provider_capability_for;
+use hermes_cli::cron_delivery::GatewayCronDeliveryBackend;
 use hermes_cli::runtime_tool_wiring::{
     wire_cron_scheduler_backend, wire_gateway_clarify_backend, wire_gateway_messaging_backend,
 };
@@ -3253,7 +3254,11 @@ async fn run_gateway(
             let default_model = config.model.clone().unwrap_or_else(|| "gpt-4o".to_string());
             let cron_persistence = Arc::new(FileJobPersistence::with_dir(cron_dir.clone()));
             let cron_llm = build_provider(&config, &default_model);
-            let cron_runner = Arc::new(CronRunner::new(cron_llm, agent_tools_for_cron));
+            let cron_runner = Arc::new(
+                CronRunner::new(cron_llm, agent_tools_for_cron).with_delivery(Arc::new(
+                    GatewayCronDeliveryBackend::new(gateway.clone()),
+                )),
+            );
             let mut cron_scheduler = CronScheduler::new(cron_persistence, cron_runner);
             let (cron_tx, cron_rx) = broadcast::channel::<CronCompletionEvent>(64);
             cron_scheduler.set_completion_broadcast(cron_tx);
@@ -8047,7 +8052,12 @@ fn build_live_cron_scheduler(cli: &Cli, data_dir: &Path) -> Result<CronScheduler
 }
 
 fn parse_deliver_config(raw: &str) -> Option<hermes_cron::DeliverConfig> {
-    let value = raw.trim().to_ascii_lowercase();
+    let trimmed = raw.trim();
+    let (head, chat_id) = trimmed
+        .split_once(':')
+        .map(|(p, rest)| (p, Some(rest.to_string())))
+        .unwrap_or((trimmed, None));
+    let value = head.trim().to_ascii_lowercase();
     let target = match value.as_str() {
         "origin" => hermes_cron::DeliverTarget::Origin,
         "local" => hermes_cron::DeliverTarget::Local,
@@ -8068,10 +8078,14 @@ fn parse_deliver_config(raw: &str) -> Option<hermes_cron::DeliverConfig> {
         "homeassistant" | "ha" => hermes_cron::DeliverTarget::HomeAssistant,
         _ => return None,
     };
-    Some(hermes_cron::DeliverConfig {
-        target,
-        platform: None,
-    })
+    let platform = chat_id.map(|s| {
+        s.split(':')
+            .next()
+            .unwrap_or(s.as_str())
+            .trim()
+            .to_string()
+    });
+    Some(hermes_cron::DeliverConfig { target, platform })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -8194,7 +8208,11 @@ async fn run_cron(
 
             if let Some(schedule) = schedule {
                 job.schedule = schedule;
+                job.schedule_spec = None;
+                job.schedule_display = None;
                 job.next_run = None;
+                job.normalize_schedule();
+                job.refresh_next_run();
             }
             if let Some(prompt) = prompt {
                 job.prompt = prompt;
