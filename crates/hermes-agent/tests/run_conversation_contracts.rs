@@ -9,7 +9,9 @@ use hermes_agent::{
     conversation_loop::extract_last_reasoning_current_turn,
     split_messages_for_run_conversation, AgentConfig, AgentLoop, RunConversationParams,
 };
-use hermes_core::{AgentError, LlmProvider, Message, MessageRole, StreamChunk, ToolSchema};
+use hermes_core::{
+    AgentError, LlmProvider, Message, MessageRole, StreamChunk, StreamDelta, ToolSchema,
+};
 
 struct StopAssistantProvider;
 
@@ -42,6 +44,65 @@ impl LlmProvider for StopAssistantProvider {
         _extra_body: Option<&serde_json::Value>,
     ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
         futures::stream::empty().boxed()
+    }
+}
+
+struct StreamingHelloProvider;
+
+#[async_trait]
+impl LlmProvider for StreamingHelloProvider {
+    async fn chat_completion(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolSchema],
+        _max_tokens: Option<u32>,
+        _temperature: Option<f64>,
+        _model: Option<&str>,
+        _extra_body: Option<&serde_json::Value>,
+    ) -> Result<hermes_core::LlmResponse, AgentError> {
+        Ok(hermes_core::LlmResponse {
+            message: Message::assistant("streamed hello"),
+            usage: None,
+            model: "test".into(),
+            finish_reason: Some("stop".into()),
+        })
+    }
+
+    fn chat_completion_stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolSchema],
+        _max_tokens: Option<u32>,
+        _temperature: Option<f64>,
+        _model: Option<&str>,
+        _extra_body: Option<&serde_json::Value>,
+    ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+        futures::stream::iter(vec![
+            Ok(StreamChunk {
+                delta: Some(StreamDelta {
+                    content: Some("streamed ".into()),
+                    tool_calls: None,
+                    extra: None,
+                }),
+                finish_reason: None,
+                usage: None,
+            }),
+            Ok(StreamChunk {
+                delta: Some(StreamDelta {
+                    content: Some("hello".into()),
+                    tool_calls: None,
+                    extra: None,
+                }),
+                finish_reason: None,
+                usage: None,
+            }),
+            Ok(StreamChunk {
+                delta: None,
+                finish_reason: Some("stop".into()),
+                usage: None,
+            }),
+        ])
+        .boxed()
     }
 }
 
@@ -124,4 +185,43 @@ async fn run_conversation_drains_pending_steer_into_result() {
         .await
         .expect("run_conversation");
     assert_eq!(conv.pending_steer.as_deref(), Some("focus on tests"));
+}
+
+#[tokio::test]
+async fn phase_a11_run_conversation_stream_callback_receives_deltas() {
+    let agent = AgentLoop::new(
+        AgentConfig {
+            max_turns: 2,
+            ..AgentConfig::default()
+        },
+        Arc::new(ToolRegistry::new()),
+        Arc::new(StreamingHelloProvider),
+    );
+    let chunks = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let chunks_ref = chunks.clone();
+    let conv = agent
+        .run_conversation(RunConversationParams {
+            user_message: "ping".into(),
+            conversation_history: vec![],
+            task_id: None,
+            stream_callback: Some(Box::new(move |chunk| {
+                if let Some(delta) = chunk.delta {
+                    if let Some(text) = delta.content {
+                        chunks_ref.lock().expect("chunks lock").push(text);
+                    }
+                }
+            })),
+            persist_user_message: None,
+            tools: None,
+            persist_session: false,
+        })
+        .await
+        .expect("run_conversation");
+
+    assert!(conv.completed);
+    assert_eq!(conv.final_response.as_deref(), Some("streamed hello"));
+    let received = chunks.lock().expect("chunks lock");
+    let joined: String = received.join("");
+    assert!(joined.contains("streamed"), "got chunks: {joined}");
+    assert!(joined.contains("hello"), "got chunks: {joined}");
 }
