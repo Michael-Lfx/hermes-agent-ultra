@@ -262,13 +262,6 @@ pub fn evaluate_gateway_requirements(
                         None
                     }
                 })
-                .or_else(|| {
-                    if env_non_empty("WECHATY_PUPPET_SERVICE_TOKEN") {
-                        Some(String::new())
-                    } else {
-                        None
-                    }
-                })
                 .is_some();
             let secret = extra_string(p, "secret")
                 .or_else(|| {
@@ -423,6 +416,12 @@ pub fn evaluate_gateway_requirements(
 mod tests {
     use super::*;
     use hermes_config::PlatformConfig;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn make_platform(enabled: bool, token: Option<&str>) -> PlatformConfig {
         let mut cfg = PlatformConfig {
@@ -534,6 +533,7 @@ mod tests {
     #[test]
     #[cfg(feature = "wecom")]
     fn wecom_websocket_credentials_allow_env_fallback() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
         let mut config = GatewayConfig::default();
         let wecom = make_platform(true, None);
         config.platforms.insert("wecom".to_string(), wecom);
@@ -550,6 +550,31 @@ mod tests {
         );
 
         std::env::remove_var("WECOM_BOT_ID");
+        std::env::remove_var("WECOM_SECRET");
+    }
+
+    #[test]
+    #[cfg(feature = "wecom")]
+    fn wecom_websocket_credentials_do_not_use_wechaty_service_token_as_bot_id() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let mut config = GatewayConfig::default();
+        let wecom = make_platform(true, None);
+        config.platforms.insert("wecom".to_string(), wecom);
+
+        std::env::set_var("WECOM_BOT_ID", "");
+        std::env::set_var("WECHATY_PUPPET_SERVICE_TOKEN", "legacy-wechaty-token");
+        std::env::set_var("WECOM_SECRET", "env-secret");
+
+        let issues = evaluate_gateway_requirements(&config, RequirementScope::RuntimeStart);
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.platform == "wecom" && i.severity == RequirementSeverity::Fatal),
+            "{issues:?}"
+        );
+
+        std::env::remove_var("WECOM_BOT_ID");
+        std::env::remove_var("WECHATY_PUPPET_SERVICE_TOKEN");
         std::env::remove_var("WECOM_SECRET");
     }
 }
