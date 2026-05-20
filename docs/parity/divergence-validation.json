@@ -1,6 +1,6 @@
 {
-  "divergence_file": "/Users/sheawinkler/Documents/Projects/hermes-agent-ultra/docs/parity/intentional-divergence.json",
-  "generated_at_utc": "2026-05-01T05:12:01.793136+00:00",
+  "divergence_file": "C:\\Users\\15059\\hermes-agent-ultra\\docs\\parity\\intentional-divergence.json",
+  "generated_at_utc": "2026-05-20T05:50:19.925646+00:00",
   "items": [
     {
       "errors": [],
@@ -58,7 +58,7 @@
       "errors": [],
       "id": "rust-skills-catalog-governance",
       "last_reviewed": "2026-04-21",
-      "matched_files": 743,
+      "matched_files": 869,
       "matched_sample": [
         "optional-skills/DESCRIPTION.md",
         "optional-skills/autonomous-ai-agents/DESCRIPTION.md",
@@ -66,6 +66,10 @@
         "optional-skills/autonomous-ai-agents/honcho/SKILL.md",
         "optional-skills/blockchain/base/SKILL.md",
         "optional-skills/blockchain/base/scripts/base_client.py",
+        "optional-skills/blockchain/evm/SKILL.md",
+        "optional-skills/blockchain/evm/scripts/evm_client.py",
+        "optional-skills/blockchain/hyperliquid/SKILL.md",
+        "optional-skills/blockchain/hyperliquid/scripts/hyperliquid_client.py",
         "optional-skills/blockchain/solana/SKILL.md",
         "optional-skills/blockchain/solana/scripts/solana_client.py",
         "optional-skills/communication/DESCRIPTION.md",
@@ -75,11 +79,7 @@
         "optional-skills/creative/concept-diagrams/SKILL.md",
         "optional-skills/creative/concept-diagrams/examples/apartment-floor-plan-conversion.md",
         "optional-skills/creative/concept-diagrams/examples/automated-password-reset-flow.md",
-        "optional-skills/creative/concept-diagrams/examples/autonomous-llm-research-agent-flow.md",
-        "optional-skills/creative/concept-diagrams/examples/banana-journey-tree-to-smoothie.md",
-        "optional-skills/creative/concept-diagrams/examples/commercial-aircraft-structure.md",
-        "optional-skills/creative/concept-diagrams/examples/cpu-ooo-microarchitecture.md",
-        "optional-skills/creative/concept-diagrams/examples/electricity-grid-flow.md"
+        "optional-skills/creative/concept-diagrams/examples/autonomous-llm-research-agent-flow.md"
       ],
       "overdue": false,
       "owner": "sheawinkler",
@@ -92,7 +92,7 @@
       "errors": [],
       "id": "rust-cli-tui-primary-ux-surface",
       "last_reviewed": "2026-04-21",
-      "matched_files": 715,
+      "matched_files": 833,
       "matched_sample": [
         "ui-tui/.gitignore",
         "ui-tui/.prettierrc",
@@ -121,15 +121,124 @@
       "status": "approved",
       "ticket": 22,
       "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-orchestration-split",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 3,
+      "matched_sample": [
+        "crates/hermes-agent/src/conversation_loop.rs",
+        "crates/hermes-cli/src/main.rs",
+        "crates/hermes-http/src/lib.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-08-20",
+      "status": "approved",
+      "ticket": 30,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-python-runtime-prelude",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 1,
+      "matched_sample": [
+        "crates/hermes-agent/src/agent_loop.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-08-20",
+      "status": "approved",
+      "ticket": 31,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-codex-full-turn-bypass",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 2,
+      "matched_sample": [
+        "crates/hermes-agent/src/api_bridge.rs",
+        "crates/hermes-agent/src/python_alignment.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-08-20",
+      "status": "approved",
+      "ticket": 32,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-iteration-grace",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 1,
+      "matched_sample": [
+        "crates/hermes-agent/src/agent_loop.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-07-20",
+      "status": "approved",
+      "ticket": 33,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-nous-rate-guard",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 1,
+      "matched_sample": [
+        "crates/hermes-agent/src/providers_extra.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-07-20",
+      "status": "approved",
+      "ticket": 34,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-provider-recovery-deferred",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 2,
+      "matched_sample": [
+        "crates/hermes-agent/src/agent_loop.rs",
+        "crates/hermes-agent/src/fallback.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-08-20",
+      "status": "approved",
+      "ticket": 35,
+      "warnings": []
+    },
+    {
+      "errors": [],
+      "id": "run-conversation-file-mutation-verifier",
+      "last_reviewed": "2026-05-20",
+      "matched_files": 1,
+      "matched_sample": [
+        "crates/hermes-agent/src/conversation_loop.rs"
+      ],
+      "overdue": false,
+      "owner": "sheawinkler",
+      "review_date": "2026-07-20",
+      "status": "approved",
+      "ticket": 36,
+      "warnings": []
     }
   ],
   "summary": {
     "errors": 0,
-    "items": 5,
-    "local_paths": 506,
+    "items": 12,
+    "local_paths": 3238,
     "review_overdue": 0,
     "unowned": 0,
-    "upstream_paths": 2899,
+    "upstream_paths": 3588,
     "warnings": 0
   }
 }

@@ -2,7 +2,7 @@
 
 > **目标**：在 **8 周内（单人 + AI）** 或 **5 周内（双人 + AI）** 让 `hermes-agent-rust` 达到与 `hermes-agent` (Python) **用户感知 100% 功能对等**。
 >
-> **基准**：Python `NousResearch/hermes-agent@v2026.4.13`
+> **基准**：Python "C:\\Users\\15059\\hermes-agent" commit: `1335ce996d000def7a93e33853606de693c06f7d` 
 > **交付定义**：每个模块通过 Python fixture 对照测试 + 端到端集成测试
 
 ---

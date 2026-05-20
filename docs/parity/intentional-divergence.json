@@ -79,6 +79,108 @@
         "ui-tui/",
         "website/"
       ]
+    },
+    {
+      "id": "run-conversation-orchestration-split",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "Rust splits run_conversation into conversation_loop (B/E) plus run_prepared/run_stream_prepared (C-D) instead of a single monolithic function.",
+      "owner": "sheawinkler",
+      "ticket": 30,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-08-20",
+      "rationale": "Same user-visible turn semantics with clearer boundaries, skip_message_prelude to avoid double @file/sanitize work, and unit-testable B/E segments. Gateway wires through hermes-cli/hermes-http, not hermes-gateway crate.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/conversation_loop.rs",
+        "crates/hermes-cli/src/main.rs",
+        "crates/hermes-http/src/lib.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-python-runtime-prelude",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "No port of Python-only run_conversation prelude helpers (safe stdio, aux set_runtime_main, skill ContextVar, dead TCP cleanup).",
+      "owner": "sheawinkler",
+      "ticket": 31,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-08-20",
+      "rationale": "These address CPython REPL/gateway process edges. Rust uses tracing, explicit config, auxiliary_builder, and platform handlers; no user-visible gap for default CLI/gateway paths.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/agent_loop.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-codex-full-turn-bypass",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "No separate codex_app_server whole-turn bypass entry; Codex handled via CodexProvider and codex ack continuation in the main loop.",
+      "owner": "sheawinkler",
+      "ticket": 32,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-08-20",
+      "rationale": "Equivalent Codex task completion is covered by provider routing and codex_ack continuation tests; duplicating Python's parallel turn entry adds maintenance without changing default UX.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/api_bridge.rs",
+        "crates/hermes-agent/src/python_alignment.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-iteration-grace",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "Rust uses max_turns and handle_max_iterations without Python IterationBudget grace API call.",
+      "owner": "sheawinkler",
+      "ticket": 33,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-07-20",
+      "rationale": "Adopt if user reports hard-cut turns without summary; until then max-iteration summary path is sufficient. Revisit when 1335ce grace behavior is required by a product path.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/agent_loop.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-nous-rate-guard",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "Nous Portal RPH rate guard from Python not ported by default.",
+      "owner": "sheawinkler",
+      "ticket": 34,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-07-20",
+      "rationale": "Only needed for Nous Portal deployments. Adopt when Nous is a configured primary provider in ultra production matrix.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/providers_extra.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-provider-recovery-deferred",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "Provider-specific recovery branches (vision rejection, thinking signature, llama grammar, Anthropic long-context tier) are added incrementally via classify/fallback, not bulk-ported.",
+      "owner": "sheawinkler",
+      "ticket": 35,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-08-20",
+      "rationale": "Core retry/fallback exists in agent_loop; remaining items are failure-driven per provider. Avoids copying thousands of lines without failing fixtures.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/agent_loop.rs",
+        "crates/hermes-agent/src/fallback.rs"
+      ]
+    },
+    {
+      "id": "run-conversation-file-mutation-verifier",
+      "status": "approved",
+      "workstream": "WS2",
+      "summary": "Python turn-end file-mutation verifier footer not mirrored verbatim.",
+      "owner": "sheawinkler",
+      "ticket": 36,
+      "last_reviewed": "2026-05-20",
+      "review_date": "2026-07-20",
+      "rationale": "Ultra relies on tool policy engine and checkpoint tooling for risky writes. Adopt footer nudge if security review requires parity with Python post-turn audit text.",
+      "path_prefixes": [
+        "crates/hermes-agent/src/conversation_loop.rs"
+      ]
     }
   ]
 }
