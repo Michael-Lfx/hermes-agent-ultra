@@ -17,6 +17,15 @@ const METADATA_HOSTNAMES: [&str; 3] = [
     "metadata.internal",
 ];
 
+/// Exact HTTPS hostnames for known platform media CDNs (no subdomain variants).
+const TRUSTED_CDN_EXACT_HOSTS: [&str; 1] = ["multimedia.nt.qq.com.cn"];
+
+/// HTTPS hostname suffixes for platform media CDNs (`host == suffix` or `host.ends_with(suffix)`).
+const TRUSTED_CDN_SUFFIX_HOSTS: [&str; 1] = [".cdn.weixin.qq.com"];
+
+/// Tencent COS buckets: `*.cos.<region>.myqcloud.com`.
+const TRUSTED_CDN_COS_SUFFIX: &str = ".myqcloud.com";
+
 static ALLOW_PRIVATE_URLS_CACHE: Mutex<Option<bool>> = Mutex::new(None);
 
 fn parse_bool_like(raw: &str) -> Option<bool> {
@@ -210,6 +219,48 @@ fn is_metadata_hostname(host: &str) -> bool {
     METADATA_HOSTNAMES.contains(&host)
 }
 
+/// Whether `host` is a known platform attachment CDN (HTTPS only).
+///
+/// Trusted hosts may resolve to private/Fake-IP addresses (e.g. Clash `198.18.x.x`)
+/// while still being safe to fetch via the local proxy stack.
+fn is_trusted_platform_cdn_host(host: &str, scheme: &str) -> bool {
+    if scheme != "https" {
+        return false;
+    }
+    let host = host.to_ascii_lowercase();
+    if TRUSTED_CDN_EXACT_HOSTS.contains(&host.as_str()) {
+        return true;
+    }
+    if host.ends_with(TRUSTED_CDN_COS_SUFFIX) && host.contains(".cos.") {
+        return true;
+    }
+    TRUSTED_CDN_SUFFIX_HOSTS
+        .iter()
+        .any(|suffix| host == suffix.trim_start_matches('.') || host.ends_with(suffix))
+}
+
+fn validate_resolved_ips(
+    host: &str,
+    ips: &[IpAddr],
+    scheme: &str,
+    allow_private_urls: bool,
+) -> Result<(), GatewayError> {
+    let trusted_cdn = is_trusted_platform_cdn_host(host, scheme);
+    for ip in ips {
+        if trusted_cdn {
+            if is_always_blocked_ip(ip) {
+                return Err(GatewayError::ConnectionFailed(format!(
+                    "URL resolves to cloud metadata endpoint: {} -> {}",
+                    host, ip
+                )));
+            }
+        } else {
+            validate_ip_policy(host, ip, allow_private_urls)?;
+        }
+    }
+    Ok(())
+}
+
 fn resolve_host_ips(host: &str, port: u16) -> Result<Vec<IpAddr>, GatewayError> {
     let addrs = (host, port).to_socket_addrs().map_err(|e| {
         GatewayError::ConnectionFailed(format!("Failed to resolve host '{}': {}", host, e))
@@ -279,9 +330,11 @@ pub fn is_safe_url(url: &str) -> bool {
     }
 
     let allow_private_urls = global_allow_private_urls();
+    let scheme = parsed.scheme();
 
     if let Ok(ip) = IpAddr::from_str(host) {
-        return validate_ip_policy(host, &ip, allow_private_urls).is_ok();
+        return validate_resolved_ips(host, std::slice::from_ref(&ip), scheme, allow_private_urls)
+            .is_ok();
     }
 
     let port = parsed.port_or_known_default().unwrap_or(80);
@@ -293,14 +346,13 @@ pub fn is_safe_url(url: &str) -> bool {
         }
     };
 
-    for ip in &ips {
-        if let Err(err) = validate_ip_policy(host, ip, allow_private_urls) {
+    match validate_resolved_ips(host, &ips, scheme, allow_private_urls) {
+        Ok(()) => true,
+        Err(err) => {
             tracing::warn!("{}", err);
-            return false;
+            false
         }
     }
-
-    true
 }
 
 /// Validate a URL and return it if it passes SSRF protection checks.
@@ -334,17 +386,16 @@ pub fn validate_url(url: &str) -> Result<Url, GatewayError> {
     }
 
     let allow_private_urls = global_allow_private_urls();
+    let scheme = parsed.scheme();
 
     if let Ok(ip) = IpAddr::from_str(host) {
-        validate_ip_policy(host, &ip, allow_private_urls)?;
+        validate_resolved_ips(host, std::slice::from_ref(&ip), scheme, allow_private_urls)?;
         return Ok(parsed);
     }
 
     let port = parsed.port_or_known_default().unwrap_or(80);
     let ips = resolve_host_ips(host, port)?;
-    for ip in &ips {
-        validate_ip_policy(host, ip, allow_private_urls)?;
-    }
+    validate_resolved_ips(host, &ips, scheme, allow_private_urls)?;
 
     Ok(parsed)
 }
@@ -489,5 +540,68 @@ mod tests {
 
         assert!(validate_url("https://definitely-nonexistent.invalid").is_err());
         assert!(!is_safe_url("https://definitely-nonexistent.invalid"));
+    }
+
+    #[test]
+    fn test_trusted_cdn_host_matching() {
+        assert!(is_trusted_platform_cdn_host(
+            "multimedia.nt.qq.com.cn",
+            "https"
+        ));
+        assert!(!is_trusted_platform_cdn_host(
+            "sub.multimedia.nt.qq.com.cn",
+            "https"
+        ));
+        assert!(!is_trusted_platform_cdn_host(
+            "multimedia.nt.qq.com.cn",
+            "http"
+        ));
+        assert!(is_trusted_platform_cdn_host(
+            "ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com",
+            "https"
+        ));
+        assert!(!is_trusted_platform_cdn_host(
+            "bucket.myqcloud.com",
+            "https"
+        ));
+        assert!(is_trusted_platform_cdn_host("novac2c.cdn.weixin.qq.com", "https"));
+        assert!(!is_trusted_platform_cdn_host("evil.cdn.weixin.qq.com.evil.com", "https"));
+    }
+
+    #[test]
+    fn test_validate_resolved_ips_trusted_cdn_allows_fake_ip() {
+        let fake_ip: IpAddr = "198.18.1.90".parse().expect("parse fake-ip");
+        let host = "ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com";
+        assert!(validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "https", false).is_ok());
+
+        let qq_host = "multimedia.nt.qq.com.cn";
+        let fake_ip2: IpAddr = "198.18.0.23".parse().expect("parse fake-ip");
+        assert!(validate_resolved_ips(qq_host, std::slice::from_ref(&fake_ip2), "https", false).is_ok());
+
+        assert!(validate_resolved_ips(
+            "sub.multimedia.nt.qq.com.cn",
+            std::slice::from_ref(&fake_ip2),
+            "https",
+            false
+        )
+        .is_err());
+
+        assert!(validate_resolved_ips(
+            "example.com",
+            std::slice::from_ref(&fake_ip),
+            "https",
+            false
+        )
+        .is_err());
+
+        let metadata: IpAddr = "169.254.169.254".parse().expect("parse metadata");
+        assert!(validate_resolved_ips(host, std::slice::from_ref(&metadata), "https", false).is_err());
+    }
+
+    #[test]
+    fn test_trusted_cdn_http_scheme_blocked() {
+        let host = "ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com";
+        let fake_ip: IpAddr = "198.18.1.90".parse().expect("parse fake-ip");
+        assert!(validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "http", false).is_err());
     }
 }
