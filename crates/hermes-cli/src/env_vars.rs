@@ -10,16 +10,12 @@ use std::ffi::OsStr;
 // or under `test_env_lock`; concurrent `std::env::var` during set is rare.
 #[inline]
 pub fn set_var<K: AsRef<OsStr>, V: AsRef<OsStr>>(key: K, value: V) {
-    unsafe {
-        std::env::set_var(key, value);
-    }
+    unsafe { std::env::set_var(key, value) };
 }
 
 /// Remove a process environment variable (see [`std::env::remove_var`]).
 // SAFETY: Same as [`set_var`].
 #[inline]
-pub fn remove_var<K: AsRef<OsStr>>(key: K) {
-    unsafe {
-        std::env::remove_var(key);
-    }
+pub fn remove_var<K: AsRef<OsStr>>(key: K) {   
+    unsafe { std::env::remove_var(key) }
 }
