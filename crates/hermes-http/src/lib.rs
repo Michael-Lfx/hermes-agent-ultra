@@ -185,11 +185,12 @@ impl HttpServerState {
                                 "session has no user message for run_conversation".into(),
                             )
                         })?;
+                    let task_id = Some(ctx.session_key.clone());
                     let conv = agent
                         .run_conversation(RunConversationParams {
                             user_message,
                             conversation_history: history,
-                            task_id: None,
+                            task_id,
                             stream_callback: None,
                             persist_user_message: None,
                             tools: None,
@@ -267,11 +268,12 @@ impl HttpServerState {
                                 "session has no user message for run_conversation".into(),
                             )
                         })?;
+                    let task_id = Some(ctx.session_key.clone());
                     let conv = agent
                         .run_conversation(RunConversationParams {
                             user_message,
                             conversation_history: history,
-                            task_id: None,
+                            task_id,
                             stream_callback: Some(stream_cb),
                             persist_user_message: None,
                             tools: None,
