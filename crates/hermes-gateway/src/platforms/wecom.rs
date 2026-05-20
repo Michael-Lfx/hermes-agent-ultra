@@ -953,7 +953,8 @@ impl WeComAdapter {
         })
     }
 
-    async fn extract_media(inner: &WeComInner, body: &Value) -> (Vec<String>, Vec<String>) {
+    /// Collect inbound image/file attachment refs from a WeCom callback body.
+    fn collect_inbound_media_refs(body: &Value) -> Vec<(String, Value)> {
         let mut refs: Vec<(String, Value)> = Vec::new();
         let msgtype = body
             .get("msgtype")
@@ -1020,6 +1021,19 @@ impl WeComAdapter {
                 }
             }
         }
+
+        refs
+    }
+
+    fn body_expects_inbound_media(body: &Value) -> bool {
+        !Self::collect_inbound_media_refs(body).is_empty()
+    }
+
+    const INBOUND_MEDIA_DOWNLOAD_FAILED_TEXT: &'static str =
+        "[wecom: 图片/文件下载失败，请重试或附带文字说明]";
+
+    async fn extract_media(inner: &WeComInner, body: &Value) -> (Vec<String>, Vec<String>) {
+        let refs = Self::collect_inbound_media_refs(body);
 
         let mut media_urls = Vec::new();
         let mut media_types = Vec::new();
@@ -1258,7 +1272,16 @@ impl WeComAdapter {
             }
         }
         if text.trim().is_empty() && media_urls.is_empty() {
-            return;
+            if Self::body_expects_inbound_media(&body) {
+                text = Self::INBOUND_MEDIA_DOWNLOAD_FAILED_TEXT.to_string();
+                warn!(
+                    chat_id = %chat_id,
+                    msg_id = %msg_id,
+                    "WeCom inbound media present but cache empty; continuing with fallback text"
+                );
+            } else {
+                return;
+            }
         }
 
         let incoming = IncomingMessage {
@@ -2072,6 +2095,39 @@ mod tests {
         assert!(!check.rejected);
         assert!(check.downgraded);
         assert_eq!(check.final_type, "file");
+    }
+
+    #[test]
+    fn body_expects_inbound_media_image_only() {
+        let body = serde_json::json!({
+            "msgtype": "image",
+            "image": { "url": "https://ww-aibot-img-1.cos.ap-guangzhou.myqcloud.com/x" }
+        });
+        assert!(WeComAdapter::body_expects_inbound_media(&body));
+        assert_eq!(WeComAdapter::collect_inbound_media_refs(&body).len(), 1);
+    }
+
+    #[test]
+    fn body_expects_inbound_media_false_for_text_only() {
+        let body = serde_json::json!({
+            "msgtype": "text",
+            "text": { "content": "hello" }
+        });
+        assert!(!WeComAdapter::body_expects_inbound_media(&body));
+    }
+
+    #[test]
+    fn image_only_incoming_should_forward_when_media_cached() {
+        let body = serde_json::json!({
+            "msgtype": "image",
+            "image": { "url": "https://example.com/a.png" }
+        });
+        let (text, _) = WeComAdapter::extract_text(&body);
+        assert!(text.is_empty());
+        assert!(WeComAdapter::body_expects_inbound_media(&body));
+        // Happy path: non-empty media_urls + empty text must not be treated as empty message.
+        let media_urls = vec!["/tmp/wecom/img.png".to_string()];
+        assert!(!(text.is_empty() && media_urls.is_empty()));
     }
 
     #[test]
