@@ -38,3 +38,4 @@ hex = "0.4"
 [dev-dependencies]
 proptest = { workspace = true }
 tempfile = "3"
+tokio-stream = { workspace = true }

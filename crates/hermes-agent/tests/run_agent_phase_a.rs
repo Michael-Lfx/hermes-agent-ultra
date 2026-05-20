@@ -396,3 +396,106 @@ async fn phase_a7_empty_llm_retry_without_appending_empty_assistant() {
 }
 
 // --- Phase A-8: streaming interrupt -----------------------------------------
+
+struct SlowStreamProvider;
+
+#[async_trait]
+impl hermes_core::LlmProvider for SlowStreamProvider {
+    async fn chat_completion(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolSchema],
+        _max_tokens: Option<u32>,
+        _temperature: Option<f64>,
+        _model: Option<&str>,
+        _extra_body: Option<&serde_json::Value>,
+    ) -> Result<LlmResponse, AgentError> {
+        Ok(LlmResponse {
+            message: Message::assistant("unused"),
+            usage: None,
+            model: "test".into(),
+            finish_reason: Some("stop".into()),
+        })
+    }
+
+    fn chat_completion_stream(
+        &self,
+        _messages: &[Message],
+        _tools: &[ToolSchema],
+        _max_tokens: Option<u32>,
+        _temperature: Option<f64>,
+        _model: Option<&str>,
+        _extra_body: Option<&serde_json::Value>,
+    ) -> futures::stream::BoxStream<'static, Result<StreamChunk, AgentError>> {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            for i in 0..8 {
+                let _ = tx
+                    .send(Ok(StreamChunk {
+                        delta: Some(StreamDelta {
+                            content: Some(format!("part{i} ")),
+                            tool_calls: None,
+                            extra: None,
+                        }),
+                        finish_reason: None,
+                        usage: None,
+                    }))
+                    .await;
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let _ = tx
+                .send(Ok(StreamChunk {
+                    delta: None,
+                    finish_reason: Some("stop".into()),
+                    usage: None,
+                }))
+                .await;
+        });
+        ReceiverStream::new(rx).boxed()
+    }
+}
+
+#[tokio::test]
+async fn phase_a8_stream_interrupt_forwards_deltas_and_stops() {
+    let interrupt = InterruptController::new();
+    let interrupt_handle = interrupt.clone();
+    let cfg = AgentConfig {
+        max_turns: 2,
+        ..AgentConfig::default()
+    };
+    let agent = AgentLoop::with_interrupt(
+        cfg,
+        Arc::new(ToolRegistry::new()),
+        Arc::new(SlowStreamProvider),
+        interrupt,
+    );
+
+    let deltas = Arc::new(Mutex::new(Vec::new()));
+    let deltas_ref = deltas.clone();
+
+    let run = tokio::spawn(async move {
+        agent
+            .run_stream(
+                vec![Message::user("stream")],
+                None,
+                Some(Box::new(move |chunk| {
+                    if let Some(delta) = chunk.delta {
+                        if let Some(text) = delta.content {
+                            deltas_ref.lock().expect("deltas lock").push(text);
+                        }
+                    }
+                })),
+            )
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    interrupt_handle.interrupt(None);
+
+    let result = run.await.expect("join").expect("run_stream ok");
+    assert!(result.interrupted);
+    let parts = deltas.lock().expect("deltas lock");
+    assert!(!parts.is_empty(), "expected stream deltas before interrupt");
+}
+
+// --- Phase A-10: AgentResult cost + interrupted -----------------------------
