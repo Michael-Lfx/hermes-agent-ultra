@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 // hermes_home
 // ---------------------------------------------------------------------------
 
-const DEFAULT_HOME_DIR: &str = ".hermes-agent-ultra";
+const DEFAULT_HOME_DIR: &str = ".hermes";
 const LEGACY_HOME_DIR: &str = ".hermes";
 
 /// Return the hermes home directory.
