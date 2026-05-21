@@ -29,6 +29,7 @@ use crate::commands::{handle_command, GatewayCommandResult};
 use crate::dm::{DmDecision, DmManager};
 use crate::hooks::{HookEvent, HookRegistry};
 use crate::platforms::helpers::extract_inline_images;
+use hermes_tools::tools::messaging::MessagingSessionContext;
 use crate::session::SessionManager;
 use crate::stream::{StreamConfig, StreamManager};
 
@@ -267,6 +268,8 @@ pub struct Gateway {
     platform_access_policies: RwLock<HashMap<String, PlatformAccessPolicy>>,
     /// Optional agent-layer inbound preparer (vision routing, transcription).
     inbound_preparer: RwLock<Option<Arc<dyn InboundMessagePreparer>>>,
+    /// Current inbound channel for `send_message` session fallback.
+    messaging_session: RwLock<Option<Arc<MessagingSessionContext>>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -346,12 +349,18 @@ impl Gateway {
             hook_registry: RwLock::new(None),
             platform_access_policies: RwLock::new(HashMap::new()),
             inbound_preparer: RwLock::new(None),
+            messaging_session: RwLock::new(None),
         }
     }
 
     /// Register the agent inbound preparer (vision enrich, native multimodal, etc.).
     pub async fn set_inbound_preparer(&self, preparer: Arc<dyn InboundMessagePreparer>) {
         *self.inbound_preparer.write().await = Some(preparer);
+    }
+
+    /// Share session context with `send_message` for automatic platform/recipient fallback.
+    pub async fn set_messaging_session_context(&self, ctx: Arc<MessagingSessionContext>) {
+        *self.messaging_session.write().await = Some(ctx);
     }
 
     fn incoming_to_event(incoming: &IncomingMessage) -> InboundEvent {
@@ -552,6 +561,9 @@ impl Gateway {
     /// DM check → session lookup → agent loop → response.
     pub async fn route_message(&self, incoming: &IncomingMessage) -> Result<(), GatewayError> {
         let route_start = Instant::now();
+        if let Some(ctx) = self.messaging_session.read().await.as_ref() {
+            ctx.set(&incoming.platform, &incoming.chat_id);
+        }
         debug!(
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,

@@ -27,6 +27,87 @@ impl Default for LocalCodeExecutionBackend {
     }
 }
 
+/// Resolve Python interpreter candidates (first existing wins at spawn time).
+fn python_interpreter_candidates() -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::new();
+    if let Ok(custom) = std::env::var("HERMES_PYTHON") {
+        let t = custom.trim();
+        if !t.is_empty() {
+            out.push(vec![t.to_string()]);
+        }
+    }
+    out.push(vec!["python3".into()]);
+    out.push(vec!["python".into()]);
+    if cfg!(windows) {
+        out.push(vec!["py".into(), "-3".into()]);
+    }
+    out
+}
+
+async fn spawn_python(
+    code: &str,
+    timeout_secs: u64,
+) -> Result<(i32, Vec<u8>, Vec<u8>, String), ToolError> {
+    let candidates = python_interpreter_candidates();
+    let mut tried: Vec<String> = Vec::new();
+    let mut last_err: Option<String> = None;
+
+    for argv0 in candidates {
+        let program = &argv0[0];
+        tried.push(if argv0.len() > 1 {
+            argv0.join(" ")
+        } else {
+            program.clone()
+        });
+        let mut cmd = TokioCommand::new(program);
+        for arg in &argv0[1..] {
+            cmd.arg(arg);
+        }
+        cmd.arg("-c").arg(code);
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let spawn_result = cmd.spawn();
+        let child = match spawn_result {
+            Ok(c) => c,
+            Err(e) => {
+                last_err = Some(format!("Failed to spawn {}: {}", program, e));
+                continue;
+            }
+        };
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(timeout_secs),
+            async {
+                let output = child.wait_with_output().await.map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Failed to wait for process: {}", e))
+                })?;
+                Ok::<_, ToolError>((
+                    output.status.code().unwrap_or(-1),
+                    output.stdout,
+                    output.stderr,
+                    program.clone(),
+                ))
+            },
+        )
+        .await;
+
+        return match result {
+            Ok(Ok(tuple)) => Ok(tuple),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(ToolError::Timeout(format!(
+                "Code execution timed out after {}s",
+                timeout_secs
+            ))),
+        };
+    }
+
+    Err(ToolError::ExecutionFailed(format!(
+        "Failed to spawn Python (tried: {}). Last error: {}",
+        tried.join(", "),
+        last_err.unwrap_or_else(|| "no interpreter found".into())
+    )))
+}
+
 #[async_trait]
 impl CodeExecutionBackend for LocalCodeExecutionBackend {
     async fn execute(
@@ -38,9 +119,23 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
         let lang = language.unwrap_or("python");
         let timeout_secs = timeout.unwrap_or(self.default_timeout_secs);
 
+        if matches!(lang, "python" | "python3") {
+            let (exit_code, stdout, stderr, interpreter) =
+                spawn_python(code, timeout_secs).await?;
+            let stdout_str = String::from_utf8_lossy(&stdout).to_string();
+            let stderr_str = String::from_utf8_lossy(&stderr).to_string();
+            return Ok(json!({
+                "exit_code": exit_code,
+                "stdout": stdout_str,
+                "stderr": stderr_str,
+                "language": lang,
+                "interpreter": interpreter,
+            })
+            .to_string());
+        }
+
         let (interpreter, flag) = match lang {
-            "python" | "python3" => ("python3", "-c"),
-            "javascript" | "js" | "node" => ("node", "-e"),
+            "javascript" | "js" | "node" => ("node", "-c"),
             "typescript" | "ts" => ("npx", ""),
             "bash" | "sh" => ("bash", "-c"),
             other => {
@@ -53,7 +148,6 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
 
         let mut cmd = TokioCommand::new(interpreter);
         if lang == "typescript" {
-            // For TypeScript, write to temp file and run with ts-node
             let tmp = std::env::temp_dir().join(format!("hermes_exec_{}.ts", uuid::Uuid::new_v4()));
             tokio::fs::write(&tmp, code).await.map_err(|e| {
                 ToolError::ExecutionFailed(format!("Failed to write temp file: {}", e))
@@ -99,5 +193,19 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
                 timeout_secs
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn python_candidates_include_hermes_python_and_fallbacks() {
+        std::env::set_var("HERMES_PYTHON", "/custom/python");
+        let cands = python_interpreter_candidates();
+        assert_eq!(cands[0], vec!["/custom/python".to_string()]);
+        assert!(cands.iter().any(|c| c == &vec!["python3".to_string()]));
+        std::env::remove_var("HERMES_PYTHON");
     }
 }

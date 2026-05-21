@@ -20321,10 +20321,15 @@ pub async fn handle_cli_skills(
             }
         }
         "audit" => {
-            println!("Security audit of installed skills");
+            let scan_dir = name
+                .as_ref()
+                .map(PathBuf::from)
+                .filter(|p| p.is_dir())
+                .unwrap_or_else(|| skills_dir.clone());
+            println!("Security audit of installed skills ({})", scan_dir.display());
             println!("==================================\n");
-            if !skills_dir.exists() {
-                println!("No skills installed.");
+            if !scan_dir.exists() {
+                println!("No skills directory at {}.", scan_dir.display());
                 return Ok(());
             }
 
@@ -20420,7 +20425,7 @@ pub async fn handle_cli_skills(
                 }
             }
 
-            if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            if let Ok(entries) = std::fs::read_dir(&scan_dir) {
                 for entry in entries.filter_map(|e| e.ok()) {
                     let path = entry.path();
                     if !path.is_dir() {

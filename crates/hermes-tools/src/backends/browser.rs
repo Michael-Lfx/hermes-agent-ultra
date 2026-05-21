@@ -5,6 +5,9 @@
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 
 use crate::tools::browser::BrowserBackend;
 use hermes_core::ToolError;
@@ -37,6 +40,7 @@ impl CamoFoxBrowserBackend {
     pub fn from_env() -> Self {
         let endpoint = std::env::var("CAMOFOX_CDP_URL")
             .or_else(|_| std::env::var("CHROME_CDP_URL"))
+            .or_else(|_| std::env::var("BROWSER_CDP_URL"))
             .unwrap_or_else(|_| "http://localhost:9222".to_string());
         let profile = std::env::var("CAMOFOX_PROFILE").unwrap_or_else(|_| "default".to_string());
         Self::new(endpoint, profile)
@@ -51,19 +55,136 @@ impl CdpBrowserBackend {
         }
     }
 
-    /// Create from environment variable `CHROME_CDP_URL` or default localhost.
+    /// Resolve CDP HTTP endpoint: `CHROME_CDP_URL`, then `BROWSER_CDP_URL`, else localhost.
+    pub fn cdp_endpoint_from_env() -> String {
+        std::env::var("CHROME_CDP_URL")
+            .or_else(|_| std::env::var("BROWSER_CDP_URL"))
+            .unwrap_or_else(|_| "http://localhost:9222".to_string())
+    }
+
+    /// Create from environment variables or default localhost.
     pub fn from_env() -> Self {
-        let endpoint =
-            std::env::var("CHROME_CDP_URL").unwrap_or_else(|_| "http://localhost:9222".to_string());
-        Self::new(endpoint)
+        Self::new(Self::cdp_endpoint_from_env())
+    }
+
+    /// Probe CDP HTTP endpoint (`/json/version`).
+    pub async fn probe_endpoint(client: &reqwest::Client, endpoint: &str) -> bool {
+        let url = format!(
+            "{}/json/version",
+            endpoint.trim_end_matches('/')
+        );
+        client
+            .get(&url)
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
+    fn auto_start_enabled() -> bool {
+        matches!(
+            std::env::var("HERMES_BROWSER_AUTO_START")
+                .ok()
+                .map(|s| s.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("1") | Some("true") | Some("yes") | Some("on")
+        )
+    }
+
+    fn default_chrome_paths() -> Vec<PathBuf> {
+        let mut paths = Vec::new();
+        if cfg!(windows) {
+            if let Ok(pf) = std::env::var("ProgramFiles") {
+                paths.push(
+                    PathBuf::from(pf)
+                        .join("Google")
+                        .join("Chrome")
+                        .join("Application")
+                        .join("chrome.exe"),
+                );
+            }
+            if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+                paths.push(
+                    PathBuf::from(pf86)
+                        .join("Google")
+                        .join("Chrome")
+                        .join("Application")
+                        .join("chrome.exe"),
+                );
+            }
+        } else if cfg!(target_os = "macos") {
+            paths.push(PathBuf::from(
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            ));
+        } else {
+            paths.push(PathBuf::from("google-chrome"));
+            paths.push(PathBuf::from("chromium"));
+            paths.push(PathBuf::from("chromium-browser"));
+        }
+        paths
+    }
+
+    fn debug_port_from_endpoint(endpoint: &str) -> u16 {
+        endpoint
+            .trim_end_matches('/')
+            .rsplit_once(':')
+            .and_then(|(_, port)| port.parse().ok())
+            .unwrap_or(9222)
+    }
+
+    async fn try_auto_start_chrome(endpoint: &str) -> Result<(), ToolError> {
+        if !Self::auto_start_enabled() {
+            return Err(ToolError::ExecutionFailed(
+                "Chrome CDP not reachable. Start Chrome with --remote-debugging-port=9222 \
+                 or set HERMES_BROWSER_AUTO_START=1"
+                    .into(),
+            ));
+        }
+        let port = Self::debug_port_from_endpoint(endpoint);
+        let user_data = std::env::temp_dir().join(format!("hermes-chrome-debug-{port}"));
+        let _ = std::fs::create_dir_all(&user_data);
+        let chrome = Self::default_chrome_paths()
+            .into_iter()
+            .find(|p| p.exists())
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "HERMES_BROWSER_AUTO_START=1 but Chrome executable not found".into(),
+                )
+            })?;
+        let mut cmd = tokio::process::Command::new(chrome);
+        cmd.arg(format!("--remote-debugging-port={port}"))
+            .arg(format!("--user-data-dir={}", user_data.display()))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        cmd.spawn().map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to launch Chrome for CDP: {e}"))
+        })?;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            if Self::probe_endpoint(&reqwest::Client::new(), endpoint).await {
+                return Ok(());
+            }
+        }
+        Err(ToolError::ExecutionFailed(
+            "Chrome auto-start launched but CDP endpoint did not become ready in time".into(),
+        ))
+    }
+
+    async fn ensure_connected(&self) -> Result<(), ToolError> {
+        if Self::probe_endpoint(&self.client, &self.endpoint).await {
+            return Ok(());
+        }
+        Self::try_auto_start_chrome(&self.endpoint).await
     }
 
     /// Send a CDP command via HTTP (simplified - real impl would use WebSocket).
     async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+        self.ensure_connected().await?;
         // Get the first available page target
         let targets_resp = self
             .client
-            .get(format!("{}/json", self.endpoint))
+            .get(format!("{}/json", self.endpoint.trim_end_matches('/')))
             .send()
             .await
             .map_err(|e| {

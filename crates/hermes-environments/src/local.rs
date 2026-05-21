@@ -16,6 +16,54 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use hermes_core::{AgentError, CommandOutput, TerminalBackend};
 
+/// Extensions that must not be read as UTF-8 text (images, archives, binaries).
+const BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "heic", "heif", "avif",
+    "pdf", "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "exe", "dll", "so", "dylib", "bin",
+    "wasm", "mp3", "mp4", "wav", "ogg", "webm", "mov", "avi", "mkv", "flac", "aac", "woff",
+    "woff2", "ttf", "otf", "eot", "pyc", "class", "o", "a", "db", "sqlite", "sqlite3",
+];
+
+fn binary_read_error(path: &str, ext: &str) -> AgentError {
+    let hint = if matches!(
+        ext,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "heic"
+            | "heif" | "avif"
+    ) {
+        "Use vision_analyze for images instead of read_file."
+    } else {
+        "Use appropriate tools for binary files (not read_file)."
+    };
+    AgentError::Io(format!(
+        "Cannot read binary file '{path}' (.{ext}). {hint}"
+    ))
+}
+
+fn extension_lower(path: &std::path::Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+}
+
+fn is_blocked_binary_extension(ext: &str) -> bool {
+    BINARY_EXTENSIONS.contains(&ext)
+}
+
+fn sample_looks_binary(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    if bytes.contains(&0) {
+        return true;
+    }
+    let check_len = bytes.len().min(8192);
+    let non_text = bytes[..check_len]
+        .iter()
+        .filter(|&&b| b < 0x09 || (b > 0x0d && b < 0x20))
+        .count();
+    non_text * 10 > check_len
+}
+
 const PROCESS_OUTPUT_WINDOW_CHARS: usize = 200_000;
 const PROCESS_PREVIEW_CHARS: usize = 1_000;
 const PROCESS_WAIT_OUTPUT_CHARS: usize = 2_000;
@@ -878,9 +926,22 @@ impl TerminalBackend for LocalBackend {
         limit: Option<u64>,
     ) -> Result<String, AgentError> {
         let resolved = resolve_path(path)?;
-        let content = tokio::fs::read_to_string(&resolved)
+        if let Some(ext) = extension_lower(&resolved) {
+            if is_blocked_binary_extension(&ext) {
+                return Err(binary_read_error(path, &ext));
+            }
+        }
+        let raw = tokio::fs::read(&resolved)
             .await
             .map_err(|e| AgentError::Io(format!("Failed to read file '{}': {}", path, e)))?;
+        if sample_looks_binary(&raw) {
+            let ext = extension_lower(&resolved).unwrap_or_else(|| "bin".into());
+            return Err(binary_read_error(path, &ext));
+        }
+        let content = String::from_utf8(raw).map_err(|_| {
+            let ext = extension_lower(&resolved).unwrap_or_else(|| "unknown".into());
+            binary_read_error(path, &ext)
+        })?;
 
         let lines: Vec<&str> = content.lines().collect();
 
@@ -1455,6 +1516,35 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("hello from stdin"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_png_extension() {
+        let td = tempdir().unwrap();
+        let png = td.path().join("test.png");
+        std::fs::write(&png, &[0x89, 0x50, 0x4E, 0x47]).unwrap();
+        let backend = LocalBackend::default();
+        let err = backend
+            .read_file(png.to_str().unwrap(), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Cannot read binary file"));
+        assert!(err.contains("vision_analyze"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_rejects_binary_content_without_known_ext() {
+        let td = tempdir().unwrap();
+        let bin = td.path().join("data.dat");
+        std::fs::write(&bin, &[0x00, 0x01, 0x02, 0x03]).unwrap();
+        let backend = LocalBackend::default();
+        let err = backend
+            .read_file(bin.to_str().unwrap(), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Cannot read binary file"));
     }
 
     #[tokio::test]

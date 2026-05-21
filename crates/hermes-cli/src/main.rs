@@ -2765,6 +2765,10 @@ async fn run_gateway(
                 skill_provider.clone(),
             )
             .await;
+            let messaging_session = hermes_tools::tools::messaging::MessagingSessionContext::new();
+            gateway
+                .set_messaging_session_context(messaging_session.clone())
+                .await;
             let clarify_dispatcher = ClarifyDispatcher::new();
             let tool_registry_for_msg = tool_registry.clone();
             let tool_registry_for_stream = tool_registry.clone();
@@ -2792,7 +2796,7 @@ async fn run_gateway(
                                         .flatten()
                                 })
                                 .unwrap_or_default();
-                            let _ = pending.respond(answer);
+                            let _ = pending.respond(&clarify, answer).await;
                             return Ok(
                                 "Clarification received. Continuing task execution...".to_string()
                             );
@@ -3011,7 +3015,7 @@ async fn run_gateway(
                                         .flatten()
                                 })
                                 .unwrap_or_default();
-                            let _ = pending.respond(answer);
+                            let _ = pending.respond(&clarify, answer).await;
                             return Ok(
                                 "Clarification received. Continuing task execution...".to_string()
                             );
@@ -3276,7 +3280,11 @@ async fn run_gateway(
             cron_scheduler.start().await;
             let cron_scheduler = Arc::new(cron_scheduler);
             wire_cron_scheduler_backend(&tool_registry, cron_scheduler.clone());
-            wire_gateway_messaging_backend(&tool_registry, gateway.clone());
+            wire_gateway_messaging_backend(
+                &tool_registry,
+                gateway.clone(),
+                messaging_session.clone(),
+            );
             wire_gateway_clarify_backend(&tool_registry, clarify_dispatcher);
             let webhooks_path = hermes_state_root(&cli).join("webhooks.json");
             tracing::info!(

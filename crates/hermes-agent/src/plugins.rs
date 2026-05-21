@@ -122,9 +122,22 @@ fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(), String> 
             require_type(obj, "has_tool_calls", "boolean", Value::is_boolean)?;
         }
         HookType::PreApiRequest => {
-            require_type(obj, "attempt", "number", Value::is_number)?;
+            let has_attempt = obj.get("attempt").map(Value::is_number).unwrap_or(false);
+            let has_api_call_count = obj
+                .get("api_call_count")
+                .map(Value::is_number)
+                .unwrap_or(false);
+            if !has_attempt && !has_api_call_count {
+                return Err(
+                    "missing required field: attempt (or api_call_count)".to_string(),
+                );
+            }
             require_type(obj, "model", "string", Value::is_string)?;
-            require_type(obj, "stream", "boolean", Value::is_boolean)?;
+            if let Some(v) = obj.get("stream") {
+                if !v.is_boolean() {
+                    return Err("field 'stream' must be boolean".to_string());
+                }
+            }
             optional_string_or_null(obj, "route_label")?;
         }
         HookType::PostApiRequest => {
@@ -150,15 +163,27 @@ fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(), String> 
             optional_string_or_null(obj, "session_id")?;
         }
         HookType::OnSessionEnd => {
-            require_type(obj, "turns", "number", Value::is_number)?;
-            require_type(obj, "finished_naturally", "boolean", Value::is_boolean)?;
+            let has_finished = obj
+                .get("finished_naturally")
+                .map(Value::is_boolean)
+                .unwrap_or(false);
+            let has_completed = obj.get("completed").map(Value::is_boolean).unwrap_or(false);
+            if !has_finished && !has_completed {
+                return Err(
+                    "missing required field: finished_naturally (or completed)".to_string(),
+                );
+            }
             require_type(obj, "interrupted", "boolean", Value::is_boolean)?;
-            require_type(
-                obj,
-                "session_started_hooks_fired",
-                "boolean",
-                Value::is_boolean,
-            )?;
+            if let Some(v) = obj.get("turns") {
+                if !v.is_number() {
+                    return Err("field 'turns' must be number".to_string());
+                }
+            }
+            if let Some(v) = obj.get("session_started_hooks_fired") {
+                if !v.is_boolean() {
+                    return Err("field 'session_started_hooks_fired' must be boolean".to_string());
+                }
+            }
             optional_string_or_null(obj, "session_id")?;
         }
         HookType::OnSessionFinalize => {
@@ -1019,7 +1044,25 @@ dependencies:
             "stream": false
         });
         let err = validate_hook_payload(HookType::PreApiRequest, &ctx).unwrap_err();
-        assert!(err.contains("missing required field: attempt"));
+        assert!(err.contains("attempt"));
+    }
+
+    #[test]
+    fn test_validate_hook_payload_accepts_api_call_count() {
+        let ctx = serde_json::json!({
+            "api_call_count": 2,
+            "model": "gpt-4o"
+        });
+        assert!(validate_hook_payload(HookType::PreApiRequest, &ctx).is_ok());
+    }
+
+    #[test]
+    fn test_validate_hook_payload_accepts_on_session_end_completed() {
+        let ctx = serde_json::json!({
+            "completed": true,
+            "interrupted": false
+        });
+        assert!(validate_hook_payload(HookType::OnSessionEnd, &ctx).is_ok());
     }
 
     #[test]

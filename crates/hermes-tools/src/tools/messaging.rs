@@ -17,7 +17,7 @@
 //! bare IDs), splits long messages at safe markdown boundaries, handles
 //! media attachments, and implements retry with fallback.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -275,6 +275,37 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Session context (gateway injects current inbound channel)
+// ---------------------------------------------------------------------------
+
+/// Per-request messaging session (platform + chat_id) set by the gateway before agent turns.
+#[derive(Debug, Default)]
+pub struct MessagingSessionContext {
+    inner: RwLock<Option<(String, String)>>,
+}
+
+impl MessagingSessionContext {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    pub fn set(&self, platform: &str, chat_id: &str) {
+        let platform = platform.trim().to_lowercase();
+        let chat_id = chat_id.trim().to_string();
+        if platform.is_empty() || chat_id.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.inner.write() {
+            *guard = Some((platform, chat_id));
+        }
+    }
+
+    pub fn get(&self) -> Option<(String, String)> {
+        self.inner.read().ok().and_then(|g| g.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SendMessageHandler — the tool the LLM invokes
 // ---------------------------------------------------------------------------
 
@@ -283,6 +314,10 @@ fn split_message(text: &str, max_len: usize) -> Vec<String> {
 pub struct SendMessageConfig {
     /// Default platform when recipient has no prefix.
     pub default_platform: Option<String>,
+    /// Explicit session platform (overrides dynamic context when set).
+    pub session_platform: Option<String>,
+    /// Explicit session chat/recipient id.
+    pub session_chat_id: Option<String>,
     /// Fallback platform if primary delivery fails.
     pub fallback_platform: Option<String>,
     /// Maximum retry attempts per delivery.
@@ -297,6 +332,8 @@ impl Default for SendMessageConfig {
     fn default() -> Self {
         Self {
             default_platform: None,
+            session_platform: None,
+            session_chat_id: None,
             fallback_platform: None,
             max_retries: 2,
             retry_delay: Duration::from_secs(1),
@@ -309,6 +346,7 @@ impl Default for SendMessageConfig {
 pub struct SendMessageHandler {
     backend: Arc<dyn MessagingBackend>,
     config: SendMessageConfig,
+    session_context: Option<Arc<MessagingSessionContext>>,
 }
 
 impl SendMessageHandler {
@@ -316,11 +354,81 @@ impl SendMessageHandler {
         Self {
             backend,
             config: SendMessageConfig::default(),
+            session_context: None,
         }
     }
 
     pub fn with_config(backend: Arc<dyn MessagingBackend>, config: SendMessageConfig) -> Self {
-        Self { backend, config }
+        Self {
+            backend,
+            config,
+            session_context: None,
+        }
+    }
+
+    pub fn with_session_context(
+        backend: Arc<dyn MessagingBackend>,
+        session_context: Arc<MessagingSessionContext>,
+    ) -> Self {
+        Self {
+            backend,
+            config: SendMessageConfig::default(),
+            session_context: Some(session_context),
+        }
+    }
+
+    fn session_channel(&self) -> Option<ResolvedChannel> {
+        if let (Some(p), Some(id)) = (
+            self.config.session_platform.as_deref(),
+            self.config.session_chat_id.as_deref(),
+        ) {
+            if !p.is_empty() && !id.is_empty() {
+                return Some(ResolvedChannel {
+                    platform: p.to_lowercase(),
+                    chat_id: id.to_string(),
+                    display_name: None,
+                });
+            }
+        }
+        self.session_context.as_ref().and_then(|ctx| {
+            ctx.get().map(|(platform, chat_id)| ResolvedChannel {
+                platform,
+                chat_id,
+                display_name: None,
+            })
+        })
+    }
+
+    fn resolve_channel_from_params(&self, params: &Value) -> Result<ResolvedChannel, ToolError> {
+        if let Some(platform) = params.get("platform").and_then(|v| v.as_str()) {
+            let recipient = params
+                .get("recipient")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidParams("Missing 'recipient' parameter".into()))?;
+            return Ok(ResolvedChannel {
+                platform: platform.to_lowercase(),
+                chat_id: recipient.to_string(),
+                display_name: None,
+            });
+        }
+        if let Some(channel_ref) = params.get("channel").and_then(|v| v.as_str()) {
+            return resolve_channel(channel_ref, self.config.default_platform.as_deref());
+        }
+        if let Some(recipient) = params.get("recipient").and_then(|v| v.as_str()) {
+            return resolve_channel(recipient, self.config.default_platform.as_deref());
+        }
+        if let Some(session) = self.session_channel() {
+            tracing::debug!(
+                platform = %session.platform,
+                chat_id = %session.chat_id,
+                "send_message using session channel fallback"
+            );
+            return Ok(session);
+        }
+        Err(ToolError::InvalidParams(
+            "Must provide either 'platform'+'recipient', 'channel', or run inside a gateway session"
+                .into(),
+        ))
     }
 
     /// Deliver a message with retry and optional fallback.
@@ -445,33 +553,19 @@ impl ToolHandler for SendMessageHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
         let message = params
             .get("message")
+            .or_else(|| params.get("text"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("Missing 'message' parameter".into()))?;
+            .ok_or_else(|| {
+                ToolError::InvalidParams(
+                    "Missing 'message' parameter (alias: 'text')".into(),
+                )
+            })?;
 
         if message.trim().is_empty() {
             return Err(ToolError::InvalidParams("Message cannot be empty".into()));
         }
 
-        // Resolve the channel
-        let channel = if let Some(platform) = params.get("platform").and_then(|v| v.as_str()) {
-            let recipient = params
-                .get("recipient")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ToolError::InvalidParams("Missing 'recipient' parameter".into()))?;
-            ResolvedChannel {
-                platform: platform.to_lowercase(),
-                chat_id: recipient.to_string(),
-                display_name: None,
-            }
-        } else if let Some(channel_ref) = params.get("channel").and_then(|v| v.as_str()) {
-            resolve_channel(channel_ref, self.config.default_platform.as_deref())?
-        } else if let Some(recipient) = params.get("recipient").and_then(|v| v.as_str()) {
-            resolve_channel(recipient, self.config.default_platform.as_deref())?
-        } else {
-            return Err(ToolError::InvalidParams(
-                "Must provide either 'platform'+'recipient' or 'channel' parameter".into(),
-            ));
-        };
+        let channel = self.resolve_channel_from_params(&params)?;
 
         // Handle file attachment
         if let Some(file_path) = params.get("file").and_then(|v| v.as_str()) {
@@ -570,6 +664,13 @@ impl ToolHandler for SendMessageHandler {
             }),
         );
         props.insert(
+            "text".into(),
+            json!({
+                "type": "string",
+                "description": "Alias for 'message' (same content)."
+            }),
+        );
+        props.insert(
             "file".into(),
             json!({
                 "type": "string",
@@ -587,9 +688,9 @@ impl ToolHandler for SendMessageHandler {
         tool_schema(
             "send_message",
             "Send a message or file to a recipient on any supported platform. \
-             Supports Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Matrix, \
-             and more. Long messages are automatically split at safe markdown boundaries. \
-             Failed deliveries are retried and can fall back to an alternate platform.",
+             Example: {\"platform\":\"wecom\",\"recipient\":\"CHAT_ID\",\"message\":\"hello\"}. \
+             In an active gateway chat, only 'message' is required (session channel is inferred). \
+             Supports Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Matrix, and more.",
             JsonSchema::object(props, vec!["message".into()]),
         )
     }
@@ -702,6 +803,63 @@ mod tests {
     }
 
     // -- Mock backends -------------------------------------------------------
+
+    struct RecordingMessagingBackend {
+        last: std::sync::Mutex<Option<(String, String, String)>>,
+    }
+
+    impl RecordingMessagingBackend {
+        fn new() -> Self {
+            Self {
+                last: std::sync::Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MessagingBackend for RecordingMessagingBackend {
+        async fn send(
+            &self,
+            platform: &str,
+            recipient: &str,
+            message: &str,
+        ) -> Result<String, ToolError> {
+            *self.last.lock().unwrap() = Some((
+                platform.to_string(),
+                recipient.to_string(),
+                message.to_string(),
+            ));
+            Ok(json!({"status": "delivered"}).to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn session_context_fallback_when_no_channel_params() {
+        let backend = Arc::new(RecordingMessagingBackend::new());
+        let session = MessagingSessionContext::new();
+        session.set("wecom", "wr_test_chat");
+        let handler = SendMessageHandler::with_session_context(backend.clone(), session);
+        let out = handler.execute(json!({"message": "hello"})).await.unwrap();
+        assert!(out.contains("delivered"));
+        let last = backend.last.lock().unwrap().clone().unwrap();
+        assert_eq!(last.0, "wecom");
+        assert_eq!(last.1, "wr_test_chat");
+        assert_eq!(last.2, "hello");
+    }
+
+    #[tokio::test]
+    async fn text_alias_for_message_field() {
+        let handler = SendMessageHandler::new(Arc::new(MockMessagingBackend::new()));
+        let out = handler
+            .execute(json!({
+                "platform": "telegram",
+                "recipient": "1",
+                "text": "hi"
+            }))
+            .await
+            .unwrap();
+        assert!(out.contains("delivered"));
+    }
 
     struct MockMessagingBackend {
         send_count: AtomicU32,

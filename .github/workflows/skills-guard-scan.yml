@@ -1,0 +1,25 @@
+name: Skills guard scan
+
+on:
+  pull_request:
+    paths:
+      - '.hermes/skills/**'
+      - 'skills/**'
+      - 'crates/hermes-skills/**'
+  workflow_dispatch:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Scan bundled skills (if present)
+        run: |
+          chmod +x scripts/skills-guard-scan.sh
+          SKILLS_DIR="${GITHUB_WORKSPACE}/skills"
+          if [ -d "$SKILLS_DIR" ]; then
+            ./scripts/skills-guard-scan.sh "$SKILLS_DIR"
+          else
+            echo "No skills/ directory in repo; skipping."
+          fi

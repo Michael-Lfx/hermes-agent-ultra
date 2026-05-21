@@ -1762,7 +1762,13 @@ impl AgentLoop {
         persist_user_idx: Option<usize>,
     ) -> AgentResult {
         self.pending_steer.clear();
-        self.session_end_hooks(ctx.get_messages(), false, true);
+        self.session_end_hooks(
+            ctx.get_messages(),
+            false,
+            true,
+            total_turns,
+            session_started_hooks_fired,
+        );
         AgentResult {
             messages: self.messages_for_persisted_result(ctx, persist_user_idx),
             finished_naturally: false,
@@ -2536,20 +2542,41 @@ impl AgentLoop {
         mm.on_session_end(&as_values);
     }
 
-    fn plugin_on_session_end(&self, completed: bool, interrupted: bool) {
+    fn plugin_on_session_end(
+        &self,
+        completed: bool,
+        interrupted: bool,
+        total_turns: u32,
+        session_started_hooks_fired: bool,
+    ) {
         let hook_ctx = serde_json::json!({
             "session_id": self.config().session_id.as_deref().unwrap_or(""),
             "completed": completed,
+            "finished_naturally": completed,
             "interrupted": interrupted,
+            "turns": total_turns,
             "model": self.active_model(),
             "platform": self.config().platform.as_deref().unwrap_or(""),
+            "session_started_hooks_fired": session_started_hooks_fired,
         });
         let _results = self.invoke_hook(HookType::OnSessionEnd, &hook_ctx);
     }
 
-    fn session_end_hooks(&self, messages: &[Message], completed: bool, interrupted: bool) {
+    fn session_end_hooks(
+        &self,
+        messages: &[Message],
+        completed: bool,
+        interrupted: bool,
+        total_turns: u32,
+        session_started_hooks_fired: bool,
+    ) {
         self.memory_on_session_end(messages);
-        self.plugin_on_session_end(completed, interrupted);
+        self.plugin_on_session_end(
+            completed,
+            interrupted,
+            total_turns,
+            session_started_hooks_fired,
+        );
     }
 
     fn api_mode_as_hook_str(mode: &ApiMode) -> &'static str {
@@ -2603,6 +2630,8 @@ impl AgentLoop {
             "base_url": base_url.unwrap_or(""),
             "api_mode": Self::api_mode_as_hook_str(api_mode),
             "api_call_count": api_call_count,
+            "attempt": api_call_count,
+            "stream": false,
             "request_messages": request_messages,
             "message_count": message_count,
             "tool_count": tool_count,
@@ -5026,7 +5055,13 @@ impl AgentLoop {
                     if let Some(msg) = summary_msg {
                         ctx.add_message(msg);
                     }
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     replay.record(
                         "session_end",
                         serde_json::json!({
@@ -5333,7 +5368,13 @@ impl AgentLoop {
                         "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
                         session_cost_usd, limit
                     )));
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
@@ -5532,7 +5573,13 @@ impl AgentLoop {
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
                 self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
-                self.session_end_hooks(ctx.get_messages(), true, false);
+                self.session_end_hooks(
+                        ctx.get_messages(),
+                        true,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                 replay.record(
                     "session_end",
                     serde_json::json!({
@@ -5609,7 +5656,13 @@ impl AgentLoop {
                         "Max invalid tool retries reached ({}). Last invalid tool: {}",
                         self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
@@ -5900,7 +5953,13 @@ impl AgentLoop {
                 {
                     ctx.add_message(summary);
                 }
-                self.session_end_hooks(ctx.get_messages(), false, false);
+                self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                 return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: false,
@@ -6200,7 +6259,13 @@ impl AgentLoop {
                     if let Some(msg) = summary_msg {
                         ctx.add_message(msg);
                     }
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     replay.record(
                         "session_end",
                         serde_json::json!({
@@ -6550,7 +6615,13 @@ impl AgentLoop {
                         "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
                         session_cost_usd, limit
                     )));
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     replay.record(
                         "session_end",
                         serde_json::json!({
@@ -6756,7 +6827,13 @@ impl AgentLoop {
                 let (u, a) = extract_last_user_assistant(ctx.get_messages());
                 self.memory_sync(&u, &a, session_id);
                 self.spawn_background_review(total_turns, &ctx, review_memory_at_end);
-                self.session_end_hooks(ctx.get_messages(), true, false);
+                self.session_end_hooks(
+                        ctx.get_messages(),
+                        true,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                 replay.record(
                     "session_end",
                     serde_json::json!({
@@ -6870,7 +6947,13 @@ impl AgentLoop {
                         "Max invalid tool retries reached ({}). Last invalid tool: {}",
                         self.config().invalid_tool_call_max_retries, invalid_tool_calls[0]
                     )));
-                    self.session_end_hooks(ctx.get_messages(), false, false);
+                    self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                     return Ok(self.finalize_agent_result(AgentResult {
                         messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                         finished_naturally: false,
@@ -7166,7 +7249,13 @@ impl AgentLoop {
                         usage: None,
                     });
                 }
-                self.session_end_hooks(ctx.get_messages(), false, false);
+                self.session_end_hooks(
+                        ctx.get_messages(),
+                        false,
+                        false,
+                        total_turns,
+                        session_started_hooks_fired,
+                    );
                 return Ok(self.finalize_agent_result(AgentResult {
                     messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
                     finished_naturally: false,

@@ -116,7 +116,8 @@ impl ToolHandler for ReadFileHandler {
 
         tool_schema(
             "read_file",
-            "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers.",
+            "Read file contents with optional offset and line limit. Returns the file content as a string with line numbers. \
+             Do not use for images or binary files (.png, .jpg, .pdf, etc.) — use vision_analyze for images.",
             JsonSchema::object(props, vec!["path".into()]),
         )
     }

@@ -12,7 +12,7 @@ use hermes_gateway::tool_backends::{
 use hermes_gateway::Gateway;
 use hermes_tools::tools::clarify::{ClarifyBackend, ClarifyHandler};
 use hermes_tools::tools::cronjob::CronjobHandler;
-use hermes_tools::tools::messaging::SendMessageHandler;
+use hermes_tools::tools::messaging::{MessagingSessionContext, SendMessageHandler};
 use hermes_tools::ToolRegistry;
 use serde_json::json;
 
@@ -43,9 +43,14 @@ fn register_runtime_tool(
 }
 
 /// Replace `send_message` signal backend with a live gateway-backed sender.
-pub fn wire_gateway_messaging_backend(tool_registry: &Arc<ToolRegistry>, gateway: Arc<Gateway>) {
+pub fn wire_gateway_messaging_backend(
+    tool_registry: &Arc<ToolRegistry>,
+    gateway: Arc<Gateway>,
+    session_context: Arc<MessagingSessionContext>,
+) {
     let backend = Arc::new(GatewayMessagingBackend::new(gateway));
-    let handler: Arc<dyn ToolHandler> = Arc::new(SendMessageHandler::new(backend));
+    let handler: Arc<dyn ToolHandler> =
+        Arc::new(SendMessageHandler::with_session_context(backend, session_context));
     register_runtime_tool(
         tool_registry,
         "send_message",
@@ -298,7 +303,9 @@ mod tests {
         gateway.register_adapter("telegram", adapter).await;
 
         let registry = Arc::new(ToolRegistry::new());
-        wire_gateway_messaging_backend(&registry, gateway.clone());
+        let session = MessagingSessionContext::new();
+        gateway.set_messaging_session_context(session.clone()).await;
+        wire_gateway_messaging_backend(&registry, gateway.clone(), session);
 
         let out = registry
             .dispatch_async(
