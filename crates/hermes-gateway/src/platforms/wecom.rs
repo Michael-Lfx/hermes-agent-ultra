@@ -1648,7 +1648,7 @@ impl WeComAdapter {
         let body = serde_json::json!({
             "msgtype": "stream",
             "stream": {
-                "stream_id": stream_id,
+                "id": stream_id,
                 "content": content,
                 "finish": finish,
             }

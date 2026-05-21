@@ -13,9 +13,23 @@ use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
+use tokio::time::MissedTickBehavior;
 use tracing::{debug, error, info, trace, warn};
+
+/// Placeholder shown while the model is generating (WeCom native stream).
+const WECOM_NATIVE_STREAM_THINKING: &str = "思考中...";
+
+/// Interval between WeCom stream refreshes (full accumulated text), matching agent-demo.
+fn wecom_native_stream_flush_interval_ms() -> u64 {
+    std::env::var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS")
+        .or_else(|_| std::env::var("HERMES_WECOM_STREAM_CHAR_INTERVAL_MS"))
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&ms| ms > 0)
+        .unwrap_or(150)
+}
 
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
@@ -1455,50 +1469,78 @@ impl Gateway {
             let started = native_started.clone();
             let failed = native_failed.clone();
             native_worker = Some(tokio::spawn(async move {
+                let flush_interval =
+                    Duration::from_millis(wecom_native_stream_flush_interval_ms());
+                let mut ticker = tokio::time::interval(flush_interval);
+                ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+
                 let mut native_stream_id: Option<String> = None;
                 let mut accumulated = String::new();
-                while let Some(chunk) = rx.recv().await {
-                    if chunk.trim().is_empty() {
-                        continue;
-                    }
-                    accumulated.push_str(&chunk);
-                    if native_stream_id.is_none() {
-                        match adapter
-                            .start_native_stream(
-                                &chat_id,
-                                reply_to.as_deref(),
-                                Some(accumulated.as_str()),
-                            )
-                            .await
-                        {
-                            Ok(Some(sid)) => {
-                                native_stream_id = Some(sid);
-                                started.store(true, Ordering::Release);
-                            }
-                            Ok(None) => {
-                                failed.store(true, Ordering::Release);
-                                return;
-                            }
-                            Err(err) => {
-                                warn!(error = %err, "native streaming start failed");
-                                failed.store(true, Ordering::Release);
-                                return;
+                let mut last_flushed = String::new();
+
+                loop {
+                    tokio::select! {
+                        chunk = rx.recv() => {
+                            match chunk {
+                                None => break,
+                                Some(chunk) if chunk.trim().is_empty() => {}
+                                Some(chunk) => {
+                                    if native_stream_id.is_none() {
+                                        match adapter
+                                            .start_native_stream(
+                                                &chat_id,
+                                                reply_to.as_deref(),
+                                                Some(WECOM_NATIVE_STREAM_THINKING),
+                                            )
+                                            .await
+                                        {
+                                            Ok(Some(sid)) => {
+                                                native_stream_id = Some(sid);
+                                                started.store(true, Ordering::Release);
+                                            }
+                                            Ok(None) => {
+                                                failed.store(true, Ordering::Release);
+                                                return;
+                                            }
+                                            Err(err) => {
+                                                warn!(error = %err, "native streaming start failed");
+                                                failed.store(true, Ordering::Release);
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    accumulated.push_str(&chunk);
+                                }
                             }
                         }
-                    } else if let Some(sid) = native_stream_id.as_deref() {
-                        if let Err(err) = adapter
-                            .send_native_stream_chunk(&chat_id, sid, accumulated.as_str(), false)
-                            .await
-                        {
-                            warn!(error = %err, stream_id = %sid, "native streaming chunk failed");
-                            failed.store(true, Ordering::Release);
-                            return;
+                        _ = ticker.tick() => {
+                            let Some(sid) = native_stream_id.as_deref() else {
+                                continue;
+                            };
+                            if accumulated.is_empty() || accumulated == last_flushed {
+                                continue;
+                            }
+                            if let Err(err) = adapter
+                                .send_native_stream_chunk(&chat_id, sid, &accumulated, false)
+                                .await
+                            {
+                                warn!(error = %err, stream_id = %sid, "native streaming chunk failed");
+                                failed.store(true, Ordering::Release);
+                                return;
+                            }
+                            last_flushed.clone_from(&accumulated);
                         }
                     }
                 }
+
                 if let Some(sid) = native_stream_id.as_deref() {
+                    let final_content = if accumulated.is_empty() {
+                        WECOM_NATIVE_STREAM_THINKING.to_string()
+                    } else {
+                        accumulated.clone()
+                    };
                     if let Err(err) = adapter
-                        .send_native_stream_chunk(&chat_id, sid, accumulated.as_str(), true)
+                        .send_native_stream_chunk(&chat_id, sid, &final_content, true)
                         .await
                     {
                         warn!(error = %err, stream_id = %sid, "native streaming finish failed");
@@ -3780,6 +3822,8 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_native_streaming_sends_full_refresh_chunks() {
+        std::env::set_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS", "1");
+
         let sent = Arc::new(Mutex::new(Vec::new()));
         let chunks = Arc::new(Mutex::new(Vec::new()));
         let adapter = Arc::new(NativeStreamTestAdapter {
@@ -3823,14 +3867,14 @@ mod tests {
         );
 
         let chunks = chunks.lock().unwrap().clone();
-        assert_eq!(
-            chunks,
-            vec![
-                ("你".to_string(), false),
-                ("你好".to_string(), false),
-                ("你好".to_string(), true)
-            ]
-        );
+        std::env::remove_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS");
+
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks.first().map(|c| c.0.as_str()), Some("思考中..."));
+        assert_eq!(chunks.last().map(|c| c.0.as_str()), Some("你好"));
+        assert_eq!(chunks.last().map(|c| c.1), Some(true));
+        let bodies: Vec<&str> = chunks.iter().map(|c| c.0.as_str()).collect();
+        assert!(bodies.contains(&"你好"));
     }
 
     #[tokio::test]
