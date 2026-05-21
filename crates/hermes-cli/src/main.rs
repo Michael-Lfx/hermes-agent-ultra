@@ -4823,8 +4823,7 @@ async fn register_gateway_adapters(
 async fn run_telegram_poll_loop(gateway: Arc<Gateway>, adapter: Arc<TelegramAdapter>) {
     loop {
         if !adapter.is_running() {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            continue;
+            break;
         }
 
         match adapter.get_updates().await {
