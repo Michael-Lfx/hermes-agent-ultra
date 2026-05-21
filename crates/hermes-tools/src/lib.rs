@@ -11,6 +11,7 @@
 
 pub mod approval;
 pub mod code_execution_env;
+pub mod code_execution_stubs;
 pub mod backends;
 pub mod dispatch;
 pub mod register_builtins;
@@ -40,6 +41,7 @@ pub use dispatch::{dispatch_single, dispatch_tools, DispatchedResult};
 // Re-export approval types
 pub use approval::{check_approval, ApprovalDecision, ApprovalManager};
 pub use code_execution_env::{scrub_child_env, SANDBOX_ALLOWED_TOOLS};
+pub use code_execution_stubs::{generate_hermes_tools_module, RpcTransport};
 
 // Re-export credential guard
 pub mod credential_guard;
