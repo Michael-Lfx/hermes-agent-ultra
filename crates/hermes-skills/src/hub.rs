@@ -239,8 +239,9 @@ impl SkillsHubClient {
             verify_skill_signature(&dl_resp.skill, sig)?;
         }
 
-        // Validate the downloaded skill through the guard.
-        crate::guard::SkillGuard::default().validate_skill(&dl_resp.skill)?;
+        let guard = crate::guard::SkillGuard::default();
+        crate::guard::SkillGuard::validate_structure(&dl_resp.skill)?;
+        guard.scan_security_with_policy(&dl_resp.skill, "community")?;
 
         Ok(dl_resp.skill)
     }

@@ -399,10 +399,8 @@ const HERMES_SKILLS_INDEX_URL: &str =
     "https://hermes-agent.nousresearch.com/docs/api/skills-index.json";
 const SKILLS_SH_SEARCH_URL: &str = "https://skills.sh/api/search";
 const CLAWHUB_API_BASE: &str = "https://clawhub.ai/api/v1";
-const SKILLS_HUB_STATE_DIR: &str = ".hub";
-const SKILLS_HUB_LOCK_FILE: &str = "lock.json";
+const SKILLS_HUB_STATE_DIR: &str = hermes_skills::HUB_STATE_DIR;
 const SKILLS_HUB_AUDIT_FILE: &str = "audit.log";
-const SKILLS_HUB_LOCK_VERSION: u32 = 1;
 const SENTRUX_MCP_SERVER_NAME: &str = "sentrux";
 const SENTRUX_MCP_COMMAND: &str = "sentrux";
 const SENTRUX_MCP_ARG: &str = "--mcp";
@@ -452,43 +450,8 @@ enum InstallFallbackSource {
     Tap,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SkillHubInstalledEntry {
-    name: String,
-    source: String,
-    identifier: String,
-    trust_level: String,
-    scan_verdict: String,
-    content_hash: String,
-    install_path: String,
-    #[serde(default)]
-    files: Vec<String>,
-    #[serde(default)]
-    metadata: serde_json::Value,
-    installed_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct SkillsHubLockFile {
-    #[serde(default = "default_skills_hub_lock_version")]
-    version: u32,
-    #[serde(default)]
-    installed: Vec<SkillHubInstalledEntry>,
-}
-
-impl Default for SkillsHubLockFile {
-    fn default() -> Self {
-        Self {
-            version: SKILLS_HUB_LOCK_VERSION,
-            installed: Vec::new(),
-        }
-    }
-}
-
-fn default_skills_hub_lock_version() -> u32 {
-    SKILLS_HUB_LOCK_VERSION
-}
+type SkillHubInstalledEntry = hermes_skills::SkillHubInstalledEntry;
+type SkillsHubLockFile = hermes_skills::SkillsHubLock;
 
 #[derive(Debug, Clone)]
 struct SkillInstallProvenance {
@@ -1094,7 +1057,7 @@ fn skills_hub_state_dir(skills_dir: &Path) -> PathBuf {
 }
 
 fn skills_hub_lock_path(skills_dir: &Path) -> PathBuf {
-    skills_hub_state_dir(skills_dir).join(SKILLS_HUB_LOCK_FILE)
+    hermes_skills::hub_lock_path(skills_dir)
 }
 
 fn skills_hub_audit_path(skills_dir: &Path) -> PathBuf {
@@ -1102,11 +1065,7 @@ fn skills_hub_audit_path(skills_dir: &Path) -> PathBuf {
 }
 
 fn read_skills_hub_lock(skills_dir: &Path) -> SkillsHubLockFile {
-    let path = skills_hub_lock_path(skills_dir);
-    let Ok(raw) = std::fs::read_to_string(path) else {
-        return SkillsHubLockFile::default();
-    };
-    serde_json::from_str::<SkillsHubLockFile>(&raw).unwrap_or_default()
+    hermes_skills::read_hub_lock(skills_dir)
 }
 
 fn write_skills_hub_lock(skills_dir: &Path, lock: &SkillsHubLockFile) -> Result<(), AgentError> {

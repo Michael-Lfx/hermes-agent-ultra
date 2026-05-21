@@ -18,7 +18,10 @@ pub use skills_guard::{
     should_allow_install, Finding, InstallDecision, ScanResult, TRUSTED_REPOS,
 };
 pub use hub::{SkillUpdate, SkillsHubClient};
-pub use hub_lock::{read_hub_lock, resolve_scan_source, hub_lock_path, SkillHubInstalledEntry, SkillsHubLock};
+pub use hub_lock::{
+    hub_lock_path, read_hub_lock, resolve_scan_source, SkillHubInstalledEntry, SkillsHubLock,
+    HUB_LOCK_FILE, HUB_LOCK_VERSION, HUB_STATE_DIR,
+};
 pub use skill::{SkillError, SkillManager};
 pub use store::{FileSkillStore, SkillStore};
 pub use version::{compare_versions, compute_version, track_change, SkillChange, SkillVersion};
