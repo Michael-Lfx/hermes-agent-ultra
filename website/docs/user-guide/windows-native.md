@@ -188,6 +188,20 @@ The split is deliberate: `%LOCALAPPDATA%\hermes` is disposable infrastructure (y
 
 **Override `HERMES_HOME`:** set the environment variable to point at a different data dir. Works the same as on Linux.
 
+### Temp paths and file attachments (`/tmp`, `send_message`)
+
+On native Windows, **do not assume** `/tmp` is the system temp folder. Hermes maps agent paths as follows:
+
+| You write | Where it actually goes |
+|---|---|
+| `/tmp/foo.html` (in `write_file`, `read_file`, `send_message` `file`, or `MEDIA:/tmp/...`) | `%LOCALAPPDATA%\.hermes\cache\terminal\foo.html` (or your `HERMES_HOME\cache\terminal\`) |
+| `C:\tmp\foo.html` | Used as-is (directory must exist; Hermes does not create `C:\tmp`) |
+| Recommended | `%LOCALAPPDATA%\.hermes\cache\terminal\` — no spaces, works in PowerShell and Git Bash |
+
+After writing a file, run `read_file` on the same path (or check the tool’s `resolved_path` in the JSON result) before telling the user the file exists.
+
+`send_message` supports a `file` parameter for local attachments, and `MEDIA:/path/to/file.ext` inside the message body (POSIX-style `/` or `~/` paths). Live gateway mode delivers through platform adapters; missing files return a clear error with the resolved absolute path.
+
 ## Browser tool
 
 The browser tool uses `agent-browser` (a Node helper) to drive Chromium. On Windows:

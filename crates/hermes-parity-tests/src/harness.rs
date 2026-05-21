@@ -18,9 +18,11 @@ use hermes_skills::{
     determine_verdict, resolve_trust_level, scan_content, should_allow_install, Finding,
     InstallDecision, ScanResult,
 };
+use hermes_config::resolve_agent_path;
 use hermes_tools::approval::{check_approval, ApprovalDecision};
 use hermes_tools::code_execution_env::scrub_child_env;
 use hermes_tools::code_execution_stubs::{generate_hermes_tools_module, RpcTransport};
+use hermes_tools::extract_media;
 use hermes_tools::v4a_patch::{parse_v4a_patch, OperationType};
 use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
@@ -51,6 +53,9 @@ pub struct ParityCase {
     /// When `true`, this case is skipped (scaffold / waiting for Rust port).
     #[serde(default)]
     pub skip: bool,
+    /// When `true`, run only on Windows hosts (skipped elsewhere).
+    #[serde(default)]
+    pub windows_only: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +99,10 @@ pub fn run_fixture_file(path: &Path) -> Result<(), ParityError> {
     }
     for case in &file.cases {
         if case.skip {
+            continue;
+        }
+        #[cfg(not(windows))]
+        if case.windows_only {
             continue;
         }
         let actual = dispatch_case(&case.op, &case.input).map_err(ParityError::Dispatch)?;
@@ -517,6 +526,39 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
             Ok(json!(ids))
         }
 
+        "resolve_agent_path" => {
+            let path = input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.path".to_string())?;
+            if let Some(home) = input.get("hermes_home").and_then(|v| v.as_str()) {
+                unsafe {
+                    std::env::set_var("HERMES_HOME", home);
+                }
+            }
+            let resolved = resolve_agent_path(path);
+            let normalized = resolved
+                .to_string_lossy()
+                .replace('\\', "/");
+            Ok(Value::String(normalized))
+        }
+
+        "extract_media" => {
+            let content = input
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "missing input.content".to_string())?;
+            let (media, cleaned) = extract_media(content);
+            let media_json: Vec<Value> = media
+                .into_iter()
+                .map(|(path, is_voice)| json!([path, is_voice]))
+                .collect();
+            Ok(json!({
+                "media": media_json,
+                "cleaned": cleaned,
+            }))
+        }
+
         _ => Err(format!("unknown op: {}", op)),
     }
 }
@@ -582,6 +624,11 @@ mod tests {
     fn parity_code_execution_stubs_fixtures() {
         run_fixtures_in_dir(&fixtures_dir().join("code_execution_stubs"))
             .expect("code_execution_stubs fixtures");
+    }
+
+    #[test]
+    fn parity_send_message_fixtures() {
+        run_fixtures_in_dir(&fixtures_dir().join("send_message")).expect("send_message fixtures");
     }
 
     #[test]

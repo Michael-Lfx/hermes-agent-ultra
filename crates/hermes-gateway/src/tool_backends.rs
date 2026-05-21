@@ -17,6 +17,7 @@ use tokio::sync::{oneshot, Mutex};
 use tokio::time::timeout;
 use uuid::Uuid;
 
+use hermes_config::resolve_outbound_media_path;
 use hermes_core::ToolError;
 use hermes_tools::tools::clarify::ClarifyBackend;
 use hermes_tools::tools::messaging::MessagingBackend;
@@ -86,6 +87,31 @@ impl MessagingBackend for GatewayMessagingBackend {
             "platform": platform,
             "recipient": recipient,
             "status": "sent",
+        })
+        .to_string())
+    }
+
+    async fn send_file(
+        &self,
+        platform: &str,
+        recipient: &str,
+        file_path: &str,
+        caption: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let resolved = resolve_outbound_media_path(file_path)
+            .map_err(ToolError::ExecutionFailed)?;
+        let path_str = resolved.to_string_lossy().into_owned();
+        self.gateway
+            .send_file(platform, recipient, &path_str, caption)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("gateway send_file failed: {e}")))?;
+        Ok(json!({
+            "type": "messaging_result",
+            "platform": platform,
+            "recipient": recipient,
+            "status": "sent",
+            "file": path_str,
+            "resolved_path": path_str,
         })
         .to_string())
     }

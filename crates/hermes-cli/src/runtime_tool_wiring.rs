@@ -227,6 +227,7 @@ mod tests {
 
     struct RecordingAdapter {
         sent: Arc<Mutex<Vec<(String, String)>>>,
+        files_sent: Arc<Mutex<Vec<(String, String)>>>,
         running: bool,
         platform: String,
     }
@@ -235,6 +236,7 @@ mod tests {
         fn new(platform: &str) -> Self {
             Self {
                 sent: Arc::new(Mutex::new(Vec::new())),
+                files_sent: Arc::new(Mutex::new(Vec::new())),
                 running: true,
                 platform: platform.to_string(),
             }
@@ -275,10 +277,14 @@ mod tests {
 
         async fn send_file(
             &self,
-            _chat_id: &str,
-            _file_path: &str,
+            chat_id: &str,
+            file_path: &str,
             _caption: Option<&str>,
         ) -> Result<(), GatewayError> {
+            self.files_sent
+                .lock()
+                .expect("recording adapter lock poisoned")
+                .push((chat_id.to_string(), file_path.to_string()));
             Ok(())
         }
 
@@ -325,6 +331,52 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].0, "12345");
         assert_eq!(sent[0].1, "hello");
+    }
+
+    #[tokio::test]
+    async fn gateway_messaging_backend_sends_file_attachment() {
+        let session_manager = Arc::new(SessionManager::new(
+            hermes_config::session::SessionConfig::default(),
+        ));
+        let dm = DmManager::with_pair_behavior();
+        let gateway = Arc::new(Gateway::new(session_manager, dm, GatewayConfig::default()));
+        let adapter = Arc::new(RecordingAdapter::new("telegram"));
+        let file_recorder = adapter.files_sent.clone();
+        gateway.register_adapter("telegram", adapter).await;
+
+        let tmp = TempDir::new().expect("tempdir");
+        let file_path = tmp.path().join("memorial.html");
+        std::fs::write(&file_path, "<html>memorial</html>").expect("write test file");
+
+        let registry = Arc::new(ToolRegistry::new());
+        let session = MessagingSessionContext::new();
+        gateway.set_messaging_session_context(session.clone()).await;
+        wire_gateway_messaging_backend(&registry, gateway.clone(), session);
+
+        let out = registry
+            .dispatch_async(
+                "send_message",
+                json!({
+                    "platform": "telegram",
+                    "recipient": "12345",
+                    "file": file_path.to_string_lossy(),
+                    "caption": "memorial"
+                }),
+            )
+            .await;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&out).expect("send_message output should be json");
+        assert_eq!(parsed["status"], "delivered");
+        assert_eq!(parsed["type"], "file");
+        assert!(parsed["resolved_path"].is_string());
+
+        let files = file_recorder.lock().expect("recording lock poisoned");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "12345");
+        assert!(
+            std::path::Path::new(&files[0].1).exists(),
+            "adapter should receive canonical existing path"
+        );
     }
 
     #[tokio::test]

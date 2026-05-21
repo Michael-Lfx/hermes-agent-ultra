@@ -132,6 +132,113 @@ pub fn auth_json_path() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
+// Agent path resolution (Windows /tmp, session temp — parity with Python local.py)
+// ---------------------------------------------------------------------------
+
+/// Writable session temp directory for terminal artifacts and agent-generated files.
+///
+/// On Windows uses `{HERMES_HOME}/cache/terminal` (forward-slash friendly, no spaces).
+/// On Unix prefers `/tmp` when writable, else `tempfile::gettempdir()`.
+pub fn session_temp_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let cache_dir = hermes_home().join("cache").join("terminal");
+        let _ = std::fs::create_dir_all(&cache_dir);
+        return cache_dir;
+    }
+
+    #[cfg(not(windows))]
+    {
+        for key in ["TMPDIR", "TMP", "TEMP"] {
+            if let Ok(val) = std::env::var(key) {
+                let trimmed = val.trim();
+                if !trimmed.is_empty() && trimmed.starts_with('/') {
+                    let dir = PathBuf::from(trimmed);
+                    if dir.is_dir() {
+                        return dir;
+                    }
+                }
+            }
+        }
+        let tmp = PathBuf::from("/tmp");
+        if tmp.is_dir() {
+            return tmp;
+        }
+        std::env::temp_dir()
+    }
+}
+
+/// Map agent-supplied paths before filesystem or outbound media operations.
+///
+/// - Expands `~` / `~/` via [`expand_tilde`].
+/// - On Windows, rewrites `/tmp/...` and `\tmp\...` to [`session_temp_dir`].
+/// - Leaves explicit `C:\...` and other native Windows paths unchanged.
+pub fn resolve_agent_path(input: &str) -> PathBuf {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return PathBuf::new();
+    }
+
+    if trimmed.starts_with('~') {
+        return expand_tilde(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed));
+    }
+
+    #[cfg(windows)]
+    {
+        if trimmed == "/tmp" || trimmed == "\\tmp" {
+            return session_temp_dir();
+        }
+        if let Some(rest) = trimmed.strip_prefix("/tmp/") {
+            return session_temp_dir().join(rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("/tmp\\") {
+            return session_temp_dir().join(rest);
+        }
+        if let Some(rest) = trimmed.strip_prefix("\\tmp\\") {
+            return session_temp_dir().join(rest);
+        }
+    }
+
+    PathBuf::from(trimmed)
+}
+
+/// Expand `~` and `~/suffix` to the user home directory.
+pub fn expand_tilde(path: &str) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if !trimmed.starts_with('~') {
+        return Ok(PathBuf::from(trimmed));
+    }
+    let rest = &trimmed[1..];
+    if rest.is_empty() {
+        return Ok(user_home_dir());
+    }
+    if rest.starts_with('/') || rest.starts_with('\\') {
+        let suffix = rest.trim_start_matches(['/', '\\']);
+        return Ok(if suffix.is_empty() {
+            user_home_dir()
+        } else {
+            user_home_dir().join(suffix)
+        });
+    }
+    Err(format!("unsupported tilde path form: {path}"))
+}
+
+/// Resolve a local media/file path for outbound delivery; returns canonical path when possible.
+pub fn resolve_outbound_media_path(input: &str) -> Result<PathBuf, String> {
+    let path = resolve_agent_path(input);
+    let canonical = path
+        .canonicalize()
+        .unwrap_or_else(|_| path.clone());
+    if !canonical.is_file() {
+        return Err(format!(
+            "Media file not found: '{input}' (resolved: {})",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -200,5 +307,48 @@ mod tests {
             Some(v) => std::env::set_var("HERMES_AGENT_ULTRA_HOME", v),
             None => std::env::remove_var("HERMES_AGENT_ULTRA_HOME"),
         }
+    }
+
+    #[test]
+    fn resolve_agent_path_expands_tilde() {
+        let home = user_home_dir();
+        assert_eq!(resolve_agent_path("~/notes.txt"), home.join("notes.txt"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolve_agent_path_maps_tmp_prefix_on_windows() {
+        let _g = crate::managed_gateway::test_lock::lock();
+        let original = std::env::var("HERMES_HOME").ok();
+        unsafe {
+            std::env::set_var("HERMES_HOME", "/tmp/hermes-path-win-test");
+        }
+
+        let mapped = resolve_agent_path("/tmp/memorial.html");
+        assert_eq!(
+            mapped,
+            PathBuf::from("/tmp/hermes-path-win-test/cache/terminal/memorial.html")
+        );
+
+        match original {
+            Some(v) => unsafe { std::env::set_var("HERMES_HOME", v) },
+            None => unsafe { std::env::remove_var("HERMES_HOME") },
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn resolve_agent_path_preserves_unix_tmp() {
+        assert_eq!(
+            resolve_agent_path("/tmp/memorial.html"),
+            PathBuf::from("/tmp/memorial.html")
+        );
+    }
+
+    #[test]
+    fn resolve_outbound_media_path_requires_existing_file() {
+        let err = resolve_outbound_media_path("/nonexistent/hermes-test-404.bin")
+            .unwrap_err();
+        assert!(err.contains("Media file not found"));
     }
 }

@@ -353,7 +353,7 @@ fn lookup_home_for_username(username: &str) -> Option<PathBuf> {
 
 fn resolve_path(input: &str) -> Result<PathBuf, AgentError> {
     if !input.starts_with('~') {
-        return Ok(PathBuf::from(input));
+        return Ok(hermes_config::resolve_agent_path(input));
     }
 
     let rest = &input[1..];

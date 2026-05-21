@@ -87,6 +87,14 @@
       "rust": "hermes_agent::conversation_loop",
       "fixture_dirs": [],
       "note": "Primary gate: crates/hermes-agent/tests/run_conversation_*.rs (rust-native). Optional golden under fixtures/conversation_loop/."
+    },
+    {
+      "id": "send_message",
+      "status": "active",
+      "python": "tools/send_message_tool.py",
+      "rust": "hermes_tools::extract_media + hermes_config::resolve_agent_path",
+      "fixture_dirs": ["send_message"],
+      "note": "Path resolution and MEDIA: extraction; live gateway file delivery wired in hermes-gateway::tool_backends."
     }
   ]
 }

@@ -1960,6 +1960,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hermes-cli",
+ "hermes-config",
  "hermes-core",
  "hermes-intelligence",
  "hermes-skills",

@@ -25,7 +25,9 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use hermes_config::resolve_outbound_media_path;
 use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use crate::extract_media;
 
 // ---------------------------------------------------------------------------
 // Channel resolution
@@ -551,6 +553,61 @@ impl SendMessageHandler {
 #[async_trait]
 impl ToolHandler for SendMessageHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let channel = self.resolve_channel_from_params(&params)?;
+
+        // Handle file attachment (message optional when file is set)
+        if let Some(file_path) = params.get("file").and_then(|v| v.as_str()) {
+            let caption = params.get("caption").and_then(|v| v.as_str());
+            let resolved_path = match resolve_outbound_media_path(file_path) {
+                Ok(p) => p.to_string_lossy().into_owned(),
+                Err(e) => {
+                    return Ok(json!({
+                        "status": "failed",
+                        "platform": channel.platform,
+                        "recipient": channel.chat_id,
+                        "type": "file",
+                        "file": file_path,
+                        "error": e,
+                    })
+                    .to_string());
+                }
+            };
+
+            let file_result = self
+                .backend
+                .send_file(
+                    &channel.platform,
+                    &channel.chat_id,
+                    &resolved_path,
+                    caption,
+                )
+                .await;
+
+            return match file_result {
+                Ok(result) => Ok(json!({
+                    "status": "delivered",
+                    "platform": channel.platform,
+                    "recipient": channel.chat_id,
+                    "type": "file",
+                    "file": file_path,
+                    "resolved_path": resolved_path,
+                    "exists": true,
+                    "result": result,
+                })
+                .to_string()),
+                Err(e) => Ok(json!({
+                    "status": "failed",
+                    "platform": channel.platform,
+                    "recipient": channel.chat_id,
+                    "type": "file",
+                    "file": file_path,
+                    "resolved_path": resolved_path,
+                    "error": e.to_string(),
+                })
+                .to_string()),
+            };
+        }
+
         let message = params
             .get("message")
             .or_else(|| params.get("text"))
@@ -561,43 +618,66 @@ impl ToolHandler for SendMessageHandler {
                 )
             })?;
 
-        if message.trim().is_empty() {
+        let (media_files, cleaned_message) = extract_media(message);
+        if message.trim().is_empty() && media_files.is_empty() {
             return Err(ToolError::InvalidParams("Message cannot be empty".into()));
         }
 
-        let channel = self.resolve_channel_from_params(&params)?;
+        let mut media_errors: Vec<String> = Vec::new();
+        let mut media_sent = 0usize;
+        for (media_path, _is_voice) in &media_files {
+            match resolve_outbound_media_path(media_path) {
+                Ok(resolved) => {
+                    let path_str = resolved.to_string_lossy().into_owned();
+                    match self
+                        .backend
+                        .send_file(
+                            &channel.platform,
+                            &channel.chat_id,
+                            &path_str,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(_) => media_sent += 1,
+                        Err(e) => media_errors.push(format!("{media_path}: {e}")),
+                    }
+                }
+                Err(e) => media_errors.push(e),
+            }
+        }
 
-        // Handle file attachment
-        if let Some(file_path) = params.get("file").and_then(|v| v.as_str()) {
-            let caption = params.get("caption").and_then(|v| v.as_str());
-            let file_result = self
-                .backend
-                .send_file(&channel.platform, &channel.chat_id, file_path, caption)
-                .await;
+        let text_to_send = if cleaned_message.trim().is_empty() && !media_files.is_empty() {
+            " "
+        } else {
+            cleaned_message.as_str()
+        };
 
-            return match file_result {
-                Ok(result) => Ok(json!({
-                    "status": "delivered",
-                    "platform": channel.platform,
-                    "recipient": channel.chat_id,
-                    "type": "file",
-                    "file": file_path,
-                    "result": result,
-                })
-                .to_string()),
-                Err(e) => Ok(json!({
-                    "status": "failed",
-                    "platform": channel.platform,
-                    "recipient": channel.chat_id,
-                    "type": "file",
-                    "error": e.to_string(),
-                })
-                .to_string()),
-            };
+        if text_to_send.trim().is_empty() && media_sent > 0 && media_errors.is_empty() {
+            return Ok(json!({
+                "status": "delivered",
+                "platform": channel.platform,
+                "recipient": channel.chat_id,
+                "type": "media_only",
+                "media_sent": media_sent,
+            })
+            .to_string());
+        }
+
+        if text_to_send.trim().is_empty() && !media_errors.is_empty() {
+            return Ok(json!({
+                "status": "failed",
+                "platform": channel.platform,
+                "recipient": channel.chat_id,
+                "type": "file",
+                "media_sent": media_sent,
+                "errors": media_errors,
+            })
+            .to_string());
         }
 
         // Deliver text message with retry
-        let result = self.deliver_with_retry(&channel, message).await?;
+        let result = self.deliver_with_retry(&channel, text_to_send).await?;
 
         // Try fallback if needed
         let fallback_result = self.try_fallback(&channel, message, &result).await;
@@ -620,6 +700,8 @@ impl ToolHandler for SendMessageHandler {
             "recipient": final_status.chat_id,
             "chunks_sent": final_status.chunks_sent,
             "error": final_status.error,
+            "media_sent": media_sent,
+            "media_errors": media_errors,
             "fallback_used": fallback_result.as_ref().map(|fb| fb.status == DeliveryStatus::Delivered).unwrap_or(false),
             "fallback_platform": fallback_result.as_ref().map(|fb| &fb.platform),
         })
@@ -660,7 +742,8 @@ impl ToolHandler for SendMessageHandler {
             json!({
                 "type": "string",
                 "description": "Message content to send. Supports Markdown formatting; \
-                                automatically converted to platform-specific format."
+                                embed local files with MEDIA:/path/to/file.ext in the text. \
+                                On Windows, /tmp/ paths map to %LOCALAPPDATA%\\hermes\\cache\\terminal\\."
             }),
         );
         props.insert(
@@ -674,7 +757,9 @@ impl ToolHandler for SendMessageHandler {
             "file".into(),
             json!({
                 "type": "string",
-                "description": "Path to a file to send as attachment (image, audio, document)."
+                "description": "Path to a local file to send as attachment. On Windows, /tmp/... is mapped to \
+                                %LOCALAPPDATA%\\hermes\\cache\\terminal\\. Use read_file after write to verify. \
+                                When set, 'message' is optional (caption can be used instead)."
             }),
         );
         props.insert(
@@ -691,7 +776,7 @@ impl ToolHandler for SendMessageHandler {
              Example: {\"platform\":\"wecom\",\"recipient\":\"CHAT_ID\",\"message\":\"hello\"}. \
              In an active gateway chat, only 'message' is required (session channel is inferred). \
              Supports Telegram, Discord, Slack, WhatsApp, Signal, Email, SMS, Matrix, and more.",
-            JsonSchema::object(props, vec!["message".into()]),
+            JsonSchema::object(props, vec![]),
         )
     }
 }

@@ -10,6 +10,7 @@
 //! - **Approval system**: Dangerous command pattern detection for terminal safety
 
 pub mod approval;
+pub mod media_extract;
 pub mod code_execution_env;
 pub mod code_execution_ptc;
 pub mod code_execution_stubs;
@@ -24,6 +25,8 @@ pub mod toolset;
 pub mod toolset_distributions;
 pub mod tts_streaming;
 pub mod v4a_patch;
+
+pub use media_extract::extract_media;
 
 // Re-export registry types
 pub use registry::{ToolEntry, ToolEntryInfo, ToolRegistry};
