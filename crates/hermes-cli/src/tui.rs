@@ -2565,72 +2565,102 @@ fn looks_like_internal_scaffold_line(line: &str) -> bool {
         || lowered.contains("to=memory.")
 }
 
-fn strict_default_language_output_enabled() -> bool {
-    match std::env::var("HERMES_TUI_STRICT_DEFAULT_LANGUAGE") {
-        Ok(raw) => matches!(
-            raw.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Err(_) => false,
-    }
+/// Strip C0 controls except tab, LF, CR (Python `CONTROL_RE` parity).
+fn strip_control_chars(text: &str) -> String {
+    text.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\t' | '\n' | '\r'))
+        .collect()
 }
 
-fn sanitize_line_to_default_language_ascii(line: &str, compact_ws: bool) -> Option<String> {
-    let leading_len = line.len().saturating_sub(line.trim_start().len());
-    let leading = &line[..leading_len];
-    let mut body = String::new();
-    let mut prev_space = false;
-    for ch in line[leading_len..].chars() {
-        if ch.is_ascii_graphic() {
-            body.push(ch);
-            prev_space = false;
-            continue;
-        }
+fn line_has_ansi_escape(line: &str) -> bool {
+    line.as_bytes().windows(2).any(|w| w == b"\x1b[")
+}
 
-        if ch.is_ascii_whitespace() {
-            if compact_ws {
-                if !prev_space {
-                    body.push(' ');
-                    prev_space = true;
+const REASONING_TAGS: &[&str] = &[
+    "think",
+    "reasoning",
+    "thinking",
+    "thought",
+    "REASONING_SCRATCHPAD",
+    "redacted_thinking",
+    "reflection",
+];
+
+fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    let needle_bytes = needle.as_bytes();
+    let hay_bytes = haystack.as_bytes();
+    if hay_bytes.len() < needle_bytes.len() {
+        return None;
+    }
+    for i in 0..=hay_bytes.len() - needle_bytes.len() {
+        if hay_bytes[i..i + needle_bytes.len()]
+            .iter()
+            .zip(needle_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Split reasoning blocks out of assistant markdown (Python `splitReasoning` parity).
+fn split_reasoning_from_content(input: &str) -> (String, String) {
+    let mut text = input.to_string();
+    let mut reasoning: Vec<String> = Vec::new();
+
+    for tag in REASONING_TAGS {
+        let open = format!("<{tag}>");
+        let close = format!("</{tag}>");
+
+        loop {
+            let Some(start) = find_ascii_case_insensitive(&text, &open) else {
+                break;
+            };
+            let body_start = start + open.len();
+            if let Some(close_rel) = find_ascii_case_insensitive(&text[body_start..], &close) {
+                let body_end = body_start + close_rel;
+                let inner = text[body_start..body_end].trim();
+                if !inner.is_empty() {
+                    reasoning.push(inner.to_string());
                 }
-            } else {
-                body.push(' ');
-                prev_space = true;
+                let after = body_end + close.len();
+                text = format!("{}{}", &text[..start], &text[after..]);
+                continue;
             }
-            continue;
+            let inner = text[body_start..].trim();
+            if !inner.is_empty() {
+                reasoning.push(inner.to_string());
+            }
+            text = text[..start].to_string();
+            break;
         }
+    }
 
-        if !prev_space {
-            body.push(' ');
-            prev_space = true;
-        }
-    }
-    let body = if compact_ws {
-        body.trim().to_string()
-    } else {
-        body.trim_end().to_string()
-    };
-    if body.trim().is_empty() {
-        return None;
-    }
-    let ascii_letters = body.chars().filter(|c| c.is_ascii_alphabetic()).count();
-    let ascii_graphics = body.chars().filter(|c| c.is_ascii_graphic()).count();
-    if ascii_graphics > 0 && ascii_letters == 0 {
-        let symbolic_ratio = body.chars().filter(|c| !c.is_ascii_alphanumeric()).count() as f64
-            / ascii_graphics as f64;
-        if symbolic_ratio > 0.85 {
-            return None;
-        }
-    }
-    let lower = body.to_ascii_lowercase();
-    if lower.contains("<tool_call")
-        || lower.contains("</tool_call")
-        || lower.contains("<tool_use>")
-        || lower.contains("</tool_use>")
+    (text.trim().to_string(), reasoning.join("\n\n"))
+}
+
+fn tool_complete_looks_failed(extra: &serde_json::Value, result_preview: &str) -> bool {
+    if extra
+        .get("error")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty())
     {
-        return None;
+        return true;
     }
-    Some(format!("{leading}{body}"))
+    if extra.get("failed").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    if extra.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+        return true;
+    }
+    let preview = result_preview.trim();
+    preview.starts_with("Error")
+        || preview.contains("Tool execution failed")
+        || preview.contains("timed out after")
 }
 
 fn render_assistant_markdown_lines(
@@ -2661,22 +2691,47 @@ fn render_assistant_markdown_lines(
         .fg(colors.accent)
         .bg(colors.background)
         .add_modifier(Modifier::BOLD);
+    let reasoning_style = Style::default()
+        .fg(colors.status_bar_dim)
+        .bg(colors.background)
+        .add_modifier(Modifier::ITALIC);
 
-    let strict_gate = strict_default_language_output_enabled();
-    for raw in content.lines() {
-        let normalized = if strict_gate {
-            sanitize_line_to_default_language_ascii(raw, false).unwrap_or_default()
-        } else if looks_like_internal_scaffold_line(raw) {
-            sanitize_line_to_default_language_ascii(raw, true).unwrap_or_default()
-        } else {
-            raw.to_string()
-        };
-        if normalized.is_empty() {
-            continue;
+    let (main_content, reasoning_text) = split_reasoning_from_content(content);
+    if !reasoning_text.is_empty() {
+        rendered.push(Line::from(vec![Span::styled(
+            "    🤔 reasoning",
+            Style::default()
+                .fg(colors.status_bar_dim)
+                .bg(colors.background)
+                .add_modifier(Modifier::BOLD),
+        )]));
+        for line in reasoning_text.lines() {
+            let cleaned = strip_control_chars(line);
+            if cleaned.trim().is_empty() {
+                continue;
+            }
+            rendered.push(Line::from(vec![Span::styled(
+                format!("      {}", cleaned.trim_end()),
+                reasoning_style,
+            )]));
         }
-        let raw = normalized.as_str();
+        rendered.push(Line::from(String::new()));
+    }
+
+    for raw in main_content.lines() {
         if looks_like_internal_scaffold_line(raw) {
             hidden_scaffold_lines = hidden_scaffold_lines.saturating_add(1);
+            continue;
+        }
+        let raw = strip_control_chars(raw);
+        if raw.trim().is_empty() {
+            continue;
+        }
+        if line_has_ansi_escape(&raw) {
+            rendered.push(Line::from(vec![Span::styled(
+                format!("    {raw}"),
+                styles.assistant_response.bg(colors.background),
+            )]));
             continue;
         }
         let trimmed = raw.trim_start();
@@ -2707,7 +2762,7 @@ fn render_assistant_markdown_lines(
         }
 
         if in_code_block {
-            rendered.push(render_highlighted_code_line(raw, &code_lang, colors));
+            rendered.push(render_highlighted_code_line(&raw, &code_lang, colors));
             continue;
         }
 
@@ -2932,8 +2987,7 @@ fn push_block(lines: &mut Vec<String>, header: &str, value: &serde_json::Value) 
 }
 
 fn sanitize_tool_line(raw: &str) -> String {
-    let sanitized =
-        sanitize_line_to_default_language_ascii(raw, false).unwrap_or_else(|| String::new());
+    let sanitized = strip_control_chars(raw);
     truncate_chars(&sanitized, max_tool_output_line_chars())
 }
 
@@ -5044,16 +5098,24 @@ fn process_stream_lane_event(app: &mut App, state: &mut TuiState, event: Event) 
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("")
                                     .trim();
+                                let failed = tool_complete_looks_failed(extra, result_preview);
+                                let mark = if failed { "✗" } else { "✓" };
                                 if result_preview.is_empty() {
-                                    state.push_activity(format!("✓ {}", tool));
+                                    state.push_activity(format!("{mark} {}", tool));
                                 } else {
-                                    state.push_activity(format!("✓ {} {}", tool, result_preview));
-                                    let file_hints = extract_file_like_hints(result_preview, 3);
-                                    if !file_hints.is_empty() {
-                                        state.push_activity(format!(
-                                            "Δfiles {}",
-                                            file_hints.join(", ")
-                                        ));
+                                    state.push_activity(format!(
+                                        "{mark} {} {}",
+                                        tool, result_preview
+                                    ));
+                                    if !failed {
+                                        let file_hints =
+                                            extract_file_like_hints(result_preview, 3);
+                                        if !file_hints.is_empty() {
+                                            state.push_activity(format!(
+                                                "Δfiles {}",
+                                                file_hints.join(", ")
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -6440,17 +6502,24 @@ mod tests {
     }
 
     #[test]
-    fn test_default_language_sanitizer_strips_non_ascii() {
-        let raw = "to=functions.memory 大安快些 json ... But I can in one message as seen in logs.";
-        let sanitized = sanitize_line_to_default_language_ascii(raw, true).expect("sanitized");
-        assert!(!sanitized.contains('大'));
-        assert!(!sanitized.contains('安'));
-        assert!(sanitized.contains("to=functions.memory"));
-        assert!(sanitized.contains("But I can in one message as seen in logs."));
+    fn test_strip_control_chars_preserves_unicode() {
+        let raw = "你好\x07世界";
+        let cleaned = strip_control_chars(raw);
+        assert!(cleaned.contains('你'));
+        assert!(cleaned.contains('好'));
+        assert!(!cleaned.contains('\x07'));
     }
 
     #[test]
-    fn test_render_assistant_markdown_lines_enforces_default_language_gate() {
+    fn test_split_reasoning_from_content() {
+        let input = "hello\n<thinking>inner thought</thinking>\nworld";
+        let (text, reasoning) = split_reasoning_from_content(input);
+        assert_eq!(text, "hello\n\nworld");
+        assert_eq!(reasoning, "inner thought");
+    }
+
+    #[test]
+    fn test_render_assistant_markdown_preserves_unicode_and_hides_scaffold() {
         let theme = Theme::default_theme();
         let colors = theme.colors.to_ratatui_colors();
         let styles = theme.resolved_styles();
@@ -6462,9 +6531,19 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(joined.contains("internal orchestration scaffold hidden"));
-        assert!(!joined.contains('天'));
-        assert!(!joined.contains('大'));
+        assert!(!joined.contains("to=functions.memory"));
+        assert!(joined.contains('好'));
         assert!(joined.contains("regular line"));
+        assert!(joined.contains("大家"));
+    }
+
+    #[test]
+    fn test_tool_complete_looks_failed() {
+        let extra = serde_json::json!({"error": "Tool execution failed: timeout"});
+        assert!(tool_complete_looks_failed(&extra, ""));
+        let ok = serde_json::json!({});
+        assert!(!tool_complete_looks_failed(&ok, "done"));
+        assert!(tool_complete_looks_failed(&ok, "Error: boom"));
     }
 
     #[test]

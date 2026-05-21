@@ -1021,14 +1021,19 @@ impl App {
             })),
             on_tool_complete: Some(Box::new(move |tool: &str, content: &str| {
                 let preview = App::preview_for_status(content, 160);
-                App::push_stream_extra_event(
-                    &tool_done_shared,
-                    serde_json::json!({
-                        "ui_event": "tool_complete",
-                        "tool": tool,
-                        "result_preview": preview,
-                    }),
-                );
+                let failed = content.trim_start().starts_with("Error")
+                    || content.contains("Tool execution failed")
+                    || content.contains("timed out after");
+                let mut payload = serde_json::json!({
+                    "ui_event": "tool_complete",
+                    "tool": tool,
+                    "result_preview": preview,
+                    "failed": failed,
+                });
+                if failed && !preview.is_empty() {
+                    payload["error"] = serde_json::Value::String(preview.clone());
+                }
+                App::push_stream_extra_event(&tool_done_shared, payload);
             })),
             status_callback: Some(Arc::new(move |event_type: &str, message: &str| {
                 let preview = App::preview_for_status(message, 200);
@@ -4152,6 +4157,7 @@ mod tests {
             personality: None,
             ignore_user_config: false,
             ignore_rules: false,
+            accept_hooks: false,
         };
 
         apply_cli_runtime_overrides(&mut cfg, &cli);
@@ -4173,6 +4179,7 @@ mod tests {
             personality: None,
             ignore_user_config: false,
             ignore_rules: false,
+            accept_hooks: false,
         };
 
         apply_cli_runtime_overrides(&mut cfg, &cli);
