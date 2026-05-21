@@ -2567,11 +2567,11 @@ fn looks_like_internal_scaffold_line(line: &str) -> bool {
 
 fn strict_default_language_output_enabled() -> bool {
     match std::env::var("HERMES_TUI_STRICT_DEFAULT_LANGUAGE") {
-        Ok(raw) => !matches!(
+        Ok(raw) => matches!(
             raw.trim().to_ascii_lowercase().as_str(),
-            "0" | "false" | "no" | "off"
+            "1" | "true" | "yes" | "on"
         ),
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
