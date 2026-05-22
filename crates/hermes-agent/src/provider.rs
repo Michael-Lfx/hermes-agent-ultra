@@ -233,12 +233,11 @@ impl GenericProvider {
         }
     }
 
-    /// Inject optional runtime hints: reasoning effort, vision preprocessing,
-    /// and service tier.
+    /// Inject optional runtime hints: reasoning effort and service tier.
     fn apply_runtime_hints(
         &self,
         body: &mut Value,
-        messages: &[Message],
+        _messages: &[Message],
         extra_body: Option<&Value>,
     ) {
         // Reasoning effort passthrough (`low|medium|high`) using extra_body.reasoning_effort.
@@ -255,18 +254,6 @@ impl GenericProvider {
             .and_then(|v| v.as_str())
         {
             body["service_tier"] = serde_json::json!(st);
-        }
-
-        // Vision preprocessing: if user content contains local file-like paths,
-        // add a hint field used by downstream adapters.
-        let needs_vision_preprocess = messages.iter().any(|m| {
-            m.content
-                .as_deref()
-                .map(|c| c.contains(".png") || c.contains(".jpg") || c.contains("data:image/"))
-                .unwrap_or(false)
-        });
-        if needs_vision_preprocess {
-            body["vision_preprocessed"] = serde_json::json!(true);
         }
     }
 
