@@ -8970,7 +8970,7 @@ fn discovery_signature(tool_calls: &[ToolCall]) -> Option<String> {
         hasher.update(fp.as_bytes());
         hasher.update(b"\n");
     }
-    Some(format!("{:x}", hasher.finalize()))
+    Some(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 fn apply_repo_review_tool_profile_narrowing(

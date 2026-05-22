@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use base64::Engine;
-use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -19,8 +18,8 @@ use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
+use aes::cipher::array::Array;
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use aes::Aes128;
 
 use hermes_core::errors::GatewayError;
@@ -112,13 +111,12 @@ fn pkcs7_unpad(padded: &[u8]) -> Result<Vec<u8>, GatewayError> {
 }
 
 fn aes128_ecb_encrypt(plaintext: &[u8], key_bytes: &[u8; 16]) -> Vec<u8> {
-    let key = GenericArray::from_slice(key_bytes);
-    let cipher = Aes128::new(key);
+    let cipher = Aes128::new_from_slice(key_bytes).expect("valid 16-byte key");
     let padded = pkcs7_pad(plaintext, 16);
     let mut out = Vec::with_capacity(padded.len());
     for chunk in padded.chunks(16) {
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.encrypt_block(&mut block);
+        let mut block: Array<u8, _> = chunk.try_into().expect("chunk is 16 bytes");
+        cipher.encrypt_block((&mut block).into());
         out.extend_from_slice(&block);
     }
     out
@@ -130,12 +128,11 @@ fn aes128_ecb_decrypt(ciphertext: &[u8], key_bytes: &[u8; 16]) -> Result<Vec<u8>
             "weixin: invalid AES ciphertext length".into(),
         ));
     }
-    let key = GenericArray::from_slice(key_bytes);
-    let cipher = Aes128::new(key);
+    let cipher = Aes128::new_from_slice(key_bytes).expect("valid 16-byte key");
     let mut padded = Vec::with_capacity(ciphertext.len());
     for chunk in ciphertext.chunks(16) {
-        let mut block = GenericArray::clone_from_slice(chunk);
-        cipher.decrypt_block(&mut block);
+        let mut block: Array<u8, _> = chunk.try_into().expect("chunk is 16 bytes");
+        cipher.decrypt_block((&mut block).into());
         padded.extend_from_slice(&block);
     }
     pkcs7_unpad(&padded)
@@ -1117,11 +1114,12 @@ impl WeChatAdapter {
             .await
             .map_err(|e| GatewayError::SendFailed(format!("weixin read file: {e}")))?;
         let (filekey, aes_key, aeskey_hex) = {
-            let mut rng = rand::thread_rng();
+            use rand::RngExt;
+            let mut rng = rand::rng();
             let filekey: String = (0..16)
-                .map(|_| format!("{:02x}", rng.r#gen::<u8>()))
+                .map(|_| format!("{:02x}", rng.random::<u8>()))
                 .collect();
-            let aes_key: [u8; 16] = rng.r#gen();
+            let aes_key: [u8; 16] = rng.random();
             let aeskey_hex: String = aes_key.iter().map(|b| format!("{b:02x}")).collect();
             (filekey, aes_key, aeskey_hex)
         };
@@ -1186,7 +1184,7 @@ impl WeChatAdapter {
                 .and_then(|h| h.to_str().ok())
                 .map(String::from);
             let _ = resp.bytes().await;
-            ep.unwrap_or_else(|| filekey.clone())
+            ep.unwrap_or_else(|| filekey.to_owned())
         } else {
             return Err(GatewayError::SendFailed(format!(
                 "weixin getuploadurl missing upload_param and upload_full_url: {upload_resp}"

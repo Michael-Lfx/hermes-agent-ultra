@@ -80,17 +80,18 @@ tar = "0.4"
 serde_yaml = "0.9"
 regex = { workspace = true }
 urlencoding = "2"
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 hex = "0.4"
 base64 = { workspace = true }
 bytes = { workspace = true }
 aes-gcm = "0.10"
-rand = "0.8"
-zip = { version = "2", default-features = false, features = ["deflate"] }
-shlex = "1.3.0"
-arboard = "3.4"
-unicode-width = "0.1"
+rand = "0.10"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+shlex = "2.0.1"
+arboard = "3.6"
+rustls = { version = "0.23", features = ["aws-lc-rs"] }
+unicode-width = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -1139,7 +1139,8 @@ fn hash_skill_bundle(files: &[(String, Bytes)]) -> String {
         h.update(bytes.as_ref());
         h.update([0xFF]);
     }
-    format!("sha256:{:x}", h.finalize())
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
 }
 
 fn collect_skill_files_recursive(
@@ -1201,7 +1202,8 @@ fn hash_installed_skill_dir(skill_dir: &Path) -> Result<String, AgentError> {
         h.update(&bytes);
         h.update([0xFF]);
     }
-    Ok(format!("sha256:{:x}", h.finalize()))
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("sha256:{hex}"))
 }
 
 fn record_skill_install_in_hub_lock(

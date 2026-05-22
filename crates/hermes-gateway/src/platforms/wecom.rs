@@ -18,7 +18,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, trace, warn};
@@ -27,7 +27,7 @@ use uuid::Uuid;
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
-use crate::adapter::{describe_secret, AdapterProxyConfig, BasePlatformAdapter};
+use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter, describe_secret};
 use crate::gateway::IncomingMessage;
 use crate::ssrf::is_safe_url;
 
@@ -116,26 +116,28 @@ impl WeComConfig {
         let bot_id = {
             let v = gv("bot_id");
             if v.is_empty() {
-                std::env::var("WECOM_BOT_ID").unwrap_or_default().trim().to_string()
-    } else {
+                std::env::var("WECOM_BOT_ID")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            } else {
                 v
             }
         };
         let secret = {
             let v = gv("secret");
             if v.is_empty() {
-                std::env::var("WECOM_SECRET").unwrap_or_default().trim().to_string()
+                std::env::var("WECOM_SECRET")
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
             } else {
                 v
             }
         };
         let websocket_url = {
             let v = gv("websocket_url");
-            if v.is_empty() {
-                gv("websocketUrl")
-            } else {
-                v
-            }
+            if v.is_empty() { gv("websocketUrl") } else { v }
         };
         let websocket_url = if websocket_url.is_empty() {
             std::env::var("WECOM_WEBSOCKET_URL")
@@ -257,7 +259,10 @@ fn payload_req_id(payload: &Value) -> String {
 }
 
 fn response_error(response: &Value) -> Option<String> {
-    let errcode = response.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
+    let errcode = response
+        .get("errcode")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
     if errcode == 0 {
         return None;
     }
@@ -270,7 +275,9 @@ fn response_error(response: &Value) -> Option<String> {
 
 fn raise_for_wecom_error(response: &Value, operation: &str) -> Result<(), GatewayError> {
     if let Some(err) = response_error(response) {
-        return Err(GatewayError::SendFailed(format!("{operation} failed: {err}")));
+        return Err(GatewayError::SendFailed(format!(
+            "{operation} failed: {err}"
+        )));
     }
     Ok(())
 }
@@ -329,7 +336,11 @@ struct SizeCheck {
     downgrade_note: Option<String>,
 }
 
-fn apply_file_size_limits(file_size: usize, detected_type: &str, content_type: Option<&str>) -> SizeCheck {
+fn apply_file_size_limits(
+    file_size: usize,
+    detected_type: &str,
+    content_type: Option<&str>,
+) -> SizeCheck {
     let file_size_mb = file_size as f64 / (1024.0 * 1024.0);
     let normalized_type = detected_type.to_ascii_lowercase();
     let normalized_content_type = content_type.unwrap_or("").trim().to_ascii_lowercase();
@@ -408,10 +419,13 @@ fn apply_file_size_limits(file_size: usize, detected_type: &str, content_type: O
 
 #[cfg(feature = "wecom")]
 #[allow(dead_code)] // inbound encrypted media (Python `_cache_media`); wired in a follow-up
-fn decrypt_wecom_file_bytes(encrypted_data: &[u8], aes_key_b64: &str) -> Result<Vec<u8>, GatewayError> {
-    use aes::cipher::generic_array::GenericArray;
-    use aes::cipher::{BlockDecrypt, KeyInit};
+fn decrypt_wecom_file_bytes(
+    encrypted_data: &[u8],
+    aes_key_b64: &str,
+) -> Result<Vec<u8>, GatewayError> {
     use aes::Aes256;
+    use aes::cipher::array::Array;
+    use aes::cipher::{BlockCipherDecrypt, KeyInit};
 
     if encrypted_data.is_empty() {
         return Err(GatewayError::Platform("encrypted_data is empty".into()));
@@ -436,23 +450,27 @@ fn decrypt_wecom_file_bytes(encrypted_data: &[u8], aes_key_b64: &str) -> Result<
     }
     let iv = &key[..16];
     if encrypted_data.len() % 16 != 0 {
-        return Err(GatewayError::Platform("invalid encrypted block size".into()));
+        return Err(GatewayError::Platform(
+            "invalid encrypted block size".into(),
+        ));
     }
-    let aes = Aes256::new(GenericArray::from_slice(&key));
+    let aes = Aes256::new_from_slice(&key)
+        .map_err(|e| GatewayError::Platform(format!("aes key: {e}")))?;
     let mut prev = iv.to_vec();
     let mut plain = Vec::with_capacity(encrypted_data.len());
     for block in encrypted_data.chunks(16) {
-        let mut b = GenericArray::clone_from_slice(block);
-        aes.decrypt_block(&mut b);
+        let mut b: Array<u8, _> = block.try_into().expect("block is 16 bytes");
+        aes.decrypt_block((&mut b).into());
         for i in 0..16 {
             b[i] ^= prev[i];
         }
         prev.copy_from_slice(block);
         plain.extend_from_slice(&b);
     }
-    let pad_len = *plain.last().ok_or_else(|| {
-        GatewayError::Platform("Invalid PKCS#7 padding value".into())
-    })? as usize;
+    let pad_len = *plain
+        .last()
+        .ok_or_else(|| GatewayError::Platform("Invalid PKCS#7 padding value".into()))?
+        as usize;
     if pad_len < 1 || pad_len > 32 || pad_len > plain.len() {
         return Err(GatewayError::Platform(format!(
             "Invalid PKCS#7 padding value: {pad_len}"
@@ -521,8 +539,8 @@ impl WeComAdapter {
         let client = base.build_client()?;
         Ok(Self {
             inner: Arc::new(WeComInner {
-            config,
-            client,
+                config,
+                client,
                 device_id: Uuid::new_v4().simple().to_string(),
                 base,
                 inbound_tx: RwLock::new(None),
@@ -680,7 +698,7 @@ impl WeComAdapter {
         if let Some(quote) = quote {
             let quote_type = quote
                 .get("msgtype")
-            .and_then(|v| v.as_str())
+                .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_ascii_lowercase();
             if quote_type == "text" {
@@ -923,9 +941,7 @@ impl WeComAdapter {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(String::from)
-            .or_else(|| {
-                Self::parse_content_disposition_filename(content_disposition.as_deref())
-            })
+            .or_else(|| Self::parse_content_disposition_filename(content_disposition.as_deref()))
             .or_else(|| source_url.as_deref().and_then(Self::file_name_from_url))
             .unwrap_or_else(|| "wecom_file".to_string());
         if Path::new(&filename).extension().is_none() {
@@ -1077,7 +1093,10 @@ impl WeComAdapter {
         }
     }
 
-    async fn reply_req_id_for_message(inner: &WeComInner, reply_to: Option<&str>) -> Option<String> {
+    async fn reply_req_id_for_message(
+        inner: &WeComInner,
+        reply_to: Option<&str>,
+    ) -> Option<String> {
         let normalized = reply_to.unwrap_or("").trim();
         if normalized.is_empty() || normalized.starts_with("quote:") {
             return None;
@@ -1085,7 +1104,10 @@ impl WeComAdapter {
         inner.reply_req_ids.read().await.get(normalized).cloned()
     }
 
-    async fn reply_send_lock(inner: &WeComInner, reply_req_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    async fn reply_send_lock(
+        inner: &WeComInner,
+        reply_req_id: &str,
+    ) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = inner.reply_req_locks.lock().await;
         let lock = locks
             .entry(reply_req_id.to_string())
@@ -1137,9 +1159,7 @@ impl WeComAdapter {
         }
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(v)) => Ok(v),
-            Ok(Err(_)) => Err(GatewayError::SendFailed(
-                "WeCom request cancelled".into(),
-            )),
+            Ok(Err(_)) => Err(GatewayError::SendFailed("WeCom request cancelled".into())),
             Err(_) => {
                 inner.pending.write().await.remove(&req_id);
                 Err(GatewayError::SendFailed("Timeout sending to WeCom".into()))
@@ -1315,7 +1335,7 @@ impl WeComAdapter {
             chat_id: chat_id.clone(),
             user_id: if sender_id.is_empty() {
                 chat_id.clone()
-                } else {
+            } else {
                 sender_id
             },
             text,
@@ -1369,7 +1389,7 @@ impl WeComAdapter {
         let chunk_len = event.text.chars().count();
         let flush_delay = if chunk_len >= SPLIT_THRESHOLD {
             Duration::from_secs_f64(text_batch_split_delay_secs())
-                } else {
+        } else {
             Duration::from_secs_f64(delay_secs)
         };
 
@@ -1385,7 +1405,7 @@ impl WeComAdapter {
                     }
                 }
                 existing.last_chunk_len = chunk_len;
-                } else {
+            } else {
                 pending.insert(
                     key.clone(),
                     PendingTextBatch {
@@ -1460,10 +1480,7 @@ impl WeComAdapter {
                             continue;
                         }
                     };
-                    let cmd = payload
-                        .get("cmd")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let cmd = payload.get("cmd").and_then(|v| v.as_str()).unwrap_or("");
                     if cmd == APP_CMD_PING {
                         continue;
                     }
@@ -1512,12 +1529,13 @@ impl WeComAdapter {
                         },
                     });
                     let sub_json = serde_json::to_string(&sub_frame).unwrap_or_default();
-                    if write.send(WsMessage::Text(sub_json)).await.is_err() {
+                    if write.send(WsMessage::Text(sub_json.into())).await.is_err() {
                         warn!("WeCom subscribe send failed");
                         continue;
                     }
 
-                    match Self::wait_for_subscribe_ack(&mut read, &mut write, &subscribe_req).await {
+                    match Self::wait_for_subscribe_ack(&mut read, &mut write, &subscribe_req).await
+                    {
                         Ok(resp) => {
                             if let Some(err) = response_error(&resp) {
                                 error!(error = %err, "WeCom subscribe failed");
@@ -1559,12 +1577,12 @@ impl WeComAdapter {
                                     "body": {},
                                 });
                                 if let Ok(s) = serde_json::to_string(&ping) {
-                                    let _ = write.send(WsMessage::Text(s)).await;
+                                    let _ = write.send(WsMessage::Text(s.into())).await;
                                 }
                             }
                             Some(frame) = outbound_rx.recv() => {
                                 if let Ok(s) = serde_json::to_string(&frame) {
-                                    if write.send(WsMessage::Text(s)).await.is_err() {
+                                    if write.send(WsMessage::Text(s.into())).await.is_err() {
                                         break;
                                     }
                                 }
@@ -1656,7 +1674,11 @@ impl WeComAdapter {
         Ok(())
     }
 
-    async fn resolve_reply_req_id(inner: &WeComInner, chat_id: &str, reply_to: Option<&str>) -> Option<String> {
+    async fn resolve_reply_req_id(
+        inner: &WeComInner,
+        chat_id: &str,
+        reply_to: Option<&str>,
+    ) -> Option<String> {
         let mut reply_req_id = Self::reply_req_id_for_message(inner, reply_to).await;
         if reply_req_id.is_none() {
             reply_req_id = inner.last_chat_req_ids.read().await.get(chat_id).cloned();
@@ -1858,13 +1880,7 @@ impl WeComAdapter {
             }
             let resolved_name = file_name
                 .map(String::from)
-                .unwrap_or_else(|| {
-                    source
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or("document")
-                        .to_string()
-                });
+                .unwrap_or_else(|| source.rsplit('/').next().unwrap_or("document").to_string());
             let ct = if content_type.is_empty() {
                 guess_mime_type(&resolved_name)
             } else {
@@ -1888,14 +1904,12 @@ impl WeComAdapter {
         let bytes = tokio::fs::read(&path)
             .await
             .map_err(|e| GatewayError::SendFailed(format!("Media file not found: {e}")))?;
-        let resolved_name = file_name
-            .map(String::from)
-            .unwrap_or_else(|| {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("file")
-                    .to_string()
-            });
+        let resolved_name = file_name.map(String::from).unwrap_or_else(|| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file")
+                .to_string()
+        });
         let ct = guess_mime_type(&resolved_name);
         Ok((bytes, ct, resolved_name))
     }
@@ -1919,15 +1933,23 @@ impl WeComAdapter {
             return Err(GatewayError::SendFailed(reason));
         }
         let mut reply_req_id = inner.last_chat_req_ids.read().await.get(chat_id).cloned();
-        let media_id = Self::upload_media_bytes(inner, &data, &check.final_type, &file_name).await?;
-        Self::send_media_message(inner, chat_id, &check.final_type, &media_id, reply_req_id.take())
-            .await?;
+        let media_id =
+            Self::upload_media_bytes(inner, &data, &check.final_type, &file_name).await?;
+        Self::send_media_message(
+            inner,
+            chat_id,
+            &check.final_type,
+            &media_id,
+            reply_req_id.take(),
+        )
+        .await?;
         if let Some(cap) = caption.filter(|c| !c.trim().is_empty()) {
             let _ = Self::send_markdown_inner(inner, chat_id, cap, None).await;
         }
         if check.downgraded {
             if let Some(note) = check.downgrade_note {
-                let _ = Self::send_markdown_inner(inner, chat_id, &format!("ℹ️ {note}"), None).await;
+                let _ =
+                    Self::send_markdown_inner(inner, chat_id, &format!("ℹ️ {note}"), None).await;
             }
         }
         Ok(())
@@ -2008,7 +2030,9 @@ impl PlatformAdapter for WeComAdapter {
                         Some(c) => format!("{c}\n{image_url}"),
                         None => image_url.to_string(),
                     };
-                    return self.send_message(chat_id, &fallback, Some(ParseMode::Plain)).await;
+                    return self
+                        .send_message(chat_id, &fallback, Some(ParseMode::Plain))
+                        .await;
                 }
                 Err(err)
             }
@@ -2045,7 +2069,11 @@ impl PlatformAdapter for WeComAdapter {
             )
             .await
             {
-                self.inner.stream_reply_req_ids.write().await.remove(&stream_id);
+                self.inner
+                    .stream_reply_req_ids
+                    .write()
+                    .await
+                    .remove(&stream_id);
                 return Err(err);
             }
         }
@@ -2068,9 +2096,14 @@ impl PlatformAdapter for WeComAdapter {
             .cloned()
             .ok_or_else(|| GatewayError::SendFailed("WeCom stream session not found".into()))?;
         let res =
-            Self::send_stream_chunk_inner(&self.inner, &reply_req_id, stream_id, content, finish).await;
+            Self::send_stream_chunk_inner(&self.inner, &reply_req_id, stream_id, content, finish)
+                .await;
         if finish {
-            self.inner.stream_reply_req_ids.write().await.remove(stream_id);
+            self.inner
+                .stream_reply_req_ids
+                .write()
+                .await
+                .remove(stream_id);
         }
         res
     }
@@ -2179,9 +2212,9 @@ mod tests {
 
     #[test]
     fn decrypt_wecom_file_bytes_roundtrip() {
-        use aes::cipher::generic_array::GenericArray;
-        use aes::cipher::{BlockEncrypt, KeyInit};
         use aes::Aes256;
+        use aes::cipher::array::Array;
+        use aes::cipher::{BlockCipherEncrypt, KeyInit};
 
         let key = [7u8; 32];
         let iv = &key[..16];
@@ -2198,8 +2231,8 @@ mod tests {
             for i in 0..16 {
                 x[i] = block[i] ^ prev[i];
             }
-            let mut b = GenericArray::clone_from_slice(&x);
-            aes.encrypt_block(&mut b);
+            let mut b: Array<u8, _> = x.try_into().expect("block is 16 bytes");
+            aes.encrypt_block((&mut b).into());
             prev.copy_from_slice(&b);
             cipher.extend_from_slice(&b);
         }

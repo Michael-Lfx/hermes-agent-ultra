@@ -371,7 +371,9 @@ pub fn content_hash(skill_path: &Path) -> String {
     } else if let Ok(bytes) = std::fs::read(skill_path) {
         h.update(bytes);
     }
-    format!("sha256:{:x}", h.finalize()).chars().take(23).collect()
+    let hash = h.finalize();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}").chars().take(23).collect()
 }
 
 fn build_summary(name: &str, source: &str, trust: &str, verdict: &str, findings: &[Finding]) -> String {

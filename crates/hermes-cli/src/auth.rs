@@ -8,7 +8,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use chrono::Utc;
 use hermes_core::AgentError;
-use rand::RngCore;
+use rand::TryRng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -1717,7 +1717,7 @@ fn default_gemini_client_secret() -> String {
 
 fn build_oauth_pkce_pair() -> (String, String) {
     let mut verifier_bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut verifier_bytes);
+    rand::rngs::SysRng.try_fill_bytes(&mut verifier_bytes).expect("rng failed");
     let verifier = BASE64_URL_SAFE_NO_PAD.encode(verifier_bytes);
     let challenge = BASE64_URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     (verifier, challenge)
@@ -1725,7 +1725,7 @@ fn build_oauth_pkce_pair() -> (String, String) {
 
 fn build_oauth_state_token() -> String {
     let mut state_bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut state_bytes);
+    rand::rngs::SysRng.try_fill_bytes(&mut state_bytes).expect("rng failed");
     BASE64_URL_SAFE_NO_PAD.encode(state_bytes)
 }
 

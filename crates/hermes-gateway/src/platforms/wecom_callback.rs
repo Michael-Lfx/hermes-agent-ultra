@@ -7,8 +7,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, KeyInit};
+use aes::cipher::array::Array;
+use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use aes::Aes256;
 use async_trait::async_trait;
 use base64::Engine;
@@ -208,7 +208,7 @@ impl WeComCallbackAdapter {
         parts.sort();
         let mut hasher = Sha1::new();
         hasher.update(parts.join("").as_bytes());
-        format!("{:x}", hasher.finalize())
+        hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
     }
 
     fn pkcs7_unpad(data: &[u8]) -> Result<Vec<u8>, GatewayError> {
@@ -251,12 +251,13 @@ impl WeComCallbackAdapter {
                 "invalid encrypted block size".into(),
             ));
         }
-        let aes = Aes256::new(GenericArray::from_slice(&key));
+        let aes = Aes256::new_from_slice(&key)
+            .map_err(|e| GatewayError::Platform(format!("aes key: {e}")))?;
         let mut prev = iv.to_vec();
         let mut plain = Vec::with_capacity(cipher_bytes.len());
         for block in cipher_bytes.chunks(16) {
-            let mut b = GenericArray::clone_from_slice(block);
-            aes.decrypt_block(&mut b);
+            let mut b: Array<u8, _> = block.try_into().expect("block is 16 bytes");
+            aes.decrypt_block((&mut b).into());
             for i in 0..16 {
                 b[i] ^= prev[i];
             }
