@@ -13570,6 +13570,16 @@ mod tests {
         assert_eq!(cfg.model.as_deref(), Some("nous:nousresearch/hermes-4-70b"));
     }
 
+    #[tokio::test]
+    async fn run_portal_rejects_unknown_action() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cli = cli_for_temp_state_root(tmp.path());
+        let err = run_portal(cli, Some("bogus".to_string()))
+            .await
+            .expect_err("unknown portal actions must fail before auth side effects");
+        assert!(err.to_string().contains("Unknown portal action 'bogus'"));
+    }
+
     #[test]
     fn mask_secret_hides_token_body() {
         let raw = "abcdefgh1234567890";
