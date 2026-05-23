@@ -2188,11 +2188,6 @@ fn gateway_launchd_plist_path() -> Option<PathBuf> {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
-fn gateway_launchd_plist_path() -> Option<PathBuf> {
-    None
-}
-
 #[cfg(target_os = "macos")]
 fn launchd_target() -> String {
     let uid = unsafe { libc::geteuid() };
