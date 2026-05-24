@@ -1,5 +1,6 @@
 //! Inbound message orchestration (vision routing, auxiliary pre-analysis).
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -30,6 +31,18 @@ impl AgentInboundPreparer {
         Self { auxiliary }
     }
 
+    fn path_looks_like_image(path: &str) -> bool {
+        Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "heic" | "heif" | "avif"
+                )
+            })
+    }
+
     fn image_paths(event: &InboundEvent) -> Vec<String> {
         event
             .media_urls
@@ -37,7 +50,7 @@ impl AgentInboundPreparer {
             .zip(event.media_types.iter())
             .filter_map(|(url, ty)| {
                 let ty = ty.trim().to_lowercase();
-                if ty.starts_with("image/") || ty == "image" {
+                if ty.starts_with("image/") || ty == "image" || Self::path_looks_like_image(url) {
                     Some(url.clone())
                 } else {
                     None

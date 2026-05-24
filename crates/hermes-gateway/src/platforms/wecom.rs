@@ -328,6 +328,22 @@ fn guess_mime_type(filename: &str) -> String {
     .to_string()
 }
 
+/// COS downloads for WeCom AI Bot images often report `application/octet-stream`.
+/// Downstream vision routing only accepts `image/*` in `media_types` (Python parity:
+/// `_mime_for_ext` when header MIME is generic).
+fn normalize_inbound_image_content_type(content_type: &str, ext: &str) -> String {
+    let normalized = content_type.trim().to_ascii_lowercase();
+    if normalized.is_empty()
+        || normalized == "application/octet-stream"
+        || normalized == "text/plain"
+        || !normalized.starts_with("image/")
+    {
+        guess_mime_type(&format!("x{ext}"))
+    } else {
+        normalized
+    }
+}
+
 struct SizeCheck {
     final_type: String,
     rejected: bool,
@@ -923,11 +939,8 @@ impl WeComAdapter {
                     return None;
                 }
             };
-            let normalized_content_type = if content_type.trim().is_empty() {
-                guess_mime_type(&format!("x{ext}"))
-            } else {
-                content_type
-            };
+            let normalized_content_type =
+                normalize_inbound_image_content_type(&content_type, ext);
             return Some(CachedInboundMedia {
                 path,
                 content_type: normalized_content_type,
@@ -2208,6 +2221,18 @@ mod tests {
     fn detect_image_ext_png() {
         let raw = b"\x89PNG\r\n\x1a\nabcdef";
         assert_eq!(WeComAdapter::detect_image_ext(raw), ".png");
+    }
+
+    #[test]
+    fn normalize_inbound_image_content_type_maps_octet_stream_to_png() {
+        assert_eq!(
+            normalize_inbound_image_content_type("application/octet-stream", ".png"),
+            "image/png"
+        );
+        assert_eq!(
+            normalize_inbound_image_content_type("image/jpeg", ".jpg"),
+            "image/jpeg"
+        );
     }
 
     #[test]
