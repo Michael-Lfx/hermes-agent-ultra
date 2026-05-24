@@ -93,6 +93,7 @@ pub enum ApiMode {
     ChatCompletions,
     AnthropicMessages,
     CodexResponses,
+    BedrockConverse,
 }
 
 impl Default for ApiMode {

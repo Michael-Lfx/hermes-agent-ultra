@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,7 +19,7 @@ use futures::StreamExt;
 use hermes_auth::{OAuth2Endpoints, exchange_refresh_token};
 use hermes_intelligence::get_model_context_length;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::task::JoinSet;
 use tokio::time::sleep;
@@ -444,6 +444,34 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub runtime_providers: HashMap<String, RuntimeProviderConfig>,
 
+    /// OpenRouter provider routing: allowed slugs only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers_allowed: Vec<String>,
+
+    /// OpenRouter provider routing: ignored slugs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers_ignored: Vec<String>,
+
+    /// OpenRouter provider routing: preferred order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers_order: Vec<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_sort: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_require_parameters: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_data_collection: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrouter_min_coding_score: Option<f64>,
+
+    /// Enable filesystem checkpoints before mutating tools.
+    #[serde(default = "default_checkpoints_enabled")]
+    pub checkpoints_enabled: bool,
+
     /// Ephemeral system prompt appended at API-call time only.
     /// This is intentionally not persisted in context history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -646,6 +674,10 @@ fn default_checkpoint_interval_turns() -> u32 {
     3
 }
 
+fn default_checkpoints_enabled() -> bool {
+    true
+}
+
 fn default_rollback_on_tool_error_threshold() -> u32 {
     3
 }
@@ -758,6 +790,14 @@ impl Default for AgentConfig {
             disabled_skills: Vec::new(),
             pass_session_id: false,
             runtime_providers: HashMap::new(),
+            providers_allowed: Vec::new(),
+            providers_ignored: Vec::new(),
+            providers_order: Vec::new(),
+            provider_sort: None,
+            provider_require_parameters: None,
+            provider_data_collection: None,
+            openrouter_min_coding_score: None,
+            checkpoints_enabled: default_checkpoints_enabled(),
             ephemeral_system_prompt: None,
             max_cost_usd: None,
             cost_guard_degrade_at_ratio: default_cost_guard_degrade_at_ratio(),
@@ -1942,6 +1982,50 @@ impl AgentLoop {
         rt
     }
 
+    /// Build an LLM provider from a full [`PrimaryRuntime`] snapshot (failover / fallback).
+    fn build_llm_provider_for_runtime(
+        &self,
+        runtime: &PrimaryRuntime,
+    ) -> Result<Arc<dyn LlmProvider>, AgentError> {
+        let (inferred_provider, model_name) =
+            self.extract_provider_and_model(runtime.model.as_str());
+        let provider = runtime
+            .provider
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(inferred_provider.as_str());
+        let pool = runtime
+            .credential_pool
+            .as_ref()
+            .or(self.primary_credential_pool.as_ref());
+        self.build_runtime_provider(
+            provider,
+            model_name,
+            runtime.base_url.as_deref(),
+            None,
+            None,
+            Some(&runtime.api_mode),
+            pool,
+        )
+    }
+
+    /// Effective provider for API calls: rebuild from active runtime when fallback is active.
+    fn effective_llm_provider(&self) -> Arc<dyn LlmProvider> {
+        let fallback_active = self
+            .turn_fallback
+            .lock()
+            .map(|fb| fb.is_fallback_activated())
+            .unwrap_or(false);
+        if fallback_active {
+            if let Ok(active) = self.active_runtime.lock() {
+                if let Ok(provider) = self.build_llm_provider_for_runtime(&active) {
+                    return provider;
+                }
+            }
+        }
+        self.llm_provider.clone()
+    }
+
     fn note_primary_rate_limited_if_applicable(&self) {
         let already = self
             .turn_fallback
@@ -2319,6 +2403,14 @@ impl AgentLoop {
         }
     }
 
+    fn apply_transform_llm_output_hooks(&self, content: &mut Option<String>) {
+        let hook_ctx = serde_json::json!({
+            "content": content.clone().unwrap_or_default(),
+        });
+        let results = self.invoke_hook(HookType::TransformLlmOutput, &hook_ctx);
+        self.apply_hook_output_transforms(&results, content);
+    }
+
     fn hook_context_spill_threshold_chars(&self) -> usize {
         std::env::var("HERMES_HOOK_CONTEXT_SPILL_CHARS")
             .ok()
@@ -2601,7 +2693,54 @@ impl AgentLoop {
             ApiMode::ChatCompletions => "chat_completions",
             ApiMode::AnthropicMessages => "anthropic_messages",
             ApiMode::CodexResponses => "codex_responses",
+            ApiMode::BedrockConverse => "bedrock_converse",
         }
+    }
+
+    fn openrouter_provider_preferences(&self) -> Option<Value> {
+        let cfg = self.config();
+        let mut prefs = serde_json::Map::new();
+        if !cfg.providers_allowed.is_empty() {
+            prefs.insert("only".into(), Value::Array(
+                cfg.providers_allowed.iter().map(|s| Value::String(s.clone())).collect(),
+            ));
+        }
+        if !cfg.providers_ignored.is_empty() {
+            prefs.insert("ignore".into(), Value::Array(
+                cfg.providers_ignored.iter().map(|s| Value::String(s.clone())).collect(),
+            ));
+        }
+        if !cfg.providers_order.is_empty() {
+            prefs.insert("order".into(), Value::Array(
+                cfg.providers_order.iter().map(|s| Value::String(s.clone())).collect(),
+            ));
+        }
+        if let Some(sort) = cfg.provider_sort.as_deref().filter(|s| !s.is_empty()) {
+            prefs.insert("sort".into(), Value::String(sort.to_string()));
+        }
+        if let Some(req) = cfg.provider_require_parameters {
+            prefs.insert("require_parameters".into(), Value::Bool(req));
+        }
+        if let Some(dc) = cfg
+            .provider_data_collection
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
+            prefs.insert("data_collection".into(), Value::String(dc.to_string()));
+        }
+        if prefs.is_empty() && cfg.openrouter_min_coding_score.is_none() {
+            return None;
+        }
+        let mut provider_obj = Value::Object(prefs);
+        if let Some(score) = cfg.openrouter_min_coding_score {
+            if let Some(obj) = provider_obj.as_object_mut() {
+                obj.insert(
+                    "plugins".into(),
+                    json!([{ "id": "pareto-router", "min_coding_score": score }]),
+                );
+            }
+        }
+        Some(provider_obj)
     }
 
     fn invoke_pre_api_request_hook(
@@ -3618,6 +3757,19 @@ impl AgentLoop {
                 .with_model(model_name);
                 Arc::new(p)
             }
+            "bedrock" | "aws-bedrock" => {
+                let region = std::env::var("AWS_REGION")
+                    .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                    .unwrap_or_else(|_| "us-east-1".into());
+                let url = base_url.unwrap_or_else(|| {
+                    format!("https://bedrock-runtime.{region}.amazonaws.com")
+                });
+                let mut g = GenericProvider::new(url, &api_key, model_name);
+                if let Some(pool) = credential_pool {
+                    g = g.with_credential_pool(pool.clone());
+                }
+                Arc::new(g)
+            }
             _ => {
                 let url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
                 let mut g = GenericProvider::new(url, &api_key, model_name);
@@ -3665,7 +3817,10 @@ impl AgentLoop {
             messages.push(Message::system(ephemeral));
         }
         self.apply_prompt_cache_markers(&mut messages);
-        messages
+        crate::vision_message_prepare::strip_images_for_non_vision_model(
+            &messages,
+            self.active_model().as_str(),
+        )
     }
 
     fn apply_prompt_cache_markers(&self, messages: &mut Vec<Message>) {
@@ -4141,6 +4296,15 @@ impl AgentLoop {
                 body["strict_api"] = Value::Bool(true);
             }
         }
+        let cfg = self.config();
+        let provider = cfg.provider.as_deref().unwrap_or("");
+        if provider.eq_ignore_ascii_case("openrouter")
+            || self.active_model().contains("openrouter/")
+        {
+            if let Some(prefs) = self.openrouter_provider_preferences() {
+                body["provider"] = prefs;
+            }
+        }
         Some(body)
     }
 
@@ -4201,7 +4365,6 @@ impl AgentLoop {
                 tracing::debug!(command = ?rt.command, args = ?rt.args, "smart route process metadata");
             }
         }
-        let api_messages = self.messages_for_api_call(ctx);
         let retry = self.config().retry.clone();
         let (effective_max_retries, effective_base_delay_ms) =
             (retry.max_retries, retry.base_delay_ms);
@@ -4209,8 +4372,11 @@ impl AgentLoop {
         let default_api_mode = active_runtime.api_mode.clone();
         let default_extra_body = self.extra_body_for_api_mode(&default_api_mode);
         let effective_max_tokens = max_tokens_override.or(self.config().max_tokens);
+        let mut context_overflow_retries = 0u32;
+        let mut has_retried_429_same_cred = false;
 
         for attempt in 0..=effective_max_retries {
+            let api_messages = self.messages_for_api_call(ctx);
             self.interrupt.check_interrupt()?;
             *api_call_count = api_call_count.saturating_add(1);
             let hook_api_mode = route
@@ -4263,7 +4429,7 @@ impl AgentLoop {
                             rt.routing_reason,
                             e
                         );
-                        self.llm_provider
+                        self.effective_llm_provider()
                             .chat_completion(
                                 &api_messages,
                                 tool_schemas,
@@ -4276,7 +4442,7 @@ impl AgentLoop {
                     }
                 }
             } else {
-                self.llm_provider
+                self.effective_llm_provider()
                     .chat_completion(
                         &api_messages,
                         tool_schemas,
@@ -4482,9 +4648,57 @@ impl AgentLoop {
                             return Err(AgentError::LlmApi(err_str));
                         }
                         ErrorClass::ContextOverflow => {
+                            if context_overflow_retries == 0 {
+                                context_overflow_retries = 1;
+                                tracing::warn!(
+                                    "Context overflow detected; compressing context and retrying in-turn"
+                                );
+                                self.emit_status(
+                                    "lifecycle",
+                                    "Context window exceeded; compressing history and retrying",
+                                );
+                                ctx.compress();
+                                continue;
+                            }
                             return Err(AgentError::LlmApi(err_str));
                         }
                         ErrorClass::RateLimit | ErrorClass::Retryable => {
+                            if matches!(class, ErrorClass::RateLimit) {
+                                let pool = route
+                                    .and_then(|rt| self.credential_pool_for_route(rt))
+                                    .or(self.primary_credential_pool.as_ref());
+                                let base_url = self.resolve_runtime_base_url(
+                                    active_provider.as_str(),
+                                    route.and_then(|rt| rt.base_url.as_deref()),
+                                );
+                                let (recovered, new_flag) =
+                                    crate::credential_pool_recovery::try_recover_with_credential_pool(
+                                        pool.map(|p| p.as_ref()),
+                                        active_provider.as_str(),
+                                        base_url.as_deref(),
+                                        has_retried_429_same_cred,
+                                    );
+                                has_retried_429_same_cred = new_flag;
+                                if recovered {
+                                    tracing::info!(
+                                        "Rate limit: rotated credential pool entry, retrying"
+                                    );
+                                    self.emit_status(
+                                        "lifecycle",
+                                        "Rate limited; rotated API credential and retrying",
+                                    );
+                                    continue;
+                                }
+                                if !crate::credential_pool_recovery::pool_may_recover_from_rate_limit(
+                                    pool.map(|p| p.as_ref()),
+                                    active_provider.as_str(),
+                                    base_url.as_deref(),
+                                ) {
+                                    if attempt >= effective_max_retries {
+                                        self.note_primary_rate_limited_if_applicable();
+                                    }
+                                }
+                            }
                             if attempt >= effective_max_retries {
                                 if matches!(class, ErrorClass::RateLimit) {
                                     self.note_primary_rate_limited_if_applicable();
@@ -4502,24 +4716,32 @@ impl AgentLoop {
                                             model,
                                             fallback
                                         );
-                                        let fallback_result = self
-                                            .llm_provider
-                                            .chat_completion(
-                                                &api_messages,
-                                                tool_schemas,
-                                                effective_max_tokens,
-                                                self.config().temperature,
-                                                Some(self.extract_provider_and_model(&fallback).1),
-                                                default_extra_body.as_ref(),
-                                            )
-                                            .await;
+                                        let failover_runtime =
+                                            self.primary_runtime_for_failover_model(&fallback);
+                                        let (_, failover_model_name) =
+                                            self.extract_provider_and_model(&fallback);
+                                        let extra_body = self
+                                            .extra_body_for_api_mode(&failover_runtime.api_mode);
+                                        let fallback_result = match self
+                                            .build_llm_provider_for_runtime(&failover_runtime)
+                                        {
+                                            Ok(provider) => {
+                                                provider
+                                                    .chat_completion(
+                                                        &api_messages,
+                                                        tool_schemas,
+                                                        effective_max_tokens,
+                                                        self.config().temperature,
+                                                        Some(failover_model_name),
+                                                        extra_body.as_ref(),
+                                                    )
+                                                    .await
+                                            }
+                                            Err(build_err) => Err(build_err),
+                                        };
                                         match fallback_result {
                                             Ok(resp) => {
-                                                self.activate_runtime_fallback(
-                                                    self.primary_runtime_for_failover_model(
-                                                        &fallback,
-                                                    ),
-                                                );
+                                                self.activate_runtime_fallback(failover_runtime);
                                                 self.emit_status(
                                                     "lifecycle",
                                                     &format!(
@@ -4607,6 +4829,7 @@ impl AgentLoop {
         max_tokens_override: Option<u32>,
         on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
         api_call_count: &mut u32,
+        mut stream_scrubber: Option<&mut crate::stream_scrubber::ThinkBlockScrubber>,
     ) -> Result<StreamCollectOutcome, AgentError> {
         let api_messages = self.messages_for_api_call(ctx);
         let (_, active_model_name) = self.extract_provider_and_model(active_model);
@@ -4775,9 +4998,14 @@ impl AgentLoop {
                 if let Some(ref delta) = chunk.delta {
                     if let Some(ref text) = delta.content {
                         deltas_were_sent = true;
-                        content.push_str(text);
+                        let scrubbed = if let Some(scrubber) = stream_scrubber.as_deref_mut() {
+                            scrubber.scrub(text)
+                        } else {
+                            text.clone()
+                        };
+                        content.push_str(&scrubbed);
                         if let Some(ref cb) = self.callbacks.on_stream_delta {
-                            cb(text);
+                            cb(&scrubbed);
                         }
                     }
                     if let Some(ref extra) = delta.extra {
@@ -5060,8 +5288,20 @@ impl AgentLoop {
         let mut finalizer_output_quality_retries: u32 = 0;
         let mut finalizer_action_execution_retries: u32 = 0;
         let governor_window_limit = governor_window_size();
+        let budget_cap = max_turns_limit.unwrap_or(self.config().max_turns);
+        let mut iteration_budget = crate::iteration_budget::IterationBudget::new(budget_cap);
+        let mut tool_guardrails = crate::tool_guardrails::ToolGuardrailController::new();
+        let mut file_mutation =
+            crate::file_mutation_tracker::FileMutationTracker::new(self.config().checkpoints_enabled);
+        let mut stream_scrubber = crate::stream_scrubber::ThinkBlockScrubber::new();
+        let mut checkpoint_mgr = hermes_tools::CheckpointManager::new(
+            self.config().checkpoints_enabled,
+            self.config().hermes_home.as_deref().map(Path::new),
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        );
 
         loop {
+            stream_scrubber.reset();
             if self.interrupt.take_interrupt_graceful().is_some() {
                 return Ok(self.graceful_interrupt_result(
                     &ctx,
@@ -5075,7 +5315,7 @@ impl AgentLoop {
             }
 
             if let Some(max_turns) = max_turns_limit {
-                if total_turns >= max_turns {
+                if iteration_budget.exhausted() || total_turns >= max_turns {
                     tracing::warn!(
                         "Max turns ({}) exceeded, requesting final summary",
                         max_turns
@@ -5114,6 +5354,7 @@ impl AgentLoop {
             }
 
             total_turns += 1;
+            iteration_budget.consume();
             tracing::debug!("Agent turn {}", total_turns);
 
             // Refresh oauth-backed runtime credentials before routing/provider selection.
@@ -5363,6 +5604,7 @@ impl AgentLoop {
             let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
             self.inject_hook_context(&post_results, &mut ctx);
             self.apply_hook_output_transforms(&post_results, &mut response.message.content);
+            self.apply_transform_llm_output_hooks(&mut response.message.content);
 
             // Accumulate usage (merged across semantic-retried sub-calls)
             if let Some(ref usage) = turn_usage_acc {
@@ -5591,6 +5833,17 @@ impl AgentLoop {
                     }
                 }
                 tracing::debug!("No tool calls in response, finishing naturally");
+                if file_mutation.has_failures() {
+                    let footer = file_mutation.format_advisory_footer();
+                    for msg in ctx.get_messages_mut().iter_mut().rev() {
+                        if matches!(msg.role, MessageRole::Assistant) {
+                            if let Some(content) = msg.content.as_mut() {
+                                content.push_str(&footer);
+                            }
+                            break;
+                        }
+                    }
+                }
                 if let Err(err) = self.append_objective_runtime_ledger(
                     ctx.get_messages(),
                     assistant_msg.content.as_deref().unwrap_or_default(),
@@ -5833,6 +6086,32 @@ impl AgentLoop {
                 .config()
                 .max_cost_usd
                 .map(|limit| (limit - session_cost_usd).max(0.0));
+            for tc in &tool_calls {
+                let args: Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                match tool_guardrails.before_call(&tc.function.name, &args) {
+                    crate::tool_guardrails::GuardrailDecision::Halt(reason) => {
+                        ctx.add_message(Message::assistant(format!(
+                            "[Tool guardrail halt] {reason}"
+                        )));
+                        return Ok(self.finalize_agent_result(AgentResult {
+                            messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
+                            finished_naturally: true,
+                            total_turns,
+                            tool_errors,
+                            usage: accumulated_usage,
+                            interrupted: false,
+                            session_cost_usd: Some(session_cost_usd),
+                            session_started_hooks_fired,
+                            pending_steer: None,
+                        }));
+                    }
+                    crate::tool_guardrails::GuardrailDecision::Block(reason) => {
+                        tracing::warn!(tool = %tc.function.name, %reason, "tool guardrail block");
+                    }
+                    crate::tool_guardrails::GuardrailDecision::Allow => {}
+                }
+            }
             let results = self
                 .execute_tool_calls(
                     &tool_calls,
@@ -5841,6 +6120,7 @@ impl AgentLoop {
                     contextlattice_connect_intent,
                     parent_budget_remaining_usd,
                     &mut tool_errors,
+                    Some(&mut checkpoint_mgr),
                 )
                 .await;
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
@@ -5891,6 +6171,7 @@ impl AgentLoop {
             {
                 if let Some(snapshot) = last_checkpoint_messages.clone() {
                     *ctx.get_messages_mut() = snapshot;
+                    let _ = checkpoint_mgr.restore_latest();
                     ctx.add_message(Message::system(format!(
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
@@ -5916,6 +6197,18 @@ impl AgentLoop {
                 }
             }
 
+            for (tc, res) in tool_calls.iter().zip(results.iter()) {
+                let args: Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                tool_guardrails.after_call(&tc.function.name, res.is_error, &res.content);
+                file_mutation.record_tool_result(
+                    &tc.function.name,
+                    &args,
+                    &res.content,
+                    res.is_error,
+                );
+            }
+
             self.notify_memory_writes(&tool_calls, &results);
             self.notify_delegations(&tool_calls, &results);
 
@@ -5937,6 +6230,12 @@ impl AgentLoop {
                 inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
             }
             let lsp_note = self.lsp_context_note(&tool_calls, &results);
+
+            let execute_code_refund = !tool_calls.is_empty()
+                && tool_calls
+                    .iter()
+                    .all(|tc| tc.function.name == "execute_code")
+                && !results.iter().any(|r| r.is_error);
 
             let num_tool_msgs = results.len();
             for result in results {
@@ -6007,11 +6306,8 @@ impl AgentLoop {
                     pending_steer: None,
                 }));
             }
-            if !tool_calls.is_empty()
-                && tool_calls
-                    .iter()
-                    .all(|tc| tc.function.name == "execute_code")
-            {
+            if execute_code_refund {
+                iteration_budget.refund(1);
                 total_turns = total_turns.saturating_sub(1);
             }
             self.emit_background_review_metrics(total_turns, &ctx);
@@ -6266,8 +6562,20 @@ impl AgentLoop {
         let mut finalizer_output_quality_retries: u32 = 0;
         let mut finalizer_action_execution_retries: u32 = 0;
         let governor_window_limit = governor_window_size();
+        let budget_cap = max_turns_limit.unwrap_or(self.config().max_turns);
+        let mut iteration_budget = crate::iteration_budget::IterationBudget::new(budget_cap);
+        let mut tool_guardrails = crate::tool_guardrails::ToolGuardrailController::new();
+        let mut file_mutation =
+            crate::file_mutation_tracker::FileMutationTracker::new(self.config().checkpoints_enabled);
+        let mut stream_scrubber = crate::stream_scrubber::ThinkBlockScrubber::new();
+        let mut checkpoint_mgr = hermes_tools::CheckpointManager::new(
+            self.config().checkpoints_enabled,
+            self.config().hermes_home.as_deref().map(Path::new),
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        );
 
         loop {
+            stream_scrubber.reset();
             if self.interrupt.take_interrupt_graceful().is_some() {
                 return Ok(self.graceful_interrupt_result(
                     &ctx,
@@ -6281,7 +6589,7 @@ impl AgentLoop {
             }
 
             if let Some(max_turns) = max_turns_limit {
-                if total_turns >= max_turns {
+                if iteration_budget.exhausted() || total_turns >= max_turns {
                     tracing::warn!(
                         "Max turns ({}) exceeded, requesting final summary",
                         max_turns
@@ -6320,6 +6628,7 @@ impl AgentLoop {
             }
 
             total_turns += 1;
+            iteration_budget.consume();
 
             // Housekeeping-only turns enable mute_post_response for the *current* turn's
             // pre-tool narration. Reset each turn so the next LLM stream (especially the
@@ -6450,6 +6759,7 @@ impl AgentLoop {
                             llm_governor.max_tokens,
                             &*on_chunk,
                             &mut api_call_count,
+                            Some(&mut stream_scrubber),
                         )
                         .await
                     {
@@ -6620,6 +6930,7 @@ impl AgentLoop {
             let post_results = self.invoke_hook(HookType::PostLlmCall, &post_ctx);
             self.inject_hook_context(&post_results, &mut ctx);
             self.apply_hook_output_transforms(&post_results, &mut response.message.content);
+            self.apply_transform_llm_output_hooks(&mut response.message.content);
 
             if let Some(ref usage) = turn_usage_acc {
                 accumulated_usage = Some(merge_usage(accumulated_usage, usage));
@@ -7116,6 +7427,32 @@ impl AgentLoop {
                 ));
             }
 
+            for tc in &tool_calls {
+                let args: Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                match tool_guardrails.before_call(&tc.function.name, &args) {
+                    crate::tool_guardrails::GuardrailDecision::Halt(reason) => {
+                        ctx.add_message(Message::assistant(format!(
+                            "[Tool guardrail halt] {reason}"
+                        )));
+                        return Ok(self.finalize_agent_result(AgentResult {
+                            messages: self.messages_for_persisted_result(&ctx, persist_user_idx),
+                            finished_naturally: true,
+                            total_turns,
+                            tool_errors,
+                            usage: accumulated_usage,
+                            interrupted: false,
+                            session_cost_usd: Some(session_cost_usd),
+                            session_started_hooks_fired,
+                            pending_steer: None,
+                        }));
+                    }
+                    crate::tool_guardrails::GuardrailDecision::Block(reason) => {
+                        tracing::warn!(tool = %tc.function.name, %reason, "tool guardrail block");
+                    }
+                    crate::tool_guardrails::GuardrailDecision::Allow => {}
+                }
+            }
             let tool_start = Instant::now();
             let mut results = self
                 .execute_tool_calls(
@@ -7133,6 +7470,7 @@ impl AgentLoop {
                         .max_cost_usd
                         .map(|limit| (limit - session_cost_usd).max(0.0)),
                     &mut tool_errors,
+                    Some(&mut checkpoint_mgr),
                 )
                 .await;
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
@@ -7189,6 +7527,7 @@ impl AgentLoop {
             {
                 if let Some(snapshot) = last_checkpoint_messages.clone() {
                     *ctx.get_messages_mut() = snapshot;
+                    let _ = checkpoint_mgr.restore_latest();
                     ctx.add_message(Message::system(format!(
                         "Auto-rollback: {} tool call(s) failed in one turn. Restored latest checkpoint and continuing.",
                         turn_tool_error_count
@@ -7207,6 +7546,18 @@ impl AgentLoop {
                 if let Some(ref cb) = self.callbacks.on_tool_complete {
                     cb(&tc.function.name, &res.content);
                 }
+            }
+
+            for (tc, res) in tool_calls.iter().zip(results.iter()) {
+                let args: Value =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or(Value::Null);
+                tool_guardrails.after_call(&tc.function.name, res.is_error, &res.content);
+                file_mutation.record_tool_result(
+                    &tc.function.name,
+                    &args,
+                    &res.content,
+                    res.is_error,
+                );
             }
 
             self.notify_memory_writes(&tool_calls, &results);
@@ -7228,6 +7579,12 @@ impl AgentLoop {
                 inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
             }
             let lsp_note = self.lsp_context_note(&tool_calls, &results);
+
+            let execute_code_refund = !tool_calls.is_empty()
+                && tool_calls
+                    .iter()
+                    .all(|tc| tc.function.name == "execute_code")
+                && !results.iter().any(|r| r.is_error);
 
             let num_tool_msgs = results.len();
             for result in results {
@@ -7312,11 +7669,8 @@ impl AgentLoop {
                     pending_steer: None,
                 }));
             }
-            if !tool_calls.is_empty()
-                && tool_calls
-                    .iter()
-                    .all(|tc| tc.function.name == "execute_code")
-            {
+            if execute_code_refund {
+                iteration_budget.refund(1);
                 total_turns = total_turns.saturating_sub(1);
             }
             stream_needs_break.store(true, Ordering::Release);
@@ -7891,6 +8245,14 @@ impl AgentLoop {
         &self,
         ctx: &mut ContextManager,
     ) -> Result<Option<Message>, AgentError> {
+        if hermes_tools::kanban_task_from_env().is_some() {
+            let block = hermes_tools::kanban_block_reason(Some("iteration_budget_exhausted"));
+            ctx.add_message(Message::tool_result(
+                "kanban_block",
+                serde_json::to_string(&block).unwrap_or_else(|_| block.to_string()),
+            ));
+            return Ok(None);
+        }
         ctx.add_message(Message::system(
             "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
              what was accomplished and any remaining tasks.",
@@ -7958,9 +8320,14 @@ impl AgentLoop {
         contextlattice_connect_intent: bool,
         parent_budget_remaining_usd: Option<f64>,
         tool_errors: &mut Vec<hermes_core::ToolErrorRecord>,
+        mut checkpoint_mgr: Option<&mut hermes_tools::CheckpointManager>,
     ) -> Vec<ToolResult> {
         let mut join_set = JoinSet::new();
-        let tool_concurrency = tool_concurrency.max(1);
+        let tool_concurrency = if hermes_tools::should_parallelize_tool_batch(tool_calls) {
+            tool_concurrency.max(1)
+        } else {
+            1
+        };
         let mut results = Vec::with_capacity(tool_calls.len());
         let max_delegate_depth = self.resolve_max_delegate_depth();
         let current_delegate_depth = self.delegate_depth;
@@ -8043,6 +8410,26 @@ impl AgentLoop {
             // Skip `delegate_task` when an orchestrator already handled it.
             if orchestrator.is_some() && tc.function.name == "delegate_task" {
                 continue;
+            }
+            if let Some(ref mut mgr) = checkpoint_mgr {
+                if let Ok(args) = serde_json::from_str::<Value>(&tc.function.arguments) {
+                    if matches!(tc.function.name.as_str(), "write_file" | "patch") {
+                        if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+                            let _ = mgr.ensure_checkpoint(Path::new(path), "pre-tool");
+                        }
+                    } else if tc.function.name == "terminal" {
+                        if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+                            if hermes_tools::is_destructive_command(cmd) {
+                                let cwd = args
+                                    .get("cwd")
+                                    .and_then(|v| v.as_str())
+                                    .map(Path::new)
+                                    .unwrap_or_else(|| Path::new("."));
+                                let _ = mgr.ensure_checkpoint(cwd, "pre-terminal");
+                            }
+                        }
+                    }
+                }
             }
             if contextlattice_connect_intent
                 && tc.function.name == "terminal"
@@ -11368,6 +11755,7 @@ mod tests {
                     }
                 },
                 &mut api_call_count,
+                None,
             )
             .await;
 
@@ -11420,6 +11808,7 @@ mod tests {
                     }
                 },
                 &mut api_call_count,
+                None,
             )
             .await;
 
@@ -11465,6 +11854,7 @@ mod tests {
                     }
                 },
                 &mut api_call_count,
+                None,
             )
             .await;
 

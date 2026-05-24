@@ -16,6 +16,9 @@ pub mod code_execution_ptc;
 pub mod code_execution_stubs;
 pub mod backends;
 pub mod dispatch;
+pub mod tool_dispatch_helpers;
+pub mod checkpoint_manager;
+pub mod kanban;
 pub mod register_builtins;
 pub mod registry;
 pub mod rtk_filter;
@@ -42,6 +45,12 @@ pub use toolset::{Toolset, ToolsetError, ToolsetManager};
 
 // Re-export dispatch
 pub use dispatch::{dispatch_single, dispatch_tools, DispatchedResult};
+pub use checkpoint_manager::{checkpoint_shadow_dir_id, CheckpointManager};
+pub use kanban::{kanban_block_reason, kanban_task_from_env, KANBAN_TASK_ENV};
+pub use tool_dispatch_helpers::{
+    extract_parallel_scope_path, is_destructive_command, paths_overlap,
+    should_parallelize_tool_batch, NEVER_PARALLEL_TOOLS,
+};
 
 // Re-export approval types
 pub use approval::{check_approval, ApprovalDecision, ApprovalManager};

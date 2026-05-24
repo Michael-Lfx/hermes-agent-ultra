@@ -33,6 +33,7 @@ pub enum HookType {
     OnSessionEnd,
     OnSessionFinalize,
     OnSessionReset,
+    TransformLlmOutput,
 }
 
 impl HookType {
@@ -48,6 +49,7 @@ impl HookType {
             HookType::OnSessionEnd,
             HookType::OnSessionFinalize,
             HookType::OnSessionReset,
+            HookType::TransformLlmOutput,
         ]
     }
 
@@ -63,6 +65,7 @@ impl HookType {
             HookType::OnSessionEnd => "on_session_end",
             HookType::OnSessionFinalize => "on_session_finalize",
             HookType::OnSessionReset => "on_session_reset",
+            HookType::TransformLlmOutput => "transform_llm_output",
         }
     }
 }
@@ -196,6 +199,9 @@ fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(), String> 
             require_type(obj, "turns", "number", Value::is_number)?;
             require_type(obj, "source", "string", Value::is_string)?;
             optional_string_or_null(obj, "session_id")?;
+        }
+        HookType::TransformLlmOutput => {
+            require_type(obj, "content", "string", Value::is_string)?;
         }
     }
     Ok(())

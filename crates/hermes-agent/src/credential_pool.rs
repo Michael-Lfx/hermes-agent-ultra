@@ -20,6 +20,8 @@ struct PoolInner {
     next_index: usize,
     /// Keys temporarily removed from rotation due to persistent failures.
     failed_keys: Vec<FailedKey>,
+    /// Last key handed out by [`CredentialPool::get_key`].
+    last_issued_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +58,7 @@ impl CredentialPool {
                 keys: entries,
                 next_index: 0,
                 failed_keys: Vec::new(),
+                last_issued_key: None,
             }),
         }
     }
@@ -102,7 +105,9 @@ impl CredentialPool {
                 inner.next_index = (idx + 1) % len;
                 inner.keys[idx].use_count += 1;
                 inner.keys[idx].rate_limited_until = None; // Clear expired limit
-                return inner.keys[idx].key.clone();
+                let key = inner.keys[idx].key.clone();
+                inner.last_issued_key = Some(key.clone());
+                return key;
             }
         }
 
@@ -117,7 +122,63 @@ impl CredentialPool {
 
         inner.next_index = (best_idx + 1) % len;
         inner.keys[best_idx].use_count += 1;
-        inner.keys[best_idx].key.clone()
+        let key = inner.keys[best_idx].key.clone();
+        inner.last_issued_key = Some(key.clone());
+        key
+    }
+
+    /// Number of keys in active rotation (excludes cooling-down failed keys).
+    pub fn active_key_count(&self) -> usize {
+        self.len()
+    }
+
+    /// Whether any key is currently available (not in exhaustion cooldown).
+    pub fn has_available(&self) -> bool {
+        self.inner
+            .lock()
+            .map(|inner| {
+                let now = Instant::now();
+                inner.keys.iter().any(|entry| {
+                    entry
+                        .rate_limited_until
+                        .map_or(true, |until| until <= now)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Last key returned by [`Self::get_key`].
+    pub fn last_issued_key(&self) -> Option<String> {
+        self.inner
+            .lock()
+            .ok()
+            .and_then(|inner| inner.last_issued_key.clone())
+    }
+
+    /// Mark the last issued key rate-limited and return true if another key is available.
+    pub fn mark_last_issued_rate_limited_and_has_alternate(
+        &self,
+        duration: Duration,
+    ) -> bool {
+        let mut inner = match self.inner.lock() {
+            Ok(i) => i,
+            Err(_) => return false,
+        };
+        let Some(failed) = inner.last_issued_key.clone() else {
+            return false;
+        };
+        let until = Instant::now() + duration;
+        for entry in &mut inner.keys {
+            if entry.key == failed {
+                entry.rate_limited_until = Some(until);
+                break;
+            }
+        }
+        let now = Instant::now();
+        inner.keys.iter().any(|entry| {
+            entry.key != failed
+                && entry.rate_limited_until.map_or(true, |u| u <= now)
+        })
     }
 
     /// Mark a key as rate-limited for the given duration.
