@@ -15,9 +15,24 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::Registry;
 
+/// ANSI color codes for log levels (used only when output is a TTY).
+fn level_color(level: tracing::Level) -> (&'static str, &'static str) {
+    // (prefix, reset)
+    match level {
+        tracing::Level::ERROR => ("\x1b[31m", "\x1b[0m"), // red
+        tracing::Level::WARN => ("\x1b[33m", "\x1b[0m"),  // yellow
+        tracing::Level::INFO => ("\x1b[32m", "\x1b[0m"),  // green
+        tracing::Level::DEBUG => ("\x1b[36m", "\x1b[0m"), // cyan
+        tracing::Level::TRACE => ("\x1b[35m", "\x1b[0m"), // magenta
+    }
+}
+
 /// Custom event formatter.
 ///
-/// Output: `{local_rfc3339} {LEVEL:<5} [target file:line] ThreadId(n) message`
+/// Output: `{local_rfc3339} {LEVEL:<5} [file:line] thread={name} {message}`
+///
+/// - Level is ANSI-colored when stderr is a TTY.
+/// - `target` is omitted; `file:line` carries enough location context.
 struct LocalFormatter;
 
 impl<S, N> FormatEvent<S, N> for LocalFormatter
@@ -34,23 +49,29 @@ where
         let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z");
         let meta = event.metadata();
         let level = *meta.level();
-        let target = meta.target();
 
-        // file:line — both are `Option` in tracing metadata
         let location = match (meta.file(), meta.line()) {
-            (Some(f), Some(l)) => format!(" {}:{}", f, l),
-            (Some(f), None) => format!(" {}", f),
+            (Some(f), Some(l)) => format!("{}:{}", f, l),
+            (Some(f), None) => f.to_string(),
             _ => String::new(),
         };
 
         let thread = std::thread::current();
         let thread_name = thread.name().unwrap_or("?");
 
-        write!(
-            writer,
-            "{} {:<5} [{}{}] thread={} ",
-            ts, level, target, location, thread_name
-        )?;
+        if writer.has_ansi_escapes() {
+            let (color, reset) = level_color(level);
+            write!(
+                writer,
+                "{} {color}{:<5}{reset} [{}] thread={} ",
+                ts, level, location, thread_name,
+                color = color,
+                reset = reset,
+            )?;
+        } else {
+            write!(writer, "{} {:<5} [{}] thread={} ", ts, level, location, thread_name)?;
+        }
+
         ctx.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
     }
