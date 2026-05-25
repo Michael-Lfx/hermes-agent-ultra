@@ -11,11 +11,11 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde_json::{json, Value};
-use url::Url;
 
 use crate::events::{AcpEvent, EventSink};
 use crate::permissions::PermissionStore;
 use crate::protocol::*;
+use crate::resource_resolver::path_from_file_uri;
 use crate::session::{SessionManager, SessionPhase, SessionState};
 
 /// Trait for handling ACP requests.
@@ -164,50 +164,6 @@ fn format_resource_text(
     } else {
         format!("{header}\nURI: {uri}\n\n{body}")
     }
-}
-
-fn path_from_file_uri(uri: &str) -> Option<PathBuf> {
-    let raw = uri.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    if !raw.contains("://") {
-        return Some(PathBuf::from(raw));
-    }
-    let parsed = Url::parse(raw).ok()?;
-    if parsed.scheme() != "file" {
-        return None;
-    }
-    if let Some(host) = parsed.host_str() {
-        if host != "localhost" && !host.is_empty() {
-            return None;
-        }
-    }
-    let mut path_text = parsed.path().to_string();
-    if path_text.starts_with("/%3A") {
-        path_text = path_text.replacen("/%3A", ":", 1);
-    }
-    if path_text.len() >= 3 {
-        let bytes = path_text.as_bytes();
-        if bytes[0] == b'/' && bytes[2] == b':' && bytes[1].is_ascii_alphabetic() {
-            let drive = (bytes[1] as char).to_ascii_lowercase();
-            let rest = path_text[3..]
-                .trim_start_matches(['/', '\\'])
-                .replace('\\', "/");
-            return Some(PathBuf::from(format!("/mnt/{drive}/{rest}")));
-        }
-    }
-    if path_text.len() >= 2 {
-        let bytes = path_text.as_bytes();
-        if bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-            let drive = (bytes[0] as char).to_ascii_lowercase();
-            let rest = path_text[2..]
-                .trim_start_matches(['/', '\\'])
-                .replace('\\', "/");
-            return Some(PathBuf::from(format!("/mnt/{drive}/{rest}")));
-        }
-    }
-    Some(PathBuf::from(path_text))
 }
 
 fn build_image_data_url(mime: &str, bytes: &[u8]) -> String {
@@ -1304,7 +1260,7 @@ impl DefaultAcpHandler {
     pub fn new() -> Self {
         Self {
             inner: HermesAcpHandler::new(
-                Arc::new(SessionManager::new()),
+                Arc::new(SessionManager::new_with_default_persistence()),
                 Arc::new(EventSink::default()),
                 Arc::new(PermissionStore::new()),
             ),

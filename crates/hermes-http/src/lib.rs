@@ -141,7 +141,7 @@ impl HttpServerState {
             streaming_enabled: config.streaming.enabled,
             ..RuntimeGatewayConfig::default()
         };
-        let session_manager = Arc::new(SessionManager::new(config.session.clone()));
+        let session_manager = Arc::new(gateway_session_manager_with_persistence(&config));
         let gateway = Arc::new(Gateway::new(
             session_manager,
             DmManager::with_ignore_behavior(),
@@ -328,6 +328,33 @@ fn run_sessions_db_auto_maintenance(config: &GatewayConfig) {
             if result.vacuumed { " + vacuum" } else { "" }
         );
     }
+}
+
+fn gateway_session_manager_with_persistence(config: &GatewayConfig) -> SessionManager {
+    let home = config
+        .home_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(hermes_config::hermes_home);
+    let sp = Arc::new(SessionPersistence::new(home));
+    if let Err(err) = sp.ensure_db() {
+        tracing::debug!("sessions db init skipped for gateway history hydration: {}", err);
+    }
+    SessionManager::new(config.session.clone()).with_history_loader(move |session_id| {
+        match sp.load_session(session_id) {
+            Ok(messages) => messages,
+            Err(err) => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    "gateway history hydration skipped: {}",
+                    err
+                );
+                Vec::new()
+            }
+        }
+    })
 }
 
 #[derive(Debug, Serialize)]

@@ -5,6 +5,7 @@
 //! per-user isolation.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -254,6 +255,7 @@ pub fn redact_pii(text: &str, rules: &[RedactionRule]) -> String {
 pub struct SessionManager {
     sessions: RwLock<HashMap<String, Session>>,
     config: SessionConfig,
+    history_loader: Option<Arc<dyn Fn(&str) -> Vec<Message> + Send + Sync>>,
 
     /// Index: (user_id) -> Set of session IDs for cross-platform continuity.
     /// This allows the same user on different platforms to share context.
@@ -270,6 +272,7 @@ impl SessionManager {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
+            history_loader: None,
             user_sessions: RwLock::new(HashMap::new()),
             group_sessions_per_user,
         }
@@ -280,9 +283,19 @@ impl SessionManager {
         Self {
             sessions: RwLock::new(HashMap::new()),
             config,
+            history_loader: None,
             user_sessions: RwLock::new(HashMap::new()),
             group_sessions_per_user,
         }
+    }
+
+    /// Attach a loader for persisted conversation history.
+    pub fn with_history_loader(
+        mut self,
+        loader: impl Fn(&str) -> Vec<Message> + Send + Sync + 'static,
+    ) -> Self {
+        self.history_loader = Some(Arc::new(loader));
+        self
     }
 
     /// Determine the effective reset policy for a session, applying
@@ -350,8 +363,11 @@ impl SessionManager {
             return session.clone();
         }
 
-        // Create new session
-        let session = Session::new(platform, chat_id, user_id, session_type, reset_policy);
+        // Create new session, hydrating persisted history when available.
+        let mut session = Session::new(platform, chat_id, user_id, session_type, reset_policy);
+        if let Some(loader) = &self.history_loader {
+            session.messages = loader(&session_key);
+        }
         let session_clone = session.clone();
 
         sessions.insert(session_key.clone(), session);
@@ -614,6 +630,33 @@ mod tests {
 
         let msgs = manager.get_messages(&sid).await;
         assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn session_manager_loads_persisted_history_on_create() {
+        let config = SessionConfig::default();
+        let manager = SessionManager::new(config).with_history_loader(|session_key| {
+            if session_key == "telegram:chat1" {
+                vec![
+                    Message::user("before restart"),
+                    Message::assistant("persisted reply"),
+                ]
+            } else {
+                Vec::new()
+            }
+        });
+
+        let session = manager
+            .get_or_create_session("telegram", "chat1", "user1")
+            .await;
+        assert_eq!(session.messages.len(), 2);
+        assert_eq!(
+            manager.get_messages("telegram:chat1").await,
+            vec![
+                Message::user("before restart"),
+                Message::assistant("persisted reply"),
+            ]
+        );
     }
 
     #[test]
