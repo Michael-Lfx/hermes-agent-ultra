@@ -91,7 +91,12 @@ fn normalize_model_block(map: &mut Mapping) {
             let base_url = m
                 .get(&key("base_url"))
                 .and_then(as_str)
-                .map(str::trim)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let model_api_key = m
+                .get(&key("api_key"))
+                .and_then(as_str)
+                .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
 
             let model_str = match (provider, default) {
@@ -105,7 +110,7 @@ fn normalize_model_block(map: &mut Mapping) {
             };
             map.insert(model_key, Value::String(model_str));
 
-            if let (Some(p), Some(bu)) = (provider, base_url) {
+            if let Some(p) = provider {
                 let llm_key = key("llm_providers");
                 let mut llm = match map.get(&llm_key).cloned() {
                     Some(Value::Mapping(x)) => x,
@@ -115,7 +120,15 @@ fn normalize_model_block(map: &mut Mapping) {
                     .entry(Value::String(p.to_string()))
                     .or_insert_with(|| Value::Mapping(Mapping::new()));
                 if let Value::Mapping(em) = prov_entry {
-                    em.insert(key("base_url"), Value::String(bu.to_string()));
+                    if let Some(bu) = base_url {
+                        em.insert(key("base_url"), Value::String(bu));
+                    }
+                    if let Some(ak) = model_api_key {
+                        em.insert(key("api_key"), Value::String(ak));
+                    }
+                    if let Some(d) = default {
+                        em.insert(key("model"), Value::String(d.to_string()));
+                    }
                 }
                 map.insert(llm_key, Value::Mapping(llm));
             }

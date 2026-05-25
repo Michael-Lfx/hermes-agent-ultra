@@ -36,18 +36,27 @@ pub struct TaskOverride {
 ///
 /// Typically populated from the user's `config.yaml` `auxiliary` section but
 /// can also be assembled programmatically.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuxiliaryConfig {
     /// Per-task overrides keyed by [`AuxiliaryTask::as_key`].
     #[serde(default)]
     pub tasks: HashMap<String, TaskOverride>,
     /// Whether to consult environment variables. Useful to disable in tests.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_consult_env")]
     pub consult_env: bool,
 }
 
-fn default_true() -> bool {
+fn default_consult_env() -> bool {
     true
+}
+
+impl Default for AuxiliaryConfig {
+    fn default() -> Self {
+        Self {
+            tasks: HashMap::new(),
+            consult_env: true,
+        }
+    }
 }
 
 impl AuxiliaryConfig {
