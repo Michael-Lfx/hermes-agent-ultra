@@ -10,7 +10,7 @@ use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use crossterm::{cursor, execute, terminal};
 
@@ -155,6 +155,14 @@ pub fn curses_select_embedded(title: &str, items: &[String], initial_index: usiz
 /// Check if stdin is an interactive terminal.
 fn atty_is_tty() -> bool {
     io::stdin().is_terminal()
+}
+
+/// Whether a crossterm key event should trigger menu navigation.
+///
+/// On Windows, crossterm emits separate press and release events for arrow keys.
+/// Handling both makes the cursor jump two rows per physical keypress.
+pub fn key_event_is_actionable(key: &KeyEvent) -> bool {
+    key.kind == KeyEventKind::Press
 }
 
 /// Discard queued key events (for example Enter from the launching shell).
@@ -311,8 +319,11 @@ fn curses_checklist_inner(
         stdout.flush()?;
 
         // Read key
-        if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
-            match code {
+        if let Ok(Event::Key(key)) = event::read() {
+            if !key_event_is_actionable(&key) {
+                continue;
+            }
+            match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     cursor_pos = if cursor_pos == 0 {
                         items.len() - 1
@@ -543,8 +554,11 @@ fn curses_select_inner(
 
         stdout.flush()?;
 
-        if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
-            match code {
+        if let Ok(Event::Key(key)) = event::read() {
+            if !key_event_is_actionable(&key) {
+                continue;
+            }
+            match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     cursor_pos = if cursor_pos == 0 {
                         items.len() - 1
@@ -772,5 +786,15 @@ mod tests {
         if std::env::consts::OS == "windows" {
             assert!(prefer_plain_checklist());
         }
+    }
+
+    #[test]
+    fn key_event_is_actionable_ignores_release() {
+        use crossterm::event::{KeyModifiers, KeyEventKind};
+        let press = KeyEvent::new_with_kind(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Press);
+        let release =
+            KeyEvent::new_with_kind(KeyCode::Down, KeyModifiers::NONE, KeyEventKind::Release);
+        assert!(key_event_is_actionable(&press));
+        assert!(!key_event_is_actionable(&release));
     }
 }

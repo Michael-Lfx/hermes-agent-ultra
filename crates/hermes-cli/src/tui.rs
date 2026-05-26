@@ -477,7 +477,9 @@ fn spawn_crossterm_event_pipeline(
                 if crossterm::event::poll(Duration::from_millis(16)).unwrap_or(false) {
                     if let Ok(event) = crossterm::event::read() {
                         let msg = match event {
-                            CrosstermEvent::Key(key) => Some(Event::Key(key)),
+                            CrosstermEvent::Key(key) if crate::key_event_is_actionable(&key) => {
+                                Some(Event::Key(key))
+                            }
                             CrosstermEvent::Resize(w, h) => Some(Event::Resize(w, h)),
                             CrosstermEvent::Mouse(mouse) => Some(Event::Mouse(mouse)),
                             CrosstermEvent::Paste(text) => Some(Event::Paste(text)),
