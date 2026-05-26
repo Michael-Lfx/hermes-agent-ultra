@@ -1466,7 +1466,11 @@ impl TuiState {
     fn update_completions(&mut self) {
         if self.input.starts_with('/') {
             self.completions = commands::autocomplete_contextual(&self.input);
-            self.completion_index = None;
+            self.completion_index = if self.completions.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
         } else {
             self.completions.clear();
             self.completion_index = None;
@@ -1643,6 +1647,33 @@ impl TuiState {
             self.input = first.clone();
             self.cursor_position = self.input.len();
         }
+    }
+
+    /// When slash-command completions are visible, plain Enter should accept the
+    /// highlighted suggestion instead of submitting a partial command.
+    ///
+    /// Returns `true` when Enter was consumed to fill the input (caller should
+    /// skip submit). Returns `false` when the input already matches the selected
+    /// completion and Enter should proceed to submit.
+    fn try_accept_completion_on_enter(&mut self) -> bool {
+        let completion_nav_active = self.input.starts_with('/')
+            && !self.completions.is_empty()
+            && !self.history_search_active;
+        if !completion_nav_active {
+            return false;
+        }
+        let idx = self.completion_index.unwrap_or(0);
+        if idx >= self.completions.len() {
+            return false;
+        }
+        let selected = self.completions[idx].clone();
+        if self.input.trim() == selected.trim() {
+            return false;
+        }
+        self.input = selected;
+        self.cursor_position = self.input.len();
+        self.refresh_completions();
+        true
     }
 
     /// Get the spinner character for the current frame.
@@ -3882,7 +3913,8 @@ fn render_completions_popup(
         .skip(start)
         .take(end.saturating_sub(start))
         .map(|(i, cmd)| {
-            let style = if selected == Some(i) {
+            let active = selected.or(if completions.is_empty() { None } else { Some(0) });
+            let style = if active == Some(i) {
                 Style::default()
                     .fg(Color::Black)
                     .bg(colors.status_bar_strong)
@@ -3904,7 +3936,7 @@ fn render_completions_popup(
 
     let title = if completions.len() > visible_rows {
         format!(
-            " Slash Commands ({}/{}) ↑↓ scroll Tab accept ",
+            " Slash Commands ({}/{}) ↑↓ scroll Enter/Tab accept ",
             end,
             completions.len()
         )
@@ -5508,6 +5540,10 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         let is_submit = is_submit_shortcut(&key, &state.input);
 
                         if is_submit {
+                            if state.try_accept_completion_on_enter() {
+                                needs_redraw = true;
+                                continue;
+                            }
                             if state.processing {
                                 state.status_message =
                                     "Still processing previous request… wait for completion."
@@ -6009,6 +6045,26 @@ mod tests {
         state.input = "/mod".to_string();
         state.update_completions();
         assert!(state.completions.contains(&"/model".to_string()));
+        assert_eq!(state.completion_index, Some(0));
+    }
+
+    #[test]
+    fn test_enter_accepts_slash_completion_instead_of_submit() {
+        let mut state = TuiState::default();
+        state.input = "/mod".to_string();
+        state.update_completions();
+        assert!(state.try_accept_completion_on_enter());
+        assert_eq!(state.input, "/model");
+        assert!(state.completions.contains(&"/model".to_string()));
+    }
+
+    #[test]
+    fn test_enter_submits_when_slash_completion_already_matches_input() {
+        let mut state = TuiState::default();
+        state.input = "/model".to_string();
+        state.update_completions();
+        assert!(!state.try_accept_completion_on_enter());
+        assert_eq!(state.input, "/model");
     }
 
     #[test]
