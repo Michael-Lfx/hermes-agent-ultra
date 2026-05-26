@@ -183,6 +183,54 @@ fn oneshot_should_use_app_runtime(query: &str) -> bool {
         && (env_truthy("HERMES_ONESHOT_APP_RUNTIME") || env_truthy("HERMES_QUORUM_AUTO_ARM"))
 }
 
+#[cfg(target_os = "windows")]
+fn start_gateway_keepawake_guard() -> Option<keepawake::KeepAwake> {
+    if !gateway_running_on_ac_power() {
+        tracing::info!("gateway keep-awake skipped on Windows: system is on battery");
+        return None;
+    }
+    match keepawake::Builder::default()
+        .idle(true)
+        .sleep(true)
+        .reason("Hermes Gateway is running")
+        .app_name("Hermes Gateway")
+        .create()
+    {
+        Ok(guard) => {
+            tracing::info!("gateway keep-awake guard enabled on Windows");
+            Some(guard)
+        }
+        Err(err) => {
+            tracing::warn!("gateway keep-awake unavailable on Windows: {err}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn gateway_running_on_ac_power() -> bool {
+    use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+
+    let mut status = SYSTEM_POWER_STATUS {
+        ACLineStatus: 0,
+        BatteryFlag: 0,
+        BatteryLifePercent: 0,
+        SystemStatusFlag: 0,
+        BatteryLifeTime: 0,
+        BatteryFullLifeTime: 0,
+    };
+    let ok = unsafe { GetSystemPowerStatus(&mut status) } != 0;
+    if !ok {
+        tracing::warn!("failed to read Windows power status; defaulting to battery mode");
+        return false;
+    }
+
+    status.ACLineStatus == 1
+}
+
+#[cfg(not(target_os = "windows"))]
+fn start_gateway_keepawake_guard() {}
+
 fn print_app_oneshot_result(app: &App) {
     if let Some(reply) = app.messages.iter().rev().find_map(|message| {
         if message.role == MessageRole::Assistant {
@@ -3336,6 +3384,10 @@ async fn run_gateway(
             })?;
             println!("Gateway runtime initialized with context-aware model/provider routing.");
             println!("Gateway is ready. Press Ctrl+C to stop.");
+            #[cfg(target_os = "windows")]
+            let _gateway_keepawake_guard = start_gateway_keepawake_guard();
+            #[cfg(not(target_os = "windows"))]
+            start_gateway_keepawake_guard();
             // Keep gateway alive for future adapter/event wiring.
             // Wait for Ctrl+C
             tokio::signal::ctrl_c()
