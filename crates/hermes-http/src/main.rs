@@ -7,6 +7,12 @@ use hermes_telemetry::init_telemetry_from_env;
 #[tokio::main]
 async fn main() -> Result<(), AgentError> {
     init_telemetry_from_env("hermes-http", "info");
+    let (version, commit) = hermes_core::startup_commit_info();
+    tracing::warn!(
+        version = version,
+        commit = commit,
+        "hermes-http startup commit info"
+    );
 
     let config = load_config(None).map_err(|e| AgentError::Config(e.to_string()))?;
     let addr: SocketAddr = std::env::var("HERMES_HTTP_ADDR")

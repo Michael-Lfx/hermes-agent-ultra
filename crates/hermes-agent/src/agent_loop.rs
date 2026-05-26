@@ -4226,7 +4226,7 @@ impl AgentLoop {
         )
     }
 
-    fn context_compression_should_run(&self, ctx: &ContextManager) -> bool {
+    async fn context_compression_should_run(&self, ctx: &ContextManager) -> bool {
         let total_chars = ctx.total_chars();
         let max_c = ctx.max_context_chars().max(1);
         let char_threshold = (max_c as f64 * 0.8) as usize;
@@ -4235,7 +4235,8 @@ impl AgentLoop {
         }
         let estimated = estimate_messages_tokens(ctx.get_messages());
         self.context_compressor
-            .blocking_lock()
+            .lock()
+            .await
             .should_compress(Some(estimated))
     }
 
@@ -4256,7 +4257,7 @@ impl AgentLoop {
     async fn auto_compress_if_over_threshold(&self, ctx: &mut ContextManager) {
         let total_chars = ctx.total_chars();
         let max_c = ctx.max_context_chars().max(1);
-        if !self.context_compression_should_run(ctx) {
+        if !self.context_compression_should_run(ctx).await {
             return;
         }
         let message = format!(
@@ -4385,7 +4386,7 @@ impl AgentLoop {
         let max_c = ctx.max_context_chars().max(1);
         let before = ctx.total_chars();
         let before_pct = (before * 100) / max_c;
-        if !self.context_compression_should_run(ctx) {
+        if !self.context_compression_should_run(ctx).await {
             self.emit_status(
                 "lifecycle",
                 &format!(

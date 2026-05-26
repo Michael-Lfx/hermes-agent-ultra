@@ -81,6 +81,11 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    let (version, commit) = hermes_core::startup_commit_info();
+    eprintln!(
+        "[WARN] hermes-bench startup commit info: version={} commit={}",
+        version, commit
+    );
     match run().await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {

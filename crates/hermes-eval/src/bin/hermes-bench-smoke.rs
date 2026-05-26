@@ -11,6 +11,11 @@ use hermes_eval::{NoopRollout, TbliteSmokeAdapter};
 
 #[tokio::main]
 async fn main() -> std::process::ExitCode {
+    let (version, commit) = hermes_core::startup_commit_info();
+    eprintln!(
+        "[WARN] hermes-bench-smoke startup commit info: version={} commit={}",
+        version, commit
+    );
     let max_tasks = std::env::var("HERMES_EVAL_MAX_TASKS")
         .ok()
         .and_then(|s| s.parse().ok());

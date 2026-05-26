@@ -299,6 +299,11 @@ fn oneshot_auto_verify_oauth_provider(
 
 fn main() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let (version, commit) = hermes_core::startup_commit_info();
+    eprintln!(
+        "[WARN] hermes-cli startup commit info: version={} commit={}",
+        version, commit
+    );
 
     if cfg!(debug_assertions) {
         if std::env::var("HERMES_CLI_PARSE_PROBE")

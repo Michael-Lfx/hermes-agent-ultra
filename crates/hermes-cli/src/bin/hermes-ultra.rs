@@ -82,6 +82,11 @@ fn run_target(target: OsString, args: &[OsString]) -> Result<i32, String> {
 }
 
 fn main() {
+    let (version, commit) = hermes_core::startup_commit_info();
+    eprintln!(
+        "[WARN] hermes-ultra wrapper startup commit info: version={} commit={}",
+        version, commit
+    );
     let mut args = std::env::args_os();
     let _ = args.next();
     let args: Vec<OsString> = args.collect();
