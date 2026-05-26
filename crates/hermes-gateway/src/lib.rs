@@ -44,7 +44,7 @@ pub use hermes_core::traits::{ParseMode, PlatformAdapter};
 pub use hermes_core::types::Message;
 
 // Re-export gateway orchestrator and runtime context
-pub use gateway::{Gateway, GatewayRuntimeContext};
+pub use gateway::{DmAccessMode, Gateway, GatewayRuntimeContext};
 
 // Re-export session management
 pub use session::{Session, SessionManager};

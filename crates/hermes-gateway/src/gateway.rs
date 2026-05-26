@@ -308,12 +308,27 @@ impl Default for GroupAccessMode {
     }
 }
 
+/// Direct-message access mode (`platforms.<name>.dm_policy` / `extra.dm_policy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DmAccessMode {
+    /// Anyone may DM; skip global pairing gate.
+    Open,
+    /// Unknown senders get pairing / approval prompt.
+    #[default]
+    Pairing,
+    /// Only listed users may DM.
+    Allowlist,
+    /// All DMs dropped.
+    Disabled,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PlatformAccessPolicy {
     pub allowed_users: HashSet<String>,
     pub admin_users: HashSet<String>,
     pub group_mode: GroupAccessMode,
     pub slash_requires_allowlist: bool,
+    pub dm_mode: DmAccessMode,
 }
 
 impl PlatformAccessPolicy {
@@ -661,30 +676,63 @@ impl Gateway {
 
         // 1. Check DM authorization if this is a direct message
         if incoming.is_dm {
-            let dm_manager = self.dm_manager.read().await;
-            let decision = dm_manager
-                .handle_dm(&incoming.user_id, &incoming.platform)
-                .await;
+            let dm_mode = access_policy.as_ref().map(|p| p.dm_mode).unwrap_or_else(|| {
+                match incoming.platform.trim().to_ascii_lowercase().as_str() {
+                    "wecom" | "weixin" | "qqbot" => DmAccessMode::Open,
+                    _ => DmAccessMode::Pairing,
+                }
+            });
 
-            match decision {
-                DmDecision::Allow => {
-                    // Proceed
-                }
-                DmDecision::Pair { message } => {
-                    // Send pairing message and return
-                    if let Some(msg) = message {
-                        self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
-                            .await?;
-                    }
-                    return Ok(());
-                }
-                DmDecision::Deny => {
+            if dm_mode == DmAccessMode::Disabled {
+                debug!(
+                    user_id = incoming.user_id,
+                    platform = incoming.platform,
+                    "DM denied: platform dm_policy is disabled"
+                );
+                return Ok(());
+            }
+
+            if dm_mode == DmAccessMode::Allowlist {
+                let allowed = access_policy
+                    .as_ref()
+                    .is_some_and(|p| p.is_user_allowed(&incoming.user_id));
+                if !allowed {
                     debug!(
                         user_id = incoming.user_id,
                         platform = incoming.platform,
-                        "DM denied for unauthorized user"
+                        "DM denied: user not in platform allowlist"
                     );
                     return Ok(());
+                }
+            } else if dm_mode != DmAccessMode::Open {
+                let dm_manager = self.dm_manager.read().await;
+                let decision = dm_manager
+                    .handle_dm(&incoming.user_id, &incoming.platform)
+                    .await;
+
+                match decision {
+                    DmDecision::Allow => {}
+                    DmDecision::Pair { message } => {
+                        if let Some(msg) = message {
+                            warn!(
+                                user_id = %incoming.user_id,
+                                platform = %incoming.platform,
+                                dm_mode = ?dm_mode,
+                                "Sending DM pairing approval message"
+                            );
+                            self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+                                .await?;
+                        }
+                        return Ok(());
+                    }
+                    DmDecision::Deny => {
+                        debug!(
+                            user_id = incoming.user_id,
+                            platform = incoming.platform,
+                            "DM denied for unauthorized user"
+                        );
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -2804,6 +2852,50 @@ mod tests {
         // Should succeed (deny silently)
         let result = gw.route_message(&incoming).await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn gateway_route_dm_open_skips_pairing_message() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(TestAdapter {
+            messages: sent.clone(),
+        });
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let dm_manager = DmManager::with_pair_behavior();
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("wecom", adapter).await;
+
+        let mut policies = HashMap::new();
+        policies.insert(
+            "wecom".to_string(),
+            PlatformAccessPolicy {
+                dm_mode: DmAccessMode::Open,
+                ..PlatformAccessPolicy::default()
+            },
+        );
+        gw.set_platform_access_policies(policies).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Err(GatewayError::Platform("handler reached".to_string())) })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "wecom".into(),
+            chat_id: "user-1".into(),
+            user_id: "user-1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: None,
+            is_dm: true,
+        };
+
+        let result = gw.route_message(&incoming).await;
+        assert!(result.is_err());
+        assert!(
+            sent.lock().unwrap().is_empty(),
+            "dm_policy open must not send pairing approval text"
+        );
     }
 
     #[tokio::test]
