@@ -44,6 +44,9 @@ pub struct DmManager {
 
     /// How to handle DMs from unauthorized users.
     unauthorized_dm_behavior: UnauthorizedDmBehavior,
+
+    /// When true, all DMs are allowed (`dm_policy: open`).
+    allow_all_dm: bool,
 }
 
 impl DmManager {
@@ -57,6 +60,7 @@ impl DmManager {
             authorized_users,
             admin_users,
             unauthorized_dm_behavior,
+            allow_all_dm: false,
         }
     }
 
@@ -66,6 +70,7 @@ impl DmManager {
             authorized_users: HashSet::new(),
             admin_users: HashSet::new(),
             unauthorized_dm_behavior: UnauthorizedDmBehavior::Pair,
+            allow_all_dm: false,
         }
     }
 
@@ -75,6 +80,17 @@ impl DmManager {
             authorized_users: HashSet::new(),
             admin_users: HashSet::new(),
             unauthorized_dm_behavior: UnauthorizedDmBehavior::Ignore,
+            allow_all_dm: false,
+        }
+    }
+
+    /// Allow all direct messages (platform `dm_policy: open`).
+    pub fn with_open_behavior() -> Self {
+        Self {
+            authorized_users: HashSet::new(),
+            admin_users: HashSet::new(),
+            unauthorized_dm_behavior: UnauthorizedDmBehavior::Ignore,
+            allow_all_dm: true,
         }
     }
 
@@ -85,6 +101,10 @@ impl DmManager {
     /// - `Pair` if unauthorized and behavior is Pair
     /// - `Deny` if unauthorized and behavior is Ignore
     pub async fn handle_dm(&self, user_id: &str, _platform: &str) -> DmDecision {
+        if self.allow_all_dm {
+            return DmDecision::Allow;
+        }
+
         // Admins are always allowed
         if self.admin_users.contains(user_id) {
             return DmDecision::Allow;
@@ -181,6 +201,13 @@ mod tests {
         let dm = DmManager::with_ignore_behavior();
         let decision = dm.handle_dm("unknown_user", "telegram").await;
         assert_eq!(decision, DmDecision::Deny);
+    }
+
+    #[tokio::test]
+    async fn dm_manager_open_behavior() {
+        let dm = DmManager::with_open_behavior();
+        let decision = dm.handle_dm("unknown_user", "wecom").await;
+        assert_eq!(decision, DmDecision::Allow);
     }
 
     #[tokio::test]

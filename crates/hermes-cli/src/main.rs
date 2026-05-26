@@ -53,7 +53,7 @@ use hermes_cli::App;
 use hermes_config::{
     apply_user_config_patch, gateway_pid_path_in, hermes_home, load_config, load_user_config_file,
     save_config_yaml, state_dir, user_config_field_display, validate_config, ConfigError,
-    GatewayConfig, PlatformConfig,
+    GatewayConfig, PlatformConfig, UnauthorizedDmBehavior,
 };
 use hermes_core::AgentError;
 use hermes_core::PlatformAdapter;
@@ -64,7 +64,7 @@ use hermes_cron::{
 };
 use hermes_gateway::gateway::GatewayConfig as RuntimeGatewayConfig;
 use hermes_gateway::gateway::IncomingMessage as GatewayIncomingMessage;
-use hermes_gateway::gateway::{GroupAccessMode, PlatformAccessPolicy};
+use hermes_gateway::gateway::{DmAccessMode, GroupAccessMode, PlatformAccessPolicy};
 use hermes_gateway::hooks::HookRegistry;
 use hermes_gateway::platforms::api_server::{ApiInboundRequest, ApiServerAdapter, ApiServerConfig};
 use hermes_gateway::platforms::bluebubbles::{BlueBubblesAdapter, BlueBubblesConfig};
@@ -2791,8 +2791,15 @@ async fn run_gateway(
                 dm_manager,
                 runtime_gateway_config,
             ));
+            let platform_policies = build_gateway_platform_access_policies(&config);
+            for (platform, policy) in &platform_policies {
+                println!(
+                    "  {platform}: dm_policy={:?}, group_policy={:?}",
+                    policy.dm_mode, policy.group_mode
+                );
+            }
             gateway
-                .set_platform_access_policies(build_gateway_platform_access_policies(&config))
+                .set_platform_access_policies(platform_policies)
                 .await;
             let mut hook_registry = HookRegistry::new();
             hook_registry.register_builtins();
@@ -4323,9 +4330,84 @@ fn extra_bool_loose(platform_cfg: &PlatformConfig, key: &str) -> Option<bool> {
     })
 }
 
+fn default_platform_dm_policy(platform: &str) -> &'static str {
+    match platform.trim().to_ascii_lowercase().as_str() {
+        "wecom" | "weixin" | "qqbot" => "open",
+        _ => "pairing",
+    }
+}
+
+fn platform_dm_policy(platform: &str, platform_cfg: &PlatformConfig) -> String {
+    if let Some(policy) = extra_string(platform_cfg, "dm_policy") {
+        return policy.to_ascii_lowercase();
+    }
+    if let Some(nested) = platform_cfg.extra.get("extra") {
+        if let Some(policy) = nested.get("dm_policy").and_then(|v| v.as_str()) {
+            let trimmed = policy.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_ascii_lowercase();
+            }
+        }
+    }
+    let env_key = match platform.trim().to_ascii_lowercase().as_str() {
+        "wecom" => Some("WECOM_DM_POLICY"),
+        "weixin" => Some("WEIXIN_DM_POLICY"),
+        _ => None,
+    };
+    if let Some(key) = env_key {
+        if let Ok(value) = std::env::var(key) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_ascii_lowercase();
+            }
+        }
+    }
+    default_platform_dm_policy(platform).to_string()
+}
+
+fn parse_dm_access_mode(platform: &str, platform_cfg: &PlatformConfig) -> DmAccessMode {
+    match platform_dm_policy(platform, platform_cfg).as_str() {
+        "open" => DmAccessMode::Open,
+        "disabled" => DmAccessMode::Disabled,
+        "allowlist" => DmAccessMode::Allowlist,
+        "pairing" | "pair" => DmAccessMode::Pairing,
+        _ => {
+            if default_platform_dm_policy(platform) == "open" {
+                DmAccessMode::Open
+            } else {
+                DmAccessMode::Pairing
+            }
+        }
+    }
+}
+
+fn platform_dm_is_open(platform: &str, platform_cfg: &PlatformConfig) -> bool {
+    platform_dm_policy(platform, platform_cfg) == "open"
+}
+
 fn build_gateway_dm_manager(config: &hermes_config::GatewayConfig) -> DmManager {
-    let mut dm_manager = DmManager::with_pair_behavior();
-    for platform_cfg in config.platforms.values().filter(|p| p.enabled) {
+    let enabled: Vec<(&String, &PlatformConfig)> = config
+        .platforms
+        .iter()
+        .filter(|(_, cfg)| cfg.enabled)
+        .collect();
+
+    let mut dm_manager = if enabled.is_empty() {
+        DmManager::with_pair_behavior()
+    } else if enabled
+        .iter()
+        .all(|(name, cfg)| platform_dm_is_open(name, cfg))
+    {
+        DmManager::with_open_behavior()
+    } else if enabled.iter().any(|(_, cfg)| {
+        cfg.unauthorized_dm_behavior == UnauthorizedDmBehavior::Ignore
+    }) {
+        DmManager::with_ignore_behavior()
+    } else {
+        DmManager::with_pair_behavior()
+    };
+
+    for (_, platform_cfg) in &enabled {
         for user in &platform_cfg.allowed_users {
             let trimmed = user.trim();
             if !trimmed.is_empty() {
@@ -4336,6 +4418,20 @@ fn build_gateway_dm_manager(config: &hermes_config::GatewayConfig) -> DmManager 
             let trimmed = admin.trim();
             if !trimmed.is_empty() {
                 dm_manager.add_admin(trimmed.to_string());
+            }
+        }
+        if let Some(list) = platform_cfg
+            .extra
+            .get("allow_from")
+            .or_else(|| platform_cfg.extra.get("allowFrom"))
+        {
+            if let Ok(users) = serde_json::from_value::<Vec<String>>(list.clone()) {
+                for user in users {
+                    let trimmed = user.trim();
+                    if !trimmed.is_empty() && trimmed != "*" {
+                        dm_manager.authorize_user(trimmed.to_string());
+                    }
+                }
             }
         }
     }
@@ -4386,6 +4482,25 @@ fn build_gateway_platform_access_policies(
             .or_else(|| extra_bool_loose(platform_cfg, "require_allowlist_for_slash"))
             .unwrap_or_else(|| platform.eq_ignore_ascii_case("discord") && has_allowlist);
 
+        let mut dm_mode = parse_dm_access_mode(platform, platform_cfg);
+        if dm_mode == DmAccessMode::Allowlist {
+            let allow_from = platform_cfg
+                .extra
+                .get("allow_from")
+                .or_else(|| platform_cfg.extra.get("allowFrom"))
+                .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+                .unwrap_or_default();
+            for user in allow_from {
+                let trimmed = user.trim();
+                if !trimmed.is_empty() && trimmed != "*" {
+                    allowed_users.insert(trimmed.to_string());
+                }
+            }
+            if allowed_users.is_empty() && admin_users.is_empty() {
+                dm_mode = DmAccessMode::Pairing;
+            }
+        }
+
         policies.insert(
             platform.to_ascii_lowercase(),
             PlatformAccessPolicy {
@@ -4393,6 +4508,7 @@ fn build_gateway_platform_access_policies(
                 admin_users,
                 group_mode,
                 slash_requires_allowlist,
+                dm_mode,
             },
         );
     }

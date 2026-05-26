@@ -32,19 +32,20 @@ fn candidate_targets() -> Vec<OsString> {
         }
     }
 
-    if let Ok(home) = std::env::var("HOME") {
-        let cargo_bin = PathBuf::from(home).join(".cargo/bin/hermes-agent-ultra");
-        if cargo_bin.exists() {
-            out.push(cargo_bin.into_os_string());
-        }
-    }
-
+    // Prefer sibling binary (e.g. target/release/) before ~/.cargo/bin.
     if let Ok(current) = std::env::current_exe() {
         if let Some(dir) = current.parent() {
             let local = dir.join("hermes-agent-ultra");
             if local.exists() {
                 out.push(local.into_os_string());
             }
+        }
+    }
+
+    if let Ok(home) = std::env::var("HOME") {
+        let cargo_bin = PathBuf::from(home).join(".cargo/bin/hermes-agent-ultra");
+        if cargo_bin.exists() {
+            out.push(cargo_bin.into_os_string());
         }
     }
 
@@ -95,6 +96,13 @@ fn main() {
     if targets.is_empty() {
         eprintln!("Failed to locate hermes-agent-ultra target binary.");
         exit(1);
+    }
+
+    for target in &targets {
+        eprintln!(
+            "[INFO] hermes wrapper: trying {}",
+            target.to_string_lossy()
+        );
     }
 
     let mut launch_errors: Vec<String> = Vec::new();
