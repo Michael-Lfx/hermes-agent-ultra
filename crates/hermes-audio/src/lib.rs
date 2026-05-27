@@ -28,5 +28,8 @@ pub use capture::AudioCaptureSource;
 pub use frame::{AudioChannel, TaggedFrame};
 pub use loopback::LoopbackSource;
 pub use mixer::DualTrackMixer;
-pub use recorder::{pcm_to_wav, MeetingRecorder, SttCallback, TranscriptSegment};
+pub use recorder::{
+    pcm_to_wav, MeetingRecorder, NodeStats, PipelineStats, StatsHandle, SttCallback,
+    TranscriptSegment,
+};
 pub use vad::{create_vad, EnergyVad, VadBackend, VadConfig};

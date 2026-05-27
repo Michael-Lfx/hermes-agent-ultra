@@ -22,12 +22,95 @@
 //! channel closes (both sources exhausted) or `stop()` is called.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use crate::frame::{AudioChannel, TaggedFrame};
 use crate::vad::{create_vad, VadBackend, VadConfig};
+
+// ---------------------------------------------------------------------------
+// Pipeline statistics
+// ---------------------------------------------------------------------------
+
+/// Per-node latency and throughput counters.
+///
+/// All durations are wall-clock.  Access via `MeetingRecorder::stats()`.
+#[derive(Debug, Clone, Default)]
+pub struct NodeStats {
+    /// Number of frames processed.
+    pub frames: u64,
+    /// Total time spent in this node (sum over all frames).
+    pub total_ns: u64,
+    /// Maximum single-frame latency observed.
+    pub max_ns: u64,
+}
+
+impl NodeStats {
+    fn record(&mut self, elapsed: Duration) {
+        let ns = elapsed.as_nanos() as u64;
+        self.frames += 1;
+        self.total_ns += ns;
+        if ns > self.max_ns {
+            self.max_ns = ns;
+        }
+    }
+
+    /// Mean latency per frame in microseconds.
+    pub fn mean_us(&self) -> f64 {
+        if self.frames == 0 {
+            return 0.0;
+        }
+        self.total_ns as f64 / self.frames as f64 / 1_000.0
+    }
+
+    /// Max single-frame latency in milliseconds.
+    pub fn max_ms(&self) -> f64 {
+        self.max_ns as f64 / 1_000_000.0
+    }
+}
+
+/// Snapshot of all pipeline node statistics.
+#[derive(Debug, Clone, Default)]
+pub struct PipelineStats {
+    /// VAD frame processing (per-frame cost).
+    pub vad: NodeStats,
+    /// STT call latency (per segment, i.e. per flush).
+    pub stt: NodeStats,
+    /// Total segments emitted (speech segments flushed to STT).
+    pub segments_flushed: u64,
+    /// Total wall-clock recording time in seconds.
+    pub wall_secs: f32,
+    /// Total speech time captured (sum of all flushed segment durations).
+    pub speech_secs: f32,
+}
+
+impl PipelineStats {
+    /// Speech ratio: fraction of wall time that contained speech.
+    pub fn speech_ratio(&self) -> f32 {
+        if self.wall_secs == 0.0 {
+            return 0.0;
+        }
+        (self.speech_secs / self.wall_secs).min(1.0)
+    }
+}
+
+/// Thread-safe handle to live pipeline statistics.
+#[derive(Clone, Default)]
+pub struct StatsHandle(Arc<Mutex<PipelineStats>>);
+
+impl StatsHandle {
+    pub fn snapshot(&self) -> PipelineStats {
+        self.0.lock().unwrap().clone()
+    }
+
+    fn with<F: FnOnce(&mut PipelineStats)>(&self, f: F) {
+        if let Ok(mut g) = self.0.lock() {
+            f(&mut g);
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Output type
@@ -91,6 +174,7 @@ pub struct MeetingRecorder {
     /// Maximum recording length per segment (prevents runaway buffers).
     max_segment_secs: f32,
     stop_flag: Arc<std::sync::atomic::AtomicBool>,
+    stats: StatsHandle,
 }
 
 impl MeetingRecorder {
@@ -100,6 +184,7 @@ impl MeetingRecorder {
             stt,
             max_segment_secs: 60.0,
             stop_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stats: StatsHandle::default(),
         }
     }
 
@@ -107,6 +192,13 @@ impl MeetingRecorder {
     pub fn stop(&self) {
         self.stop_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Snapshot of current pipeline performance statistics.
+    ///
+    /// Safe to call at any time during or after recording.
+    pub fn stats(&self) -> PipelineStats {
+        self.stats.snapshot()
     }
 
     /// Start recording.  Returns a receiver that yields `TranscriptSegment`
@@ -122,10 +214,11 @@ impl MeetingRecorder {
         let stt = Arc::clone(&self.stt);
         let max_secs = self.max_segment_secs;
         let stop = Arc::clone(&self.stop_flag);
+        let stats = self.stats.clone();
 
         let handle = tokio::spawn(async move {
             let mut channels: HashMap<AudioChannel, ChannelState> = HashMap::new();
-            let start = std::time::Instant::now();
+            let start = Instant::now();
 
             while let Some(frame) = frames_rx.recv().await {
                 if stop.load(std::sync::atomic::Ordering::Relaxed) {
@@ -144,7 +237,10 @@ impl MeetingRecorder {
                     .entry(ch)
                     .or_insert_with(|| ChannelState::new(vad_cfg.clone()));
 
+                // ── Node: VAD ─────────────────────────────────────────────
+                let vad_t0 = Instant::now();
                 let is_speech = state.vad.process_frame(&frame.samples);
+                stats.with(|s| s.vad.record(vad_t0.elapsed()));
 
                 if is_speech {
                     state.recording = true;
@@ -152,29 +248,19 @@ impl MeetingRecorder {
                     state.buffer.extend_from_slice(&frame.samples);
 
                     // Safety cap: flush if segment grows too long
-                    let seg_secs =
-                        state.buffer.len() as f32 / sample_rate as f32;
+                    let seg_secs = state.buffer.len() as f32 / sample_rate as f32;
                     if seg_secs >= max_secs {
                         debug!("MeetingRecorder: max_segment_secs reached on {ch:?}, flushing");
                         let pcm = std::mem::take(&mut state.buffer);
                         state.recording = false;
                         state.vad.reset();
-                        let tx = seg_tx.clone();
-                        let stt2 = Arc::clone(&stt);
-                        let offset = elapsed_s;
-                        tokio::spawn(async move {
-                            if let Some(text) = stt2.transcribe(ch, pcm, sample_rate).await {
-                                let _ = tx.send(TranscriptSegment {
-                                    speaker: ch.speaker_label().to_string(),
-                                    text,
-                                    offset_s: offset,
-                                }).await;
-                            }
-                        });
+                        Self::spawn_stt(
+                            ch, pcm, sample_rate, elapsed_s,
+                            Arc::clone(&stt), seg_tx.clone(), stats.clone(),
+                        );
                     }
                 } else if state.recording {
-                    // Track silence duration
-                    let now = std::time::Instant::now();
+                    let now = Instant::now();
                     if state.silence_start.is_none() {
                         state.silence_start = Some(now);
                     }
@@ -184,27 +270,20 @@ impl MeetingRecorder {
                         .unwrap_or(0);
 
                     if silence_ms >= vad_cfg.silence_timeout_ms {
-                        // Speech ended — flush buffer
                         let pcm = std::mem::take(&mut state.buffer);
                         state.recording = false;
                         state.silence_start = None;
 
                         if pcm.len() > sample_rate as usize / 4 {
-                            // at least 250ms of audio
-                            let tx = seg_tx.clone();
-                            let stt2 = Arc::clone(&stt);
-                            let offset = elapsed_s;
-                            tokio::spawn(async move {
-                                if let Some(text) =
-                                    stt2.transcribe(ch, pcm, sample_rate).await
-                                {
-                                    let _ = tx.send(TranscriptSegment {
-                                        speaker: ch.speaker_label().to_string(),
-                                        text,
-                                        offset_s: offset,
-                                    }).await;
-                                }
+                            let speech_secs = pcm.len() as f32 / sample_rate as f32;
+                            stats.with(|s| {
+                                s.segments_flushed += 1;
+                                s.speech_secs += speech_secs;
                             });
+                            Self::spawn_stt(
+                                ch, pcm, sample_rate, elapsed_s,
+                                Arc::clone(&stt), seg_tx.clone(), stats.clone(),
+                            );
                         }
                     }
                 }
@@ -213,26 +292,60 @@ impl MeetingRecorder {
             // Flush remaining buffers on clean exit
             for (ch, mut state) in channels {
                 if !state.buffer.is_empty() {
-                    let sample_rate = 16_000u32;
                     let pcm = std::mem::take(&mut state.buffer);
-                    let tx = seg_tx.clone();
-                    let stt2 = Arc::clone(&stt);
-                    tokio::spawn(async move {
-                        if let Some(text) = stt2.transcribe(ch, pcm, sample_rate).await {
-                            let _ = tx.send(TranscriptSegment {
-                                speaker: ch.speaker_label().to_string(),
-                                text,
-                                offset_s: 0.0,
-                            }).await;
-                        }
+                    let sr = 16_000u32;
+                    let speech_secs = pcm.len() as f32 / sr as f32;
+                    stats.with(|s| {
+                        s.segments_flushed += 1;
+                        s.speech_secs += speech_secs;
                     });
+                    Self::spawn_stt(ch, pcm, sr, 0.0, Arc::clone(&stt), seg_tx.clone(), stats.clone());
                 }
             }
 
-            info!("MeetingRecorder: stream ended");
+            stats.with(|s| s.wall_secs = start.elapsed().as_secs_f32());
+            let snap = stats.snapshot();
+            info!(
+                "MeetingRecorder: stream ended — wall={:.1}s speech={:.1}s ({:.0}%) \
+                 vad_mean={:.1}µs vad_max={:.1}ms stt_mean={:.1}ms stt_max={:.1}ms segments={}",
+                snap.wall_secs,
+                snap.speech_secs,
+                snap.speech_ratio() * 100.0,
+                snap.vad.mean_us(),
+                snap.vad.max_ms(),
+                snap.stt.mean_us() / 1_000.0,
+                snap.stt.max_ms(),
+                snap.segments_flushed,
+            );
         });
 
         (seg_rx, handle)
+    }
+
+    /// Spawn a background task that calls STT and sends the result, recording
+    /// STT latency into `stats`.
+    fn spawn_stt(
+        ch: AudioChannel,
+        pcm: Vec<f32>,
+        sample_rate: u32,
+        offset_s: f32,
+        stt: Arc<dyn SttCallback>,
+        tx: mpsc::Sender<TranscriptSegment>,
+        stats: StatsHandle,
+    ) {
+        tokio::spawn(async move {
+            let t0 = Instant::now();
+            if let Some(text) = stt.transcribe(ch, pcm, sample_rate).await {
+                stats.with(|s| s.stt.record(t0.elapsed()));
+                let _ = tx.send(TranscriptSegment {
+                    speaker: ch.speaker_label().to_string(),
+                    text,
+                    offset_s,
+                }).await;
+            } else {
+                stats.with(|s| s.stt.record(t0.elapsed()));
+            }
+        });
     }
 }
 
