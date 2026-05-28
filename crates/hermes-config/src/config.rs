@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use hermes_core::BudgetConfig;
 
+use crate::interest::InterestConfig;
 use crate::platform::PlatformConfig;
 use crate::session::SessionConfig;
 use crate::streaming::StreamingConfig;
@@ -106,6 +107,10 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub agent: AgentLoopBehaviorConfig,
 
+    /// Local user interest (POI) topic summarization for prompt bias.
+    #[serde(default)]
+    pub interest: InterestConfig,
+
     /// Anthropic prompt caching (`cache_ttl`: `"5m"` or `"1h"`).
     #[serde(default)]
     pub prompt_caching: PromptCachingConfig,
@@ -148,6 +153,7 @@ impl Default for GatewayConfig {
             mcp_servers: Vec::new(),
             profile: ProfileConfig::default(),
             agent: AgentLoopBehaviorConfig::default(),
+            interest: InterestConfig::default(),
             prompt_caching: PromptCachingConfig::default(),
             home_dir: None,
             tts: None,

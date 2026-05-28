@@ -16,7 +16,10 @@ pub mod supermemory;
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use hermes_config::InterestConfig;
+
 use crate::memory_manager::{MemoryManager, MemoryProviderPlugin};
+use crate::user_interest::InterestMemoryPlugin;
 
 fn preferred_provider_order() -> Vec<String> {
     std::env::var("HERMES_MEMORY_PROVIDER_ORDER")
@@ -167,19 +170,64 @@ pub fn auto_register_providers(manager: &mut crate::memory_manager::MemoryManage
     names
 }
 
-/// Build and initialize a memory manager using all discovered providers.
+/// Build and initialize a memory manager using interest store + discovered providers.
 pub fn build_initialized_memory_manager(
     session_id: &str,
     hermes_home: &str,
     nudge_threshold: u32,
+    interest: &InterestConfig,
+    interest_store: Option<Arc<Mutex<crate::user_interest::InterestStore>>>,
 ) -> Option<Arc<Mutex<MemoryManager>>> {
+    let external = discover_available_providers();
+    let interest_on = interest.enabled;
+    if !interest_on && external.is_empty() {
+        return None;
+    }
+
     let mut manager = MemoryManager::new().with_nudge_threshold(nudge_threshold.max(1));
-    let names = auto_register_providers(&mut manager);
-    if names.is_empty() {
+    if interest_on {
+        let registered = if let Some(store) = interest_store {
+            manager.add_provider(InterestMemoryPlugin::from_store(
+                store,
+                interest.clone(),
+                hermes_home,
+            ));
+            true
+        } else if let Some(plugin) = InterestMemoryPlugin::open(hermes_home, interest.clone()) {
+            manager.add_provider(plugin);
+            true
+        } else {
+            false
+        };
+        if registered {
+            tracing::info!("Memory provider 'interest' registered (local POI store)");
+        } else {
+            tracing::warn!(
+                "Interest store enabled but failed to open interest.db under {hermes_home}"
+            );
+        }
+    }
+    let names = {
+        let mut registered = Vec::new();
+        for provider in external {
+            let name = provider.name().to_string();
+            manager.add_provider(provider);
+            registered.push(name);
+        }
+        registered
+    };
+    if manager.providers().is_empty() {
         return None;
     }
     for provider in manager.providers() {
         provider.initialize(session_id, hermes_home);
+    }
+    if !names.is_empty() {
+        tracing::info!(
+            external = ?names,
+            interest = interest_on,
+            "Memory manager initialized"
+        );
     }
     Some(Arc::new(Mutex::new(manager)))
 }

@@ -681,6 +681,9 @@ async fn run(cli: Cli) {
             target,
             yes,
         } => hermes_cli::commands::handle_cli_memory(action, target, yes).await,
+        CliCommand::Interest { action } => {
+            hermes_cli::commands::handle_cli_interest(action).await
+        }
         CliCommand::Mcp {
             action,
             name,

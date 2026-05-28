@@ -634,6 +634,16 @@ pub fn parse_memory(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 }
 
 #[derive(Parser, Debug, Clone)]
+#[command(name = "interest", about = "local user interest (POI) topics")]
+struct InterestArgs {
+    action: Option<String>,
+}
+
+pub fn parse_interest(args: &[OsString]) -> Result<CliCommand, clap::Error> {
+    parse_subcommand::<InterestArgs, _>(args, |a| CliCommand::Interest { action: a.action })
+}
+
+#[derive(Parser, Debug, Clone)]
 #[command(name = "mcp", about = "mcp command")]
 struct McpArgs {
     action: Option<String>,
@@ -932,6 +942,7 @@ pub fn all_subcommand_commands() -> Vec<clap::Command> {
         SkillsArgs,
         PluginsArgs,
         MemoryArgs,
+        InterestArgs,
         McpArgs,
         MeetingArgs,
         SessionsArgs,

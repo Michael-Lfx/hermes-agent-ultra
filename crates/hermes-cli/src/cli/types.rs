@@ -176,6 +176,9 @@ pub enum CliCommand {
         target: Option<String>,
         yes: bool,
     },
+    Interest {
+        action: Option<String>,
+    },
     Mcp {
         action: Option<String>,
         name: Option<String>,
