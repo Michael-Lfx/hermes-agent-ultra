@@ -130,4 +130,76 @@ mod tests {
             &cfg
         ));
     }
+
+    #[test]
+    fn r_empty_allowlists_allow_everyone() {
+        let cfg = DiscordAuthConfig::default();
+        assert!(!cfg.has_restrictions());
+        assert!(is_discord_user_authorized("anyone", &[], None, true, &cfg));
+        assert!(is_discord_user_authorized("anyone", &[], Some("g1"), false, &cfg));
+    }
+
+    #[test]
+    fn r_dm_role_requires_explicit_guild_optin() {
+        let cfg = DiscordAuthConfig {
+            allowed_users: ChannelIdSet::new(),
+            allowed_roles: roles("5555"),
+            dm_role_auth_guild: None,
+        };
+        assert!(!is_discord_user_authorized(
+            "user1",
+            &["5555".into()],
+            Some("trusted"),
+            true,
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn r_dm_optin_rejects_when_not_in_trusted_guild() {
+        let cfg = DiscordAuthConfig {
+            allowed_users: ChannelIdSet::new(),
+            allowed_roles: roles("5555"),
+            dm_role_auth_guild: Some("222222".into()),
+        };
+        assert!(!is_discord_user_authorized(
+            "user1",
+            &["5555".into()],
+            Some("111111"),
+            true,
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn r_guild_denies_when_message_guild_has_no_matching_roles() {
+        let cfg = DiscordAuthConfig {
+            allowed_users: ChannelIdSet::new(),
+            allowed_roles: roles("5555"),
+            dm_role_auth_guild: None,
+        };
+        assert!(!is_discord_user_authorized(
+            "user1",
+            &[],
+            Some("222222"),
+            false,
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn r_guild_allows_role_ids_from_message_guild() {
+        let cfg = DiscordAuthConfig {
+            allowed_users: ChannelIdSet::new(),
+            allowed_roles: roles("5555"),
+            dm_role_auth_guild: None,
+        };
+        assert!(is_discord_user_authorized(
+            "user1",
+            &["5555".into()],
+            Some("222222"),
+            false,
+            &cfg
+        ));
+    }
 }

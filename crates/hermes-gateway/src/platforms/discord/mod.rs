@@ -48,6 +48,7 @@ pub use types::{
 };
 
 pub use gateway_loop::{fetch_gateway_url, fetch_gateway_url_at};
+pub use media::download_attachment_bytes;
 use gateway_loop::{
     build_heartbeat_payload, build_identify_payload, build_resume_payload, gateway_loop,
 };

@@ -117,3 +117,146 @@ async fn slash_status_replies_via_interaction_not_channel() {
         "slash command should respond via interaction callback"
     );
 }
+
+async fn setup_gateway(
+    adapter: Arc<InteractionRecordingAdapter>,
+) -> (
+    Arc<Gateway>,
+    Arc<Mutex<Vec<String>>>,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let channel_sent = adapter.channel_sent.clone();
+    let interaction_replies = adapter.interaction_replies.clone();
+    let session_manager = Arc::new(SessionManager::new(SessionConfig::default()));
+    let mut dm_manager = DmManager::with_pair_behavior();
+    dm_manager.authorize_user("user1");
+    let gw = Arc::new(Gateway::new(
+        session_manager,
+        dm_manager,
+        GatewayConfig::default(),
+    ));
+    gw.register_adapter("discord", adapter).await;
+    (gw, channel_sent, interaction_replies)
+}
+
+fn slash_incoming(text: &str) -> IncomingMessage {
+    IncomingMessage {
+        platform: "discord".into(),
+        chat_id: "ch-slash".into(),
+        user_id: "user1".into(),
+        text: text.into(),
+        media_urls: vec![],
+        media_types: vec![],
+        message_id: None,
+        is_dm: false,
+        interaction_id: Some("interaction-1".into()),
+        interaction_token: Some("interaction-token".into()),
+        role_ids: vec![],
+    }
+}
+
+#[tokio::test]
+async fn slash_help_replies_via_interaction() {
+    let adapter = Arc::new(InteractionRecordingAdapter {
+        channel_sent: Arc::new(Mutex::new(Vec::new())),
+        interaction_replies: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (gw, channel_sent, interaction_replies) = setup_gateway(adapter).await;
+
+    assert!(gw.route_message(&slash_incoming("/help")).await.is_ok());
+    assert!(channel_sent.lock().unwrap().is_empty());
+    assert!(!interaction_replies.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn slash_stop_replies_via_interaction() {
+    let adapter = Arc::new(InteractionRecordingAdapter {
+        channel_sent: Arc::new(Mutex::new(Vec::new())),
+        interaction_replies: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (gw, channel_sent, interaction_replies) = setup_gateway(adapter).await;
+
+    assert!(gw.route_message(&slash_incoming("/stop")).await.is_ok());
+    assert!(channel_sent.lock().unwrap().is_empty());
+    let replies = interaction_replies.lock().unwrap();
+    assert!(
+        replies.iter().any(|r| r.contains("stopped") || r.contains("⏹")),
+        "expected stop confirmation, got: {replies:?}"
+    );
+}
+
+#[tokio::test]
+async fn slash_new_resets_session_via_interaction() {
+    let adapter = Arc::new(InteractionRecordingAdapter {
+        channel_sent: Arc::new(Mutex::new(Vec::new())),
+        interaction_replies: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (gw, _, _) = setup_gateway(adapter).await;
+    gw.set_message_handler(Arc::new(|_messages| {
+        Box::pin(async { Ok("agent reply".to_string()) })
+    }))
+    .await;
+
+    let chat = IncomingMessage {
+        platform: "discord".into(),
+        chat_id: "ch-slash".into(),
+        user_id: "user1".into(),
+        text: "hello".into(),
+        media_urls: vec![],
+        media_types: vec![],
+        message_id: Some("m1".into()),
+        is_dm: true,
+        interaction_id: None,
+        interaction_token: None,
+        role_ids: vec![],
+    };
+    assert!(gw.route_message(&chat).await.is_ok());
+    assert!(
+        gw.session_transcript_len("discord", "ch-slash", "user1")
+            .await
+            > 0
+    );
+
+    assert!(gw.route_message(&slash_incoming("/new")).await.is_ok());
+    assert_eq!(
+        gw.session_transcript_len("discord", "ch-slash", "user1")
+            .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn slash_reset_resets_session_via_interaction() {
+    let adapter = Arc::new(InteractionRecordingAdapter {
+        channel_sent: Arc::new(Mutex::new(Vec::new())),
+        interaction_replies: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (gw, _, interaction_replies) = setup_gateway(adapter).await;
+    gw.set_message_handler(Arc::new(|_messages| {
+        Box::pin(async { Ok("agent reply".to_string()) })
+    }))
+    .await;
+
+    let chat = IncomingMessage {
+        platform: "discord".into(),
+        chat_id: "ch-slash".into(),
+        user_id: "user1".into(),
+        text: "hello".into(),
+        media_urls: vec![],
+        media_types: vec![],
+        message_id: Some("m1".into()),
+        is_dm: true,
+        interaction_id: None,
+        interaction_token: None,
+        role_ids: vec![],
+    };
+    assert!(gw.route_message(&chat).await.is_ok());
+
+    assert!(gw.route_message(&slash_incoming("/reset")).await.is_ok());
+    assert_eq!(
+        gw.session_transcript_len("discord", "ch-slash", "user1")
+            .await,
+        0
+    );
+    assert!(!interaction_replies.lock().unwrap().is_empty());
+}

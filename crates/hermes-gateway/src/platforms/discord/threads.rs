@@ -28,12 +28,21 @@ pub struct ThreadParticipationTracker {
 
 impl ThreadParticipationTracker {
     pub fn load() -> Self {
-        let path = hermes_home_path().join(THREAD_STATE_FILE);
+        Self::load_at(hermes_home_path())
+    }
+
+    fn load_at(home: PathBuf) -> Self {
+        let path = home.join(THREAD_STATE_FILE);
         let ids = load_ids(&path).unwrap_or_default();
         Self {
             path,
             ids: RwLock::new(ids),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test_home(home: PathBuf) -> Self {
+        Self::load_at(home)
     }
 
     pub async fn contains(&self, thread_id: &str) -> bool {
@@ -178,20 +187,66 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn tracker_persists_across_load() {
-        let dir = std::env::temp_dir().join("hermes-discord-thread-test");
+    fn with_test_home<F, Fut>(suffix: &str, f: F)
+    where
+        F: FnOnce(PathBuf) -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        let dir = std::env::temp_dir().join(format!("hermes-discord-thread-{suffix}"));
         let _ = std::fs::remove_dir_all(&dir);
-        unsafe {
-            std::env::set_var("HERMES_HOME", &dir);
-        }
-        let t1 = ThreadParticipationTracker::load();
-        t1.mark("thread-abc").await;
-        let t2 = ThreadParticipationTracker::load();
-        assert!(t2.contains("thread-abc").await);
+        std::fs::create_dir_all(&dir).unwrap();
+        let home = dir.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(f(home));
         let _ = std::fs::remove_dir_all(&dir);
-        unsafe {
-            std::env::remove_var("HERMES_HOME");
-        }
+    }
+
+    #[test]
+    fn tracker_starts_empty_without_state_file() {
+        with_test_home("empty", |home| async move {
+            let tracker = ThreadParticipationTracker::for_test_home(home);
+            assert!(!tracker.contains("111").await);
+        });
+    }
+
+    #[test]
+    fn tracker_mark_persists_to_disk() {
+        with_test_home("persist", |home| async move {
+            let tracker = ThreadParticipationTracker::for_test_home(home.clone());
+            tracker.mark("111").await;
+            tracker.mark("222").await;
+            let state_file = home.join(THREAD_STATE_FILE);
+            assert!(state_file.exists());
+            let saved: ThreadState =
+                serde_json::from_str(&std::fs::read_to_string(&state_file).unwrap()).unwrap();
+            let ids: HashSet<String> = saved.thread_ids.into_iter().collect();
+            assert_eq!(ids, HashSet::from(["111".into(), "222".into()]));
+        });
+    }
+
+    #[test]
+    fn tracker_persists_across_load() {
+        with_test_home("reload", |home| async move {
+            let t1 = ThreadParticipationTracker::for_test_home(home.clone());
+            t1.mark("thread-abc").await;
+            let t2 = ThreadParticipationTracker::for_test_home(home);
+            assert!(t2.contains("thread-abc").await);
+        });
+    }
+
+    #[test]
+    fn tracker_duplicate_mark_writes_once() {
+        with_test_home("dup", |home| async move {
+            let tracker = ThreadParticipationTracker::for_test_home(home.clone());
+            tracker.mark("111").await;
+            tracker.mark("111").await;
+            let state_file = home.join(THREAD_STATE_FILE);
+            let saved: ThreadState =
+                serde_json::from_str(&std::fs::read_to_string(&state_file).unwrap()).unwrap();
+            assert_eq!(saved.thread_ids.iter().filter(|id| *id == "111").count(), 1);
+        });
     }
 }

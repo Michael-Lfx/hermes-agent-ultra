@@ -56,12 +56,17 @@ fn media_cache_for(inner: &DiscordInner) -> Result<MediaCache, GatewayError> {
     MediaCache::new(&config)
 }
 
-async fn download_bytes(inner: &DiscordInner, url: &str, max_bytes: u64) -> Result<Vec<u8>, GatewayError> {
+/// Download attachment bytes from a CDN URL (SSRF-validated; used by adapter and tests).
+pub async fn download_attachment_bytes(
+    client: &reqwest::Client,
+    auth_header: &str,
+    url: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, GatewayError> {
     crate::ssrf::validate_url(url)?;
-    let resp = inner
-        .client
+    let resp = client
         .get(url)
-        .header("Authorization", inner.auth_header())
+        .header("Authorization", auth_header)
         .send()
         .await
         .map_err(|e| GatewayError::ConnectionFailed(format!("Discord attachment download: {e}")))?;
@@ -87,6 +92,10 @@ async fn download_bytes(inner: &DiscordInner, url: &str, max_bytes: u64) -> Resu
         buf.extend_from_slice(&chunk);
     }
     Ok(buf)
+}
+
+async fn download_bytes(inner: &DiscordInner, url: &str, max_bytes: u64) -> Result<Vec<u8>, GatewayError> {
+    download_attachment_bytes(&inner.client, &inner.auth_header(), url, max_bytes).await
 }
 
 /// Download and cache attachments; returns parallel `media_urls` and `media_types`.

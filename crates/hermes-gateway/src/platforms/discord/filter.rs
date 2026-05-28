@@ -234,6 +234,15 @@ mod tests {
     }
 
     #[test]
+    fn f18_accept_reply_message_type() {
+        let raw = RawDiscordMessage {
+            message_type: MESSAGE_TYPE_REPLY,
+            ..human_guild("reply text", vec!["bot99"])
+        };
+        assert!(should_accept_message(&raw, &cfg(true, Some("bot99"))));
+    }
+
+    #[test]
     fn f09_reject_guild_mention_other_not_bot() {
         let raw = human_guild("hi", vec!["other-user"]);
         assert!(!should_accept_message(&raw, &cfg(true, Some("bot99"))));

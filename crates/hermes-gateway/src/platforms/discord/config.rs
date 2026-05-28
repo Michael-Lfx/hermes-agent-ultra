@@ -470,6 +470,7 @@ pub fn default_intents() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hermes_config::PlatformConfig;
 
     #[test]
     fn channel_set_wildcard_matches_all() {
@@ -510,5 +511,55 @@ mod tests {
         let socks = proxy_from_url("socks5://127.0.0.1:7897").unwrap();
         assert!(socks.http_proxy.is_none());
         assert_eq!(socks.socks_proxy.as_deref(), Some("socks5://127.0.0.1:7897"));
+    }
+
+    #[test]
+    fn channel_set_merge_json_numeric_ids() {
+        let mut set = ChannelIdSet::new();
+        set.merge_json(Some(&serde_json::json!([111, 222])));
+        assert!(set.contains("111"));
+        assert!(set.contains("222"));
+        assert!(!set.contains("333"));
+    }
+
+    #[test]
+    fn channel_set_merge_json_wildcard_string() {
+        let mut set = ChannelIdSet::new();
+        set.merge_json(Some(&serde_json::json!(["*"])));
+        assert!(set.contains("any-id"));
+        assert!(!set.is_restrictive());
+    }
+
+    #[test]
+    fn reactions_disabled_via_extra_bool() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("reactions".to_string(), serde_json::json!(false));
+        let cfg = PlatformConfig {
+            enabled: true,
+            extra,
+            ..PlatformConfig::default()
+        };
+        let discord = DiscordConfig::from_platform(&cfg, "token".into());
+        assert!(!discord.reactions_enabled);
+    }
+
+    #[test]
+    fn reactions_disabled_via_extra_string() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("reactions".to_string(), serde_json::json!("off"));
+        let cfg = PlatformConfig {
+            enabled: true,
+            extra,
+            ..PlatformConfig::default()
+        };
+        let discord = DiscordConfig::from_platform(&cfg, "token".into());
+        assert!(!discord.reactions_enabled);
+    }
+
+    #[test]
+    fn reactions_enabled_by_default() {
+        let cfg = PlatformConfig::default();
+        let discord = DiscordConfig::from_platform(&cfg, "token".into());
+        assert!(discord.reactions_enabled);
     }
 }

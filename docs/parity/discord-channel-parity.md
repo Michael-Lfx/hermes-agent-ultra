@@ -4,8 +4,8 @@
 > **本仓 Rust**：[crates/hermes-gateway/src/platforms/discord/](../../crates/hermes-gateway/src/platforms/discord/)（`mod` + `session` / `gateway_loop` / `filter` / `parse` / `rest` / `dedup`）  
 > **用户文档（描述 Python 行为）**：[website/docs/user-guide/messaging/discord.md](../../website/docs/user-guide/messaging/discord.md)
 
-**最后更新**：2026-05-27  
-**状态说明**：**P0 对话闭环**、**P1 MVP**（反应、Typing、频道过滤、Slash、流式 `edit_message`）与 **P1.2**（入站附件、Opus→STT、角色鉴权、Auto-thread 持久化）已在 Rust 落地；`DISCORD_PROXY` 仍见 P3。
+**最后更新**：2026-05-28  
+**状态说明**：**P0 对话闭环**（含手工 E2E 已验收）、**P1 MVP**（反应、Typing、频道过滤、Slash、流式 `edit_message`）与 **P1.2**（入站附件、Opus→STT、角色鉴权、Auto-thread 持久化）已在 Rust 落地；下一主线为 **P2 体验对齐**；`DISCORD_PROXY` 仍见 P3。
 
 ---
 
@@ -233,11 +233,19 @@ P1+ 再接入：`free_response_channels`、`ignored_channels`、`allowed_channel
 
 | 阶段 | 做法 |
 |------|------|
-| P0 | `cargo test -p hermes-gateway --features discord`（模块单测 S/P/F/D/G + `tests/discord_p0_gateway.rs` + wiremock R-01/R-02）；手工 E2E 见下 |
-| P1+ | 从 [tests/gateway/test_discord_*.py](../../tests/gateway/) 挑选用例，录 parity fixture 或 Rust 单测 |
-| 回归 | `cargo test -p hermes-gateway`；禁止未测改 `expected` |
+| P0 | 模块单测（`filter` / `parse` / `dedup` / `session`）+ [`tests/discord_p0_gateway.rs`](../../crates/hermes-gateway/tests/discord_p0_gateway.rs) + wiremock [`discord_fetch_gateway_wiremock.rs`](../../crates/hermes-gateway/tests/discord_fetch_gateway_wiremock.rs)（R-01/R-02）；手工 E2E 见下 |
+| P1 回归 | 模块：`auth`（角色/DM guild 作用域）、`threads`（`discord_threads.json` 持久化）、`config`（reactions、ChannelIdSet JSON）、`media`（分类）；Gateway：`gateway_discord_reaction_lifecycle_*`、`gateway_discord_spawns_trigger_typing_on_route`；集成：[`discord_p1_slash.rs`](../../crates/hermes-gateway/tests/discord_p1_slash.rs)、[`discord_p1_attachments.rs`](../../crates/hermes-gateway/tests/discord_p1_attachments.rs)、[`discord_p1_media_wiremock.rs`](../../crates/hermes-gateway/tests/discord_p1_media_wiremock.rs) |
+| Python 对照 | P1 行为仍保留 [tests/gateway/test_discord_*.py](../../tests/gateway/)（如 `test_discord_reactions.py`、`test_discord_roles_dm_scope.py`、`test_discord_thread_persistence.py`、`test_discord_slash_commands.py` 基础命令子集、`test_discord_attachment_download.py`）；P2/P3 用例待后续 Rust 移植 |
+| 回归 | 见下方验收命令；禁止未测改 `expected` |
 
-**P0 手工 E2E Checklist**（需真实 bot token，不纳入 CI）：
+**P1 Rust 验收命令**（避免无关 `hooks` / `tool_backends` 失败干扰）：
+
+```bash
+cargo test -p hermes-gateway --features discord --test discord_p0_gateway --test discord_p1_slash --test discord_p1_attachments --test discord_p1_media_wiremock --test discord_fetch_gateway_wiremock
+cargo test -p hermes-gateway --features discord --lib discord
+```
+
+**P0 手工 E2E Checklist**（需真实 bot token，不纳入 CI；**已于 2026-05-28 人工验收通过**）：
 
 1. `~/.hermes/config.yaml`：`discord.enabled=true`，`token`，`allowed_users`（非空），`require_mention: true`
 2. Developer Portal：启用 **Message Content** + **Server Members** intents
@@ -257,9 +265,10 @@ P1+ 再接入：`free_response_channels`、`ignored_channels`、`allowed_channel
 | M0 文档 | 2026-05-27 | ✅ 本文档 |
 | M1 P0 WS + 入站 | 2026-05-27 | ✅ `gateway_loop` + CLI mpsc |
 | M2 P0 鉴权 + mention | 2026-05-27 | ✅ filter + `platform_requirements` |
-| M3 P0 Rust 测试 + 手工 E2E | 2026-05-27 | ✅ 自动化测试；E2E 待人工 checklist |
+| M3 P0 Rust 测试 + 手工 E2E | 2026-05-27 | ✅ 自动化测试 + 手工 E2E（2026-05-28 验收） |
 | M4 P1 MVP（反应 + Typing + 频道过滤 + Slash + 流式 edit） | 2026-05-27 | ✅ |
 | M5 P1.2 附件 + Opus + Auto-thread | 2026-05-27 | ✅ |
+| M6 P1 Rust 回归补全 | 2026-05-28 | ✅ §7 测试矩阵 + 集成/单测 |
 
 ---
 
@@ -279,3 +288,5 @@ P1+ 再接入：`free_response_channels`、`ignored_channels`、`allowed_channel
 | 2026-05-27 | P0 实现完成：模块拆分、WS 闭环、测试套件、§5/§8 状态更新 |
 | 2026-05-27 | P1 MVP：Slash 入站/defer、频道过滤、反应/typing、流式 edit；§3.1 P1.2 backlog |
 | 2026-05-27 | P1.2：附件下载、Opus/STT、角色鉴权、Auto-thread 持久化；§5/§8 M5 ✅ |
+| 2026-05-28 | P1 Rust 回归：Gateway 反应/typing、Slash 扩展、auth/threads/config、附件 wiremock；§7 更新 |
+| 2026-05-28 | P0 手工 E2E checklist 人工验收通过；§8 M3、文首状态说明更新 |

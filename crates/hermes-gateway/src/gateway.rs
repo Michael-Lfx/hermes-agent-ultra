@@ -2853,6 +2853,8 @@ mod tests {
     struct ReactionTestAdapter {
         messages: Arc<Mutex<Vec<(String, String)>>>,
         reactions: Arc<Mutex<Vec<String>>>,
+        typing: Arc<Mutex<Vec<String>>>,
+        platform: &'static str,
     }
 
     struct RecordingHook {
@@ -3015,12 +3017,21 @@ mod tests {
             Ok(())
         }
 
+        async fn trigger_typing(&self, chat_id: &str) -> Result<(), GatewayError> {
+            self.typing.lock().unwrap().push(chat_id.to_string());
+            Ok(())
+        }
+
+        fn reactions_enabled(&self) -> bool {
+            true
+        }
+
         fn is_running(&self) -> bool {
             true
         }
 
         fn platform_name(&self) -> &str {
-            "slack"
+            self.platform
         }
     }
 
@@ -4048,6 +4059,8 @@ mod tests {
         let adapter = Arc::new(ReactionTestAdapter {
             messages: sent.clone(),
             reactions: reactions.clone(),
+            typing: Arc::new(Mutex::new(Vec::new())),
+            platform: "slack",
         });
 
         let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
@@ -4093,6 +4106,8 @@ mod tests {
         let adapter = Arc::new(ReactionTestAdapter {
             messages: sent.clone(),
             reactions: reactions.clone(),
+            typing: Arc::new(Mutex::new(Vec::new())),
+            platform: "slack",
         });
 
         let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
@@ -4138,6 +4153,8 @@ mod tests {
         let adapter = Arc::new(ReactionTestAdapter {
             messages: sent.clone(),
             reactions: reactions.clone(),
+            typing: Arc::new(Mutex::new(Vec::new())),
+            platform: "slack",
         });
 
         let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
@@ -4164,6 +4181,194 @@ mod tests {
         };
         assert!(gw.route_message(&incoming).await.is_ok());
         assert!(reactions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gateway_discord_reaction_lifecycle_success() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let reactions = Arc::new(Mutex::new(Vec::new()));
+        let typing = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(ReactionTestAdapter {
+            messages: sent.clone(),
+            reactions: reactions.clone(),
+            typing: typing.clone(),
+            platform: "discord",
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("discord", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Ok("done".to_string()) })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "dm-ch".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-1".into()),
+            is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+        };
+        assert!(gw.route_message(&incoming).await.is_ok());
+
+        let got = reactions.lock().unwrap().clone();
+        assert_eq!(
+            got,
+            vec![
+                "add:dm-ch:msg-1:eyes".to_string(),
+                "remove:dm-ch:msg-1:eyes".to_string(),
+                "add:dm-ch:msg-1:white_check_mark".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_discord_reaction_lifecycle_failure_sets_error_reaction() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let reactions = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(ReactionTestAdapter {
+            messages: sent.clone(),
+            reactions: reactions.clone(),
+            typing: Arc::new(Mutex::new(Vec::new())),
+            platform: "discord",
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("discord", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Err(GatewayError::Platform("boom".to_string())) })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "dm-ch".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-2".into()),
+            is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+        };
+        assert!(gw.route_message(&incoming).await.is_err());
+
+        let got = reactions.lock().unwrap().clone();
+        assert_eq!(
+            got,
+            vec![
+                "add:dm-ch:msg-2:eyes".to_string(),
+                "remove:dm-ch:msg-2:eyes".to_string(),
+                "add:dm-ch:msg-2:x".to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn gateway_discord_reactions_skip_slash_and_plain_guild() {
+        let reactions = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(ReactionTestAdapter {
+            messages: Arc::new(Mutex::new(Vec::new())),
+            reactions: reactions.clone(),
+            typing: Arc::new(Mutex::new(Vec::new())),
+            platform: "discord",
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("discord", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Ok("done".to_string()) })
+        }))
+        .await;
+
+        let slash = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "ch1".into(),
+            user_id: "user1".into(),
+            text: "/status".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-slash".into()),
+            is_dm: false,
+            interaction_id: Some("ix-1".into()),
+            interaction_token: Some("tok".into()),
+            role_ids: vec![],
+        };
+        assert!(gw.route_message(&slash).await.is_ok());
+        assert!(reactions.lock().unwrap().is_empty());
+
+        reactions.lock().unwrap().clear();
+
+        let guild_plain = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "guild-ch".into(),
+            user_id: "user1".into(),
+            text: "general chatter".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-guild".into()),
+            is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+        };
+        assert!(gw.route_message(&guild_plain).await.is_ok());
+        assert!(reactions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn gateway_discord_spawns_trigger_typing_on_route() {
+        let typing = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(ReactionTestAdapter {
+            messages: Arc::new(Mutex::new(Vec::new())),
+            reactions: Arc::new(Mutex::new(Vec::new())),
+            typing: typing.clone(),
+            platform: "discord",
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("discord", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Ok("done".to_string()) })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "discord".into(),
+            chat_id: "dm-typing".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-t".into()),
+            is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+        };
+        assert!(gw.route_message(&incoming).await.is_ok());
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(typing.lock().unwrap().as_slice(), &["dm-typing"]);
     }
 
     #[tokio::test]
