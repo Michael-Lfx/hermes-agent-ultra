@@ -8,6 +8,7 @@
 
 pub mod config;
 pub mod dep_check;
+pub mod interest;
 pub mod voice;
 pub mod loader;
 pub mod managed_gateway;
@@ -28,6 +29,7 @@ pub use config::{
     TerminalBackendType, TerminalConfig, ToolsSettings,
 };
 pub use dep_check::{RuntimeDep, is_available as dep_is_available};
+pub use interest::InterestConfig;
 pub use voice::{
     DiarizationProvider, MeetingConfig, MeetingTranscriptionMode, SttConfig, SttGroqConfig,
     SttLocalConfig, SttMistralConfig, SttOpenAiConfig, SttXaiConfig, TtsConfig, TtsEdgeConfig,
@@ -49,8 +51,9 @@ pub use managed_gateway::{
 pub use merge::{deep_merge, merge_configs};
 pub use paths::{
     cli_config_path, config_path, cron_dir, env_path, expand_tilde, gateway_json_path,
-    gateway_pid_path, gateway_pid_path_in, hermes_home, memory_path, resolve_agent_path,
-    resolve_outbound_media_path, session_temp_dir, sessions_dir, skills_dir, state_dir, user_path,
+    gateway_pid_path, gateway_pid_path_in, hermes_home, interest_db_path, interest_db_path_in,
+    memory_path, resolve_agent_path, resolve_outbound_media_path, session_temp_dir, sessions_dir,
+    skills_dir, state_dir, user_path,
 };
 pub use platform::{extra_string, platform_token_or_extra, PlatformConfig, UnauthorizedDmBehavior};
 pub use session::{DailyReset, IdleReset, SessionConfig, SessionResetPolicy, SessionType};

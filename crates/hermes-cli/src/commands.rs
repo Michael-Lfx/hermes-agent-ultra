@@ -22053,6 +22053,78 @@ pub async fn handle_cli_memory(
     Ok(())
 }
 
+/// Handle `hermes interest [list|status|clear]`.
+pub async fn handle_cli_interest(action: Option<String>) -> Result<(), hermes_core::AgentError> {
+    let config = hermes_config::load_config(None).unwrap_or_default();
+    let hermes_home = config
+        .home_dir
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(hermes_config::hermes_home);
+    let db_path = hermes_home.join("interest.db");
+
+    match action.as_deref().unwrap_or("list") {
+        "status" | "list" => {
+            if !config.interest.enabled {
+                println!("User interest (POI): disabled in config (interest.enabled = false)");
+                return Ok(());
+            }
+            if !db_path.exists() {
+                println!("User interest (POI): no topics yet");
+                println!("  Database: {}", db_path.display());
+                println!("  Topics are learned from conversations when interest.enabled is true.");
+                return Ok(());
+            }
+            let store = hermes_agent::InterestStore::open(&db_path, config.interest.clone())
+                .map_err(|e| hermes_core::AgentError::Io(e))?;
+            let topics = store
+                .list_for_cli()
+                .map_err(|e| hermes_core::AgentError::Io(e))?;
+            println!("User interest (POI): {} topic(s)", topics.len());
+            println!("  Database: {}", db_path.display());
+            println!("  Mode: {}", config.interest.extract_mode);
+            for (idx, topic) in topics.iter().enumerate() {
+                println!(
+                    "  {:>2}. [{:.2}] {} — {}",
+                    idx + 1,
+                    topic.weight,
+                    topic.label,
+                    topic.summary
+                );
+                if !topic.tags.is_empty() {
+                    println!("      tags: {}", topic.tags.join(", "));
+                }
+            }
+        }
+        "clear" => {
+            if db_path.exists() {
+                std::fs::remove_file(&db_path).map_err(|e| hermes_core::AgentError::Io(e.to_string()))?;
+            }
+            println!("Cleared interest store at {}", db_path.display());
+        }
+        "prune" => {
+            if !db_path.exists() {
+                println!("Nothing to prune (no interest.db).");
+                return Ok(());
+            }
+            let store = hermes_agent::InterestStore::open(&db_path, config.interest.clone())
+                .map_err(|e| hermes_core::AgentError::Io(e))?;
+            let removed = store
+                .prune_rejected_topics()
+                .map_err(|e| hermes_core::AgentError::Io(e))?;
+            println!(
+                "Pruned {removed} non-POI topic row(s) from {}",
+                db_path.display()
+            );
+        }
+        other => {
+            println!("Unknown interest action '{}'.", other);
+            println!("Available actions: list, status, clear, prune");
+        }
+    }
+    Ok(())
+}
+
 /// Handle `hermes mcp [action] [--server ...]`.
 pub async fn handle_cli_mcp(
     action: Option<String>,

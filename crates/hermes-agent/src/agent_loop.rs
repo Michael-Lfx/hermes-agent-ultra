@@ -39,6 +39,10 @@ use crate::context::{
     ContextManager, SystemPromptBuilder, load_builtin_memory_snapshot, load_soul_md,
     resolve_personality,
 };
+use crate::user_interest::{
+    ingest_user_message, is_poi_synthetic_user_text, load_interest_snapshot,
+    spawn_session_end_ingest, InterestStore,
+};
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::context_references::preprocess_context_references_async;
 use crate::credential_pool::CredentialPool;
@@ -622,6 +626,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub skip_memory: bool,
 
+    /// Local user interest (POI) topic store configuration.
+    #[serde(default)]
+    pub interest: hermes_config::InterestConfig,
+
     /// Skip auto-injection of workspace/personal context files in system prompt
     /// assembly (SOUL.md, AGENTS.md, etc.).
     #[serde(default)]
@@ -1009,6 +1017,7 @@ impl Default for AgentConfig {
             session_id: None,
             hermes_home: None,
             skip_memory: false,
+            interest: hermes_config::InterestConfig::default(),
             skip_context_files: false,
             smart_model_routing: SmartModelRoutingConfig::default(),
             provider: None,
@@ -1943,6 +1952,10 @@ pub struct AgentLoop {
     pub interrupt: InterruptController,
     /// Optional memory manager for prefetch/sync/tool routing.
     pub memory_manager: Option<Arc<std::sync::Mutex<MemoryManager>>>,
+    /// Local POI store (works even when `skip_memory` is true).
+    interest_store: Option<Arc<Mutex<InterestStore>>>,
+    /// Dedupes per-session user-message POI ingest.
+    interest_synced_user_hashes: Arc<Mutex<HashSet<u64>>>,
     /// Optional plugin manager for lifecycle hooks.
     pub plugin_manager: Option<Arc<std::sync::Mutex<PluginManager>>>,
     /// Callbacks for progress reporting.
@@ -2383,6 +2396,8 @@ impl AgentLoop {
             llm_provider,
             interrupt: InterruptController::new(),
             memory_manager: None,
+            interest_store: None,
+            interest_synced_user_hashes: Arc::new(Mutex::new(HashSet::new())),
             plugin_manager: None,
             callbacks: Arc::new(AgentCallbacks::default()),
             delegate_depth: 0,
@@ -2444,6 +2459,8 @@ impl AgentLoop {
             llm_provider,
             interrupt,
             memory_manager: None,
+            interest_store: None,
+            interest_synced_user_hashes: Arc::new(Mutex::new(HashSet::new())),
             plugin_manager: None,
             callbacks: Arc::new(AgentCallbacks::default()),
             delegate_depth: 0,
@@ -2625,6 +2642,12 @@ impl AgentLoop {
         self
     }
 
+    /// Attach local POI store (independent of external memory / `skip_memory`).
+    pub fn with_interest_store(mut self, store: Arc<Mutex<InterestStore>>) -> Self {
+        self.interest_store = Some(store);
+        self
+    }
+
     /// Set the plugin manager.
     pub fn with_plugins(mut self, pm: Arc<std::sync::Mutex<PluginManager>>) -> Self {
         self.plugin_manager = Some(pm);
@@ -2740,16 +2763,92 @@ impl AgentLoop {
 
     // -- Memory helpers ----------------------------------------------------
 
-    fn memory_prefetch(&self, query: &str, session_id: &str) -> String {
-        if self.config().skip_memory {
+    fn interest_prefetch_block(&self, query: &str) -> String {
+        if !self.config().interest.enabled {
             return String::new();
+        }
+        let Some(ref store) = self.interest_store else {
+            return String::new();
+        };
+        let Ok(guard) = store.lock() else {
+            return String::new();
+        };
+        guard.render_prefetch_block(query).unwrap_or_default()
+    }
+
+    fn interest_sync_user_messages(&self, messages: &[Message]) {
+        if !self.config().interest.enabled || !self.config().interest.uses_rules() {
+            return;
+        }
+        let Some(ref store) = self.interest_store else {
+            return;
+        };
+        let Ok(mut synced) = self.interest_synced_user_hashes.lock() else {
+            return;
+        };
+        let Ok(guard) = store.lock() else {
+            return;
+        };
+        for msg in messages {
+            if msg.role != MessageRole::User {
+                continue;
+            }
+            let Some(text) = msg.content.as_deref() else {
+                continue;
+            };
+            let trimmed = text.trim();
+            if trimmed.is_empty() || is_poi_synthetic_user_text(trimmed) {
+                continue;
+            }
+            let hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(trimmed.as_bytes());
+                let digest = hasher.finalize();
+                u64::from_be_bytes(digest[..8].try_into().unwrap_or([0u8; 8]))
+            };
+            if !synced.insert(hash) {
+                continue;
+            }
+            let _ = ingest_user_message(&guard, trimmed, 0.35);
+        }
+    }
+
+    fn interest_on_session_end(&self, messages: &[Message]) {
+        if !self.config().interest.enabled {
+            return;
+        }
+        let Some(ref store) = self.interest_store else {
+            return;
+        };
+        let as_values: Vec<Value> = messages
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect();
+        spawn_session_end_ingest(
+            Arc::clone(store),
+            self.config().interest.clone(),
+            as_values,
+        );
+    }
+
+    fn memory_prefetch(&self, query: &str, session_id: &str) -> String {
+        let mut parts = Vec::new();
+        let interest = self.interest_prefetch_block(query);
+        if !interest.is_empty() {
+            parts.push(interest);
+        }
+        if self.config().skip_memory {
+            return parts.join("\n\n");
         }
         if let Some(ref mm) = self.memory_manager {
             if let Ok(mm) = mm.lock() {
-                return mm.prefetch_all(query, session_id);
+                let block = mm.prefetch_all(query, session_id);
+                if !block.is_empty() {
+                    parts.push(block);
+                }
             }
         }
-        String::new()
+        parts.join("\n\n")
     }
 
     fn memory_sync(&self, user: &str, assistant: &str, session_id: &str) {
@@ -2922,6 +3021,7 @@ impl AgentLoop {
     }
 
     fn memory_on_session_end(&self, messages: &[Message]) {
+        self.interest_on_session_end(messages);
         if self.config().skip_memory {
             return;
         }
@@ -4093,6 +4193,7 @@ impl AgentLoop {
 
         self.pending_steer
             .drain_pre_api_into_messages(ctx.get_messages_mut());
+        self.interest_sync_user_messages(ctx.get_messages());
         let mut messages = ctx.get_messages().to_vec();
         if let Some(ephemeral) = self
             .config()
@@ -4220,6 +4321,13 @@ impl AgentLoop {
                 builder = builder.with_block(&block);
             }
             if let Some(block) = user_block {
+                builder = builder.with_block(&block);
+            }
+        }
+        if self.config().interest.enabled {
+            if let Some(block) =
+                load_interest_snapshot(self.config().hermes_home.as_deref(), &self.config().interest)
+            {
                 builder = builder.with_block(&block);
             }
         }
@@ -5636,6 +5744,7 @@ impl AgentLoop {
         for msg in messages {
             ctx.add_message(msg);
         }
+        self.interest_sync_user_messages(ctx.get_messages());
         self.hydrate_todo_store(&ctx);
         if let Some(hint) = contextlattice_connect_system_hint(ctx.get_messages()) {
             ctx.add_message(Message::system(hint));
@@ -6981,6 +7090,7 @@ impl AgentLoop {
         for msg in messages {
             ctx.add_message(msg);
         }
+        self.interest_sync_user_messages(ctx.get_messages());
         self.hydrate_todo_store(&ctx);
         if let Some(hint) = contextlattice_connect_system_hint(ctx.get_messages()) {
             ctx.add_message(Message::system(hint));

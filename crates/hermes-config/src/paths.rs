@@ -118,6 +118,16 @@ pub fn cron_dir() -> PathBuf {
     hermes_home().join("cron")
 }
 
+/// `$hermes_home/interest.db` — local user interest (POI) topic store.
+pub fn interest_db_path() -> PathBuf {
+    hermes_home().join("interest.db")
+}
+
+/// Interest DB under an explicit Hermes home directory.
+pub fn interest_db_path_in(home: impl AsRef<Path>) -> PathBuf {
+    home.as_ref().join("interest.db")
+}
+
 /// `$hermes_home/.env`
 pub fn env_path() -> PathBuf {
     hermes_home().join(".env")

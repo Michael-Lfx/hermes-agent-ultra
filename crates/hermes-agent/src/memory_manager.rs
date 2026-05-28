@@ -510,7 +510,7 @@ fn memory_fusion_top_k() -> usize {
 
 fn memory_fusion_weights() -> HashMap<String, f64> {
     let raw = std::env::var("HERMES_MEMORY_FUSION_WEIGHTS")
-        .unwrap_or_else(|_| "builtin=1.2,contextlattice=1.25,supermemory=1.15".to_string());
+        .unwrap_or_else(|_| "builtin=1.2,interest=1.1,contextlattice=1.25,supermemory=1.15".to_string());
     let mut weights = HashMap::new();
     for piece in raw.split(',') {
         let token = piece.trim();

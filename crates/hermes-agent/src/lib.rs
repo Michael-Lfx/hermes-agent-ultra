@@ -26,6 +26,7 @@ pub mod interrupt;
 pub mod lsp_context;
 pub mod memory_manager;
 pub mod memory_plugins;
+pub mod user_interest;
 pub mod oauth;
 pub mod plugins;
 pub mod shell_hooks;
@@ -104,6 +105,10 @@ pub use steer::{PendingSteer, STEER_GUIDANCE_MARKER};
 // Re-export memory manager
 pub use memory_manager::{
     build_memory_context_block, sanitize_context, MemoryManager, MemoryProviderPlugin,
+};
+pub use user_interest::{
+    is_rejected_poi_topic, load_interest_snapshot, InterestMemoryPlugin, InterestStore,
+    InterestTopic,
 };
 
 // Re-export plugin system
@@ -191,9 +196,6 @@ pub fn attach_agent_runtime(agent: AgentLoop) -> AgentLoop {
 /// This keeps ContextLattice-first and multi-provider memory behavior enabled
 /// consistently across CLI, gateway, HTTP, and cron execution surfaces.
 pub fn attach_discovered_memory(mut agent: AgentLoop) -> AgentLoop {
-    if agent.config().skip_memory {
-        return agent;
-    }
     let session_id = agent
         .config()
         .session_id
@@ -205,10 +207,23 @@ pub fn attach_discovered_memory(mut agent: AgentLoop) -> AgentLoop {
         .clone()
         .unwrap_or_else(default_memory_home);
     let memory_nudge_interval = agent.config().memory_nudge_interval;
+    let interest = agent.config().interest.clone();
+
+    let interest_store = user_interest::open_interest_store(&hermes_home, &interest);
+    if let Some(store) = interest_store.clone() {
+        agent = agent.with_interest_store(store);
+    }
+
+    if agent.config().skip_memory {
+        return agent;
+    }
+
     if let Some(manager) = memory_plugins::build_initialized_memory_manager(
         &session_id,
         &hermes_home,
         memory_nudge_interval,
+        &interest,
+        interest_store,
     ) {
         agent = agent.with_memory(manager);
     }
