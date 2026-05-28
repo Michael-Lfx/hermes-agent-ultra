@@ -24264,6 +24264,18 @@ pub async fn handle_cli_meeting(
                 &llm_key,
                 &llm_model,
                 &hermes_home,
+                |state| {
+                    use hermes_tools::tools::meeting_notes::SummarizeState;
+                    match &state {
+                        SummarizeState::Transcribing => println!("  ⟳ 转录中…"),
+                        SummarizeState::Diarizing => println!("  ⟳ 说话人识别中…"),
+                        SummarizeState::SummarizingChunk(i, n) => println!("  ⟳ 总结片段 {i}/{n}…"),
+                        SummarizeState::MergingSummaries => println!("  ⟳ 合并摘要…"),
+                        SummarizeState::WritingMemory => println!("  ⟳ 写入记忆…"),
+                        SummarizeState::Done => println!("  ✓ 完成"),
+                        SummarizeState::Warning(w) => println!("  ⚠ {w}"),
+                    }
+                },
             )
             .await
             .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?;
