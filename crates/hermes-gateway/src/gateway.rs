@@ -126,6 +126,36 @@ pub struct IncomingMessage {
     pub message_id: Option<String>,
     /// Whether this is a DM (direct message) or group message.
     pub is_dm: bool,
+    /// Discord interaction id when the message originated from a slash command.
+    pub interaction_id: Option<String>,
+    /// Discord interaction token for deferred slash follow-up responses.
+    pub interaction_token: Option<String>,
+    /// Discord member role snowflakes (guild messages / slash interactions).
+    pub role_ids: Vec<String>,
+}
+
+impl IncomingMessage {
+    pub fn new(
+        platform: impl Into<String>,
+        chat_id: impl Into<String>,
+        user_id: impl Into<String>,
+        text: impl Into<String>,
+        is_dm: bool,
+    ) -> Self {
+        Self {
+            platform: platform.into(),
+            chat_id: chat_id.into(),
+            user_id: user_id.into(),
+            text: text.into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: None,
+            is_dm,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -330,6 +360,7 @@ pub enum DmAccessMode {
 pub struct PlatformAccessPolicy {
     pub allowed_users: HashSet<String>,
     pub admin_users: HashSet<String>,
+    pub allowed_roles: HashSet<String>,
     pub group_mode: GroupAccessMode,
     pub slash_requires_allowlist: bool,
     pub dm_mode: DmAccessMode,
@@ -337,7 +368,9 @@ pub struct PlatformAccessPolicy {
 
 impl PlatformAccessPolicy {
     fn has_allowlist(&self) -> bool {
-        !self.allowed_users.is_empty() || !self.admin_users.is_empty()
+        !self.allowed_users.is_empty()
+            || !self.admin_users.is_empty()
+            || !self.allowed_roles.is_empty()
     }
 
     fn user_matches_any(user_id: &str, set: &HashSet<String>) -> bool {
@@ -359,9 +392,12 @@ impl PlatformAccessPolicy {
         })
     }
 
-    pub fn is_user_allowed(&self, user_id: &str) -> bool {
+    pub fn is_user_allowed(&self, user_id: &str, role_ids: &[String]) -> bool {
         Self::user_matches_any(user_id, &self.admin_users)
             || Self::user_matches_any(user_id, &self.allowed_users)
+            || role_ids
+                .iter()
+                .any(|role| Self::user_matches_any(role, &self.allowed_roles))
     }
 }
 
@@ -498,10 +534,10 @@ impl Gateway {
         }
     }
 
-    fn should_apply_slack_reaction_lifecycle(incoming: &IncomingMessage) -> bool {
-        if !incoming.platform.eq_ignore_ascii_case("slack") {
-            return false;
-        }
+    async fn should_apply_reaction_lifecycle(
+        &self,
+        incoming: &IncomingMessage,
+    ) -> bool {
         if incoming.text.trim_start().starts_with('/') {
             return false;
         }
@@ -514,7 +550,23 @@ impl Gateway {
         {
             return false;
         }
-        incoming.is_dm || incoming.text.contains("<@")
+
+        let platform = incoming.platform.trim().to_ascii_lowercase();
+        if platform == "slack" {
+            return incoming.is_dm || incoming.text.contains("<@");
+        }
+        if platform == "discord" {
+            let Some(adapter) = self.get_adapter("discord").await else {
+                return false;
+            };
+            if !adapter.reactions_enabled() {
+                return false;
+            }
+            return incoming.is_dm
+                || incoming.text.contains("<@")
+                || incoming.text.contains("<@!");
+        }
+        false
     }
 
     /// Set the message handler for processing incoming messages.
@@ -652,7 +704,7 @@ impl Gateway {
                         return Ok(());
                     }
                     GroupAccessMode::Allowlist => {
-                        if !policy.is_user_allowed(&incoming.user_id) {
+                        if !policy.is_user_allowed(&incoming.user_id, &incoming.role_ids) {
                             debug!(
                                 platform = incoming.platform,
                                 user_id = incoming.user_id,
@@ -667,7 +719,7 @@ impl Gateway {
             if is_slash_command
                 && policy.slash_requires_allowlist
                 && policy.has_allowlist()
-                && !policy.is_user_allowed(&incoming.user_id)
+                && !policy.is_user_allowed(&incoming.user_id, &incoming.role_ids)
             {
                 debug!(
                     platform = incoming.platform,
@@ -699,7 +751,7 @@ impl Gateway {
             if dm_mode == DmAccessMode::Allowlist {
                 let allowed = access_policy
                     .as_ref()
-                    .is_some_and(|p| p.is_user_allowed(&incoming.user_id));
+                    .is_some_and(|p| p.is_user_allowed(&incoming.user_id, &incoming.role_ids));
                 if !allowed {
                     debug!(
                         user_id = incoming.user_id,
@@ -724,7 +776,7 @@ impl Gateway {
                                 dm_mode = ?dm_mode,
                                 "Sending DM pairing approval message"
                             );
-                            self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+                            self.send_incoming_reply(incoming, &msg, None)
                                 .await?;
                         }
                         return Ok(());
@@ -741,10 +793,12 @@ impl Gateway {
             }
         }
 
-        let session_key = self.session_manager.compose_session_key(
+        let is_dm = Some(incoming.is_dm);
+        let session_key = self.session_manager.compose_session_key_with_dm(
             &incoming.platform,
             &incoming.chat_id,
             &incoming.user_id,
+            is_dm,
         );
         let _session_serial = self.acquire_session_serial(&session_key).await;
 
@@ -752,7 +806,12 @@ impl Gateway {
         let existing_session = self.session_manager.get_session(&session_key).await;
         let session = self
             .session_manager
-            .get_or_create_session(&incoming.platform, &incoming.chat_id, &incoming.user_id)
+            .get_or_create_session_with_dm(
+                &incoming.platform,
+                &incoming.chat_id,
+                &incoming.user_id,
+                is_dm,
+            )
             .await;
         trace!(
             platform = %incoming.platform,
@@ -786,7 +845,16 @@ impl Gateway {
             }
         }
 
-        let reaction_adapter = if Self::should_apply_slack_reaction_lifecycle(incoming) {
+        if incoming.platform.eq_ignore_ascii_case("discord") {
+            if let Some(adapter) = self.get_adapter("discord").await {
+                let chat_id = incoming.chat_id.clone();
+                tokio::spawn(async move {
+                    let _ = adapter.trigger_typing(&chat_id).await;
+                });
+            }
+        }
+
+        let reaction_adapter = if self.should_apply_reaction_lifecycle(incoming).await {
             self.get_adapter(&incoming.platform).await
         } else {
             None
@@ -827,6 +895,24 @@ impl Gateway {
 
         // 4. Get all session messages for the agent loop
         let messages = self.session_manager.get_messages(&session_key).await;
+        let session_transcript_chars: usize = messages
+            .iter()
+            .map(|m| m.content.as_deref().map(|c| c.chars().count()).unwrap_or(0))
+            .sum();
+        if incoming.platform.eq_ignore_ascii_case("discord") {
+            info!(
+                platform = %incoming.platform,
+                session_key = %session_key,
+                chat_id = %incoming.chat_id,
+                user_id = %incoming.user_id,
+                is_dm = incoming.is_dm,
+                message_count = messages.len(),
+                session_transcript_chars = session_transcript_chars,
+                inbound_text_chars = input_chars,
+                has_media = !incoming.media_urls.is_empty(),
+                "Discord session context snapshot before agent"
+            );
+        }
 
         // 5. Process through agent loop (streaming or non-streaming)
         let processing_result = if self.config.streaming_enabled {
@@ -920,7 +1006,7 @@ impl Gateway {
             GatewayCommandResult::Reply(text)
             | GatewayCommandResult::ShowHelp(text)
             | GatewayCommandResult::Unknown(text) => {
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -948,7 +1034,7 @@ impl Gateway {
                     }),
                 )
                 .await;
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -956,7 +1042,7 @@ impl Gateway {
                 let mut states = self.runtime_state.write().await;
                 states.entry(session_key.to_string()).or_default().model = Some(model);
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -967,7 +1053,7 @@ impl Gateway {
                     .or_default()
                     .personality = Some(name);
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1025,13 +1111,13 @@ impl Gateway {
                         let _ = self.background_tasks.cancel(&task_id);
                     }
                 }
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
             GatewayCommandResult::ShowUsage(_) => {
                 let text = self.build_usage_text(session_key).await;
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -1045,12 +1131,12 @@ impl Gateway {
                     reply.push_str("\n\n");
                     reply.push_str(&warning);
                 }
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
             GatewayCommandResult::ShowInsights(text) => {
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -1063,7 +1149,7 @@ impl Gateway {
                     if state.verbose { "ON" } else { "OFF" }
                 );
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1073,7 +1159,7 @@ impl Gateway {
                 state.yolo = !state.yolo;
                 let reply = format!("🤠 YOLO mode: {}", if state.yolo { "ON" } else { "OFF" });
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1086,13 +1172,13 @@ impl Gateway {
                 } else {
                     format!("❌ Path not found or not a directory: {}", path)
                 };
-                self.send_message(&incoming.platform, &incoming.chat_id, &response, None)
+                self.send_incoming_reply(incoming, &response, None)
                     .await?;
                 Ok(true)
             }
             GatewayCommandResult::ShowStatus(_) => {
                 let text = self.build_status_text(session_key).await;
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -1114,7 +1200,7 @@ impl Gateway {
                 let mut states = self.runtime_state.write().await;
                 states.entry(session_key.to_string()).or_default().provider = Some(provider);
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1122,7 +1208,7 @@ impl Gateway {
                 let mut states = self.runtime_state.write().await;
                 states.entry(session_key.to_string()).or_default().profile = Some(profile);
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1145,7 +1231,7 @@ impl Gateway {
                         format!("🌿 Current branch context: {}", branch)
                     }
                 };
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1200,7 +1286,7 @@ impl Gateway {
                     if state.reasoning { "ON" } else { "OFF" }
                 );
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1261,7 +1347,7 @@ impl Gateway {
                 } else {
                     format!("↩️ Removed {} message(s) from current session.", removed)
                 };
-                self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
+                self.send_incoming_reply(incoming, &reply, None)
                     .await?;
                 Ok(true)
             }
@@ -1274,7 +1360,7 @@ impl Gateway {
                     "🔧 Tools{}.\nRegistered MCP tools are resolved at runtime after reload.",
                     suffix
                 );
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -1330,7 +1416,7 @@ impl Gateway {
                     out.push_str("\nUse `/sessions <key or id>` to switch.");
                     out
                 };
-                self.send_message(&incoming.platform, &incoming.chat_id, &text, None)
+                self.send_incoming_reply(incoming, &text, None)
                     .await?;
                 Ok(true)
             }
@@ -1372,7 +1458,7 @@ impl Gateway {
                         session_id
                     )
                 };
-                self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+                self.send_incoming_reply(incoming, &msg, None)
                     .await?;
                 Ok(true)
             }
@@ -1392,7 +1478,7 @@ impl Gateway {
                     },
                 };
                 drop(states);
-                self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+                self.send_incoming_reply(incoming, &msg, None)
                     .await?;
                 Ok(true)
             }
@@ -1480,7 +1566,7 @@ impl Gateway {
         // Send response back to the platform (text + MEDIA: local attachments)
         self.deliver_response_attachments(&incoming.platform, &incoming.chat_id, &response)
             .await;
-        self.send_message(&incoming.platform, &incoming.chat_id, &response, None)
+        self.send_incoming_reply(incoming, &response, None)
             .await?;
         self.flush_post_delivery_messages(
             &incoming.platform,
@@ -1644,9 +1730,24 @@ impl Gateway {
                 .await;
             stream_id = Some(stream_handle.id.clone());
 
-            // Send an initial streaming anchor message.
-            self.send_message(&incoming.platform, &incoming.chat_id, "...", None)
-                .await?;
+            let anchor_id = if let Some(adapter) =
+                self.get_adapter(&incoming.platform).await
+            {
+                adapter
+                    .send_message_with_id(&incoming.chat_id, "...", None)
+                    .await?
+            } else {
+                self.send_message(&incoming.platform, &incoming.chat_id, "...", None)
+                    .await?;
+                None
+            };
+            if let Some(stream_id) = stream_id.as_ref() {
+                if let Some(mid) = anchor_id.as_deref().or(Some("stream-anchor")) {
+                    self.stream_manager
+                        .set_message_id(stream_id, mid)
+                        .await;
+                }
+            }
 
             let stream_manager = self.stream_manager.clone();
             let platform = incoming.platform.clone();
@@ -1666,8 +1767,21 @@ impl Gateway {
                         if should_flush {
                             if let Some(content) = sm.get_stream_content(&sid).await {
                                 if let Some(adapter) = adapters.get(&platform) {
-                                    // Legacy fallback path: progressively emits messages.
-                                    let _ = adapter.send_message(&chat_id, &content, None).await;
+                                    if let Some(message_id) =
+                                        sm.get_message_id(&sid).await
+                                    {
+                                        let _ = adapter
+                                            .edit_message(
+                                                &chat_id,
+                                                &message_id,
+                                                &content,
+                                            )
+                                            .await;
+                                    } else {
+                                        let _ = adapter
+                                            .send_message(&chat_id, &content, None)
+                                            .await;
+                                    }
                                 }
                             }
                         }
@@ -1733,8 +1847,40 @@ impl Gateway {
                     .await?;
             }
         } else if let Some(stream_id) = stream_id {
-            // Finish the legacy stream-manager session.
-            self.stream_manager.finish_stream(&stream_id).await;
+            let anchor_message_id = self.stream_manager.get_message_id(&stream_id).await;
+            let accumulated = self
+                .stream_manager
+                .finish_stream(&stream_id)
+                .await
+                .unwrap_or_default();
+            let acc = accumulated.trim();
+            let trimmed_response = response.trim();
+            let final_text = if !acc.is_empty() && acc != "..." && acc.len() >= trimmed_response.len() {
+                accumulated
+            } else {
+                response.clone()
+            };
+            if !final_text.trim().is_empty() {
+                if let Some(message_id) = anchor_message_id {
+                    if let Some(adapter) = self.get_adapter(&incoming.platform).await {
+                        let _ = adapter
+                            .edit_message(
+                                &incoming.chat_id,
+                                &message_id,
+                                final_text.trim(),
+                            )
+                            .await;
+                    }
+                } else {
+                    self.send_message(
+                        &incoming.platform,
+                        &incoming.chat_id,
+                        final_text.trim(),
+                        None,
+                    )
+                    .await?;
+                }
+            }
         }
 
         // Add assistant response to session
@@ -2048,7 +2194,7 @@ impl Gateway {
                 }
                 out
             };
-            self.send_message(&incoming.platform, &incoming.chat_id, &summary, None)
+            self.send_incoming_reply(incoming, &summary, None)
                 .await?;
             return Ok(true);
         }
@@ -2059,7 +2205,7 @@ impl Gateway {
             } else {
                 format!("Task {} was not running or not found", task_id)
             };
-            self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+            self.send_incoming_reply(incoming, &msg, None)
                 .await?;
             return Ok(true);
         }
@@ -2077,7 +2223,7 @@ impl Gateway {
                 Some(TaskStatus::Cancelled) => format!("Task {} was cancelled", task_id),
                 None => format!("Task {} not found", task_id),
             };
-            self.send_message(&incoming.platform, &incoming.chat_id, &msg, None)
+            self.send_incoming_reply(incoming, &msg, None)
                 .await?;
             return Ok(true);
         }
@@ -2100,7 +2246,7 @@ impl Gateway {
                 preview, task_id
             )
         };
-        self.send_message(&incoming.platform, &incoming.chat_id, &ack, None)
+        self.send_incoming_reply(incoming, &ack, None)
             .await?;
 
         let legacy_handler = self.message_handler.read().await.as_ref().cloned();
@@ -2224,6 +2370,27 @@ impl Gateway {
                 }
             }
         }
+    }
+
+    /// Send a reply for an inbound message (slash interaction follow-up when applicable).
+    pub async fn send_incoming_reply(
+        &self,
+        incoming: &IncomingMessage,
+        text: &str,
+        parse_mode: Option<ParseMode>,
+    ) -> Result<(), GatewayError> {
+        if let (Some(interaction_id), Some(interaction_token)) = (
+            incoming.interaction_id.as_deref(),
+            incoming.interaction_token.as_deref(),
+        ) {
+            if let Some(adapter) = self.get_adapter(&incoming.platform).await {
+                return adapter
+                    .respond_interaction(interaction_id, interaction_token, text)
+                    .await;
+            }
+        }
+        self.send_message(&incoming.platform, &incoming.chat_id, text, parse_mode)
+            .await
     }
 
     /// Send a text message to a specific platform chat.
@@ -2598,10 +2765,17 @@ mod tests {
 
         async fn edit_message(
             &self,
-            _chat_id: &str,
+            chat_id: &str,
             _message_id: &str,
-            _text: &str,
+            text: &str,
         ) -> Result<(), GatewayError> {
+            let mut msgs = self.messages.lock().unwrap();
+            if let Some(pos) = msgs
+                .iter()
+                .rposition(|(c, t)| c == chat_id && t == "...")
+            {
+                msgs[pos].1 = text.to_string();
+            }
             Ok(())
         }
 
@@ -2859,6 +3033,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         // Should succeed (deny silently)
@@ -2900,6 +3077,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         let result = gw.route_message(&incoming).await;
@@ -2926,6 +3106,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         // Should fail because no message handler is set
@@ -2948,6 +3131,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: false, // Group message, no DM check
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         // Should fail because no handler, but DM check is skipped
@@ -2978,6 +3164,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         let result = gw.route_message(&incoming).await;
@@ -3019,6 +3208,9 @@ mod tests {
             media_types: vec![],
             message_id: Some("m1".into()),
             is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&denied).await.is_ok());
         assert_eq!(
@@ -3036,6 +3228,9 @@ mod tests {
             media_types: vec![],
             message_id: Some("m2".into()),
             is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&allowed).await.is_ok());
         let sent_msgs = sent.lock().unwrap();
@@ -3066,6 +3261,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         let result = gw.route_message(&incoming).await;
@@ -3124,6 +3322,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         assert!(gw.route_message(&incoming).await.is_ok());
@@ -3176,6 +3377,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
 
         assert!(gw.route_message(&incoming).await.is_ok());
@@ -3230,6 +3434,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&start).await.is_ok());
 
@@ -3258,6 +3465,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&status).await.is_ok());
 
@@ -3287,6 +3497,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&approve).await.is_ok());
 
@@ -3300,6 +3513,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&authorized_dm).await.is_err());
 
@@ -3312,6 +3528,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&deny).await.is_ok());
 
@@ -3325,6 +3544,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&denied_dm).await.is_ok());
     }
@@ -3351,6 +3573,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&provider).await.is_ok());
 
@@ -3363,6 +3588,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&profile).await.is_ok());
 
@@ -3375,6 +3603,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&reload).await.is_ok());
 
@@ -3387,6 +3618,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&status).await.is_ok());
 
@@ -3446,6 +3680,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&set_provider).await.is_ok());
 
@@ -3458,6 +3695,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&set_model).await.is_ok());
 
@@ -3470,6 +3710,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&set_profile).await.is_ok());
 
@@ -3482,6 +3725,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&set_branch).await.is_ok());
 
@@ -3494,6 +3740,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&normal).await.is_ok());
 
@@ -3545,6 +3794,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&yolo_chat1).await.is_ok());
 
@@ -3557,6 +3809,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&yolo_chat2).await.is_ok());
 
@@ -3575,6 +3830,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&reset_chat1).await.is_ok());
 
@@ -3620,6 +3878,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&yolo_chat1).await.is_ok());
         {
@@ -3636,6 +3897,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&switch).await.is_ok());
 
@@ -3671,6 +3935,9 @@ mod tests {
             media_types: vec![],
             message_id: Some("1710000000.123".into()),
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -3713,6 +3980,9 @@ mod tests {
             media_types: vec![],
             message_id: Some("1710000000.456".into()),
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_err());
 
@@ -3754,6 +4024,9 @@ mod tests {
             media_types: vec![],
             message_id: Some("1710000000.789".into()),
             is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
         assert!(reactions.lock().unwrap().is_empty());
@@ -3809,6 +4082,9 @@ mod tests {
                 media_types: vec![],
                 message_id: None,
                 is_dm: true,
+                interaction_id: None,
+                interaction_token: None,
+            role_ids: vec![],
             };
             assert!(gw.route_message(&incoming).await.is_ok());
         }
@@ -3822,6 +4098,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&normal).await.is_ok());
 
@@ -3888,6 +4167,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -3947,6 +4229,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4007,6 +4292,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4014,13 +4302,16 @@ mod tests {
         let ordered: Vec<String> = msgs.iter().map(|(_, t)| t.clone()).collect();
         assert_eq!(
             ordered,
-            vec!["...".to_string(), "💾 stream-bg-review".to_string()]
+            vec![
+                "stream-final".to_string(),
+                "💾 stream-bg-review".to_string()
+            ]
         );
     }
 
     #[tokio::test]
     async fn gateway_native_streaming_sends_full_refresh_chunks() {
-        std::env::set_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS", "1");
+        unsafe { std::env::set_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS", "1") };
 
         let sent = Arc::new(Mutex::new(Vec::new()));
         let chunks = Arc::new(Mutex::new(Vec::new()));
@@ -4055,6 +4346,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4065,7 +4359,7 @@ mod tests {
         );
 
         let chunks = chunks.lock().unwrap().clone();
-        std::env::remove_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS");
+        unsafe { std::env::remove_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS") };
 
         assert!(!chunks.is_empty());
         assert_eq!(chunks.first().map(|c| c.0.as_str()), Some("思考中..."));
@@ -4110,6 +4404,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4194,6 +4491,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4247,6 +4547,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&incoming).await.is_ok());
 
@@ -4291,6 +4594,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&normal).await.is_ok());
 
@@ -4303,6 +4609,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         };
         assert!(gw.route_message(&reset).await.is_ok());
 

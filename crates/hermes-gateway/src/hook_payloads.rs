@@ -208,6 +208,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
         };
         let s = agent_start(&incoming, "sk", true);
         assert_eq!(
@@ -290,6 +293,9 @@ mod tests {
             media_types: vec![],
             message_id: None,
             is_dm: false,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
         };
         let v = command_context(&incoming, "sk", "status", "/status");
         assert_eq!(

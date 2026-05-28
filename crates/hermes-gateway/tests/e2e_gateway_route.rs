@@ -89,6 +89,9 @@ async fn e2e_gateway_routes_message_and_replies() {
             media_types: vec![],
             message_id: None,
             is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+        role_ids: vec![],
         })
         .await
         .expect("route should succeed");
