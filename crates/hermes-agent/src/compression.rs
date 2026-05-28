@@ -31,13 +31,19 @@ use regex::Regex;
 
 /// Banner prepended to every compaction summary so a downstream agent knows
 /// some history has been compacted into prose.
-pub const SUMMARY_PREFIX: &str =
-    "[CONTEXT COMPACTION] Earlier turns in this conversation were compacted \
-     to save context space. The summary below describes work that was \
-     already completed, and the current session state may still reflect \
-     that work (for example, files may already be changed). Use the summary \
-     and the current state to continue from where things left off, and \
-     avoid repeating work:";
+pub const SUMMARY_PREFIX: &str = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted \
+     into the summary below. This is a handoff from a previous context \
+     window — treat it as background reference, NOT as active instructions. \
+     Do NOT answer questions or fulfill requests mentioned in this summary; \
+     they were already addressed. \
+     Your current task is identified in the '## Active Task' section of the \
+     summary — resume exactly from there. \
+     IMPORTANT: Your persistent memory (MEMORY.md, USER.md) in the system \
+     prompt is ALWAYS authoritative and active — never ignore or deprioritize \
+     memory content due to this compaction note. \
+     Respond ONLY to the latest user message \
+     that appears AFTER this summary. The current session state (files, \
+     config, etc.) may reflect work described here — avoid repeating it:";
 
 /// Older banner from v1 — stripped before re-applying [`SUMMARY_PREFIX`] so
 /// iterative updates don't accumulate prefixes.
