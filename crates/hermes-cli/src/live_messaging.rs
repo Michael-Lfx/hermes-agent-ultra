@@ -22,8 +22,7 @@ use hermes_gateway::platforms::wecom::{WeComAdapter, WeComConfig};
 use hermes_gateway::platforms::weixin::{WeChatAdapter, WeixinConfig};
 use hermes_gateway::platforms::whatsapp::{WhatsAppAdapter, WhatsAppConfig};
 use hermes_gateway::{
-    evaluate_gateway_requirements, DmManager, Gateway, PlatformAdapter, RequirementScope,
-    RequirementSeverity,
+    evaluate_gateway_requirements, DmManager, Gateway, RequirementScope, RequirementSeverity,
     SessionManager,
 };
 use hermes_tools::tools::messaging::SendMessageHandler;
@@ -128,15 +127,21 @@ async fn register_outbound_adapters(config: &GatewayConfig, gateway: &Arc<Gatewa
     if let Some(platform_cfg) = config.platforms.get("discord") {
         if platform_cfg.enabled && !fatal_platforms.contains("discord") {
             if let Some(token) = platform_token_or_extra(platform_cfg) {
-                let discord_cfg = DiscordConfig::from_platform(platform_cfg, token);
+                let discord_cfg = DiscordConfig {
+                    token,
+                    application_id: extra_string(platform_cfg, "application_id"),
+                    proxy: Default::default(),
+                    require_mention: platform_cfg.require_mention.unwrap_or(false),
+                    intents: platform_cfg
+                        .extra
+                        .get("intents")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or((1 << 0) | (1 << 9) | (1 << 15)),
+                };
                 match DiscordAdapter::new(discord_cfg) {
                     Ok(adapter) => {
-                        if adapter.start().await.is_ok() {
-                            gateway.register_adapter("discord", Arc::new(adapter)).await;
-                            registered.push("discord".to_string());
-                        } else {
-                            tracing::warn!("discord adapter start failed");
-                        }
+                        gateway.register_adapter("discord", Arc::new(adapter)).await;
+                        registered.push("discord".to_string());
                     }
                     Err(e) => tracing::warn!("discord adapter init failed: {}", e),
                 }

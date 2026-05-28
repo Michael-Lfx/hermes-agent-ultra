@@ -564,9 +564,6 @@ async fn send_message(
         media_types: vec![],
         message_id: None,
         is_dm: false,
-        interaction_id: None,
-        interaction_token: None,
-    role_ids: vec![],
     };
 
     state
@@ -635,9 +632,6 @@ async fn exec_command(
         media_types: vec![],
         message_id: None,
         is_dm: false,
-        interaction_id: None,
-        interaction_token: None,
-    role_ids: vec![],
     };
 
     state

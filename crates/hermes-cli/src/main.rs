@@ -680,6 +680,13 @@ async fn run(cli: Cli) {
             target,
             yes,
         } => hermes_cli::commands::handle_cli_memory(action, target, yes).await,
+        CliCommand::Meeting {
+            action,
+            audio,
+            title,
+            mode,
+            diarize,
+        } => hermes_cli::commands::handle_cli_meeting(action, audio, title, mode, diarize).await,
         CliCommand::Mcp {
             action,
             name,
@@ -813,15 +820,6 @@ async fn run(cli: Cli) {
         CliCommand::Completion { shell } => run_completion(shell),
         CliCommand::Uninstall { yes } => run_uninstall(yes).await,
         CliCommand::Lumio { action, model } => run_lumio(action, model).await,
-        CliCommand::Meeting {
-            action,
-            audio,
-            title,
-            mode,
-            diarize,
-        } => {
-            hermes_cli::commands::handle_cli_meeting(action, audio, title, mode, diarize).await
-        }
         CliCommand::PluginExternal(raw) => {
             hermes_cli::commands::handle_cli_external_plugin_subcommand(raw).await
         }
@@ -3489,12 +3487,8 @@ fn gateway_session_manager_with_persistence(config: &GatewayConfig) -> SessionMa
     if let Err(err) = sp.ensure_db() {
         tracing::debug!("sessions db init skipped for gateway history hydration: {}", err);
     }
-    let group_sessions_per_user = config
-        .platforms
-        .values()
-        .any(|p| p.enabled && p.group_sessions_per_user);
     let sp_rotator = sp.clone();
-    SessionManager::with_group_isolation(config.session.clone(), group_sessions_per_user)
+    SessionManager::new(config.session.clone())
         .with_history_loader(move |session_key| {
             // Python parity: check rotated UUID index first, fallback to session_key.
             let session_id = match sp.get_indexed_session_id(session_key) {
@@ -4480,50 +4474,12 @@ fn build_gateway_platform_access_policies(
         }
 
         let group_mode = parse_group_access_mode(platform_cfg);
-        let mut allowed_roles = HashSet::new();
-        if platform.eq_ignore_ascii_case("discord") {
-            if let Ok(env_roles) = std::env::var("DISCORD_ALLOWED_ROLES") {
-                for role in env_roles.split(',') {
-                    let trimmed = role.trim();
-                    if !trimmed.is_empty() {
-                        allowed_roles.insert(trimmed.to_string());
-                    }
-                }
-            }
-            if let Some(roles_val) = platform_cfg.extra.get("allowed_roles") {
-                if let Some(arr) = roles_val.as_array() {
-                    for role in arr {
-                        if let Some(s) = role.as_str() {
-                            let trimmed = s.trim();
-                            if !trimmed.is_empty() {
-                                allowed_roles.insert(trimmed.to_string());
-                            }
-                        }
-                    }
-                } else if let Some(s) = roles_val.as_str() {
-                    for role in s.split(',') {
-                        let trimmed = role.trim();
-                        if !trimmed.is_empty() {
-                            allowed_roles.insert(trimmed.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        let has_allowlist =
-            !allowed_users.is_empty() || !admin_users.is_empty() || !allowed_roles.is_empty();
+        let has_allowlist = !allowed_users.is_empty() || !admin_users.is_empty();
         let slash_requires_allowlist = extra_bool_loose(platform_cfg, "slash_requires_allowlist")
             .or_else(|| extra_bool_loose(platform_cfg, "require_allowlist_for_slash"))
             .unwrap_or_else(|| platform.eq_ignore_ascii_case("discord") && has_allowlist);
 
         let mut dm_mode = parse_dm_access_mode(platform, platform_cfg);
-        if dm_mode == DmAccessMode::Pairing
-            && platform.eq_ignore_ascii_case("discord")
-            && extra_string(platform_cfg, "dm_policy").is_none()
-            && (!platform_cfg.allowed_users.is_empty() || !platform_cfg.admin_users.is_empty())
-        {
-            dm_mode = DmAccessMode::Allowlist;
-        }
         if dm_mode == DmAccessMode::Allowlist {
             let allow_from = platform_cfg
                 .extra
@@ -4547,7 +4503,6 @@ fn build_gateway_platform_access_policies(
             PlatformAccessPolicy {
                 allowed_users,
                 admin_users,
-                allowed_roles,
                 group_mode,
                 slash_requires_allowlist,
                 dm_mode,
@@ -4602,9 +4557,6 @@ async fn run_api_server_inbound_loop(
             media_types: vec![],
             message_id: Some(req.request_id.clone()),
             is_dm: true,
-            interaction_id: None,
-            interaction_token: None,
-            role_ids: vec![],
         };
         if let Err(err) = gateway.route_message(&incoming).await {
             tracing::warn!("Failed to route api_server message: {}", err);
@@ -4625,9 +4577,6 @@ async fn run_webhook_inbound_loop(gateway: Arc<Gateway>, mut rx: mpsc::Receiver<
             media_types: vec![],
             message_id: None,
             is_dm: true,
-            interaction_id: None,
-            interaction_token: None,
-            role_ids: vec![],
         };
         if let Err(err) = gateway.route_message(&incoming).await {
             tracing::warn!("Failed to route webhook message: {}", err);
@@ -4722,20 +4671,19 @@ async fn register_gateway_adapters(
     if let Some(platform_cfg) = config.platforms.get("discord") {
         if platform_cfg.enabled {
             if let Some(token) = platform_token_or_extra(platform_cfg) {
-                let discord_cfg = DiscordConfig::from_platform(platform_cfg, token);
+                let discord_cfg = DiscordConfig {
+                    token,
+                    application_id: extra_string(platform_cfg, "application_id"),
+                    proxy: Default::default(),
+                    require_mention: platform_cfg.require_mention.unwrap_or(false),
+                    intents: platform_cfg
+                        .extra
+                        .get("intents")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or((1 << 0) | (1 << 9) | (1 << 15)),
+                };
                 match DiscordAdapter::new(discord_cfg) {
-                    Ok(adapter) => {
-                        let adapter = Arc::new(adapter);
-                        let (tx, rx) = mpsc::channel::<GatewayIncomingMessage>(512);
-                        adapter.set_inbound_sender(tx).await;
-                        gateway
-                            .register_adapter("discord", adapter.clone())
-                            .await;
-                        let gw_clone = gateway.clone();
-                        sidecar_tasks.push(tokio::spawn(async move {
-                            run_gateway_incoming_loop(gw_clone, rx, "discord").await;
-                        }));
-                    }
+                    Ok(adapter) => gateway.register_adapter("discord", Arc::new(adapter)).await,
                     Err(e) => println!("Discord enabled but failed to initialize: {}", e),
                 }
             } else {
@@ -5228,9 +5176,6 @@ async fn run_telegram_poll_loop(gateway: Arc<Gateway>, adapter: Arc<TelegramAdap
                         media_types: vec![],
                         message_id: Some(msg.message_id.to_string()),
                         is_dm: msg.chat_id > 0,
-                        interaction_id: None,
-                        interaction_token: None,
-                        role_ids: vec![],
                     };
 
                     if let Err(err) = gateway.route_message(&incoming).await {

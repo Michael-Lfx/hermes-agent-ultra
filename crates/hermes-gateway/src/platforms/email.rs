@@ -508,9 +508,6 @@ fn imap_fetch_unseen(
                 media_types: vec![],
                 message_id: Some(mid.clone()),
                 is_dm: true,
-                interaction_id: None,
-                interaction_token: None,
-                role_ids: vec![],
             });
         }
     }
