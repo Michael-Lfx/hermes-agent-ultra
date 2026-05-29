@@ -282,14 +282,24 @@ impl AgentLoop {
         let sys = leading_system_prompt_for_persist(messages);
         let platform = cfg.platform.as_deref();
         let model = self.active_model();
-        if let Err(err) = sp.persist_session(
+        let mut cursor = self
+            .session_db_flush
+            .lock()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default();
+        let result = sp.persist_session(
             sid,
             &transcript,
+            &mut cursor,
             Some(model.as_str()),
             platform,
             None,
             sys.as_deref(),
-        ) {
+        );
+        if let Ok(mut guard) = self.session_db_flush.lock() {
+            *guard = cursor;
+        }
+        if let Err(err) = result {
             tracing::warn!(session_id = %sid, "persist_session after run_conversation: {}", err);
         }
     }

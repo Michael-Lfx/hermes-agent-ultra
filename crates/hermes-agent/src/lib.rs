@@ -120,7 +120,9 @@ pub use skill_orchestrator::SkillOrchestrator;
 
 // Re-export session persistence
 pub use python_alignment::strip_system_messages_from_history;
-pub use session_persistence::{leading_system_prompt_for_persist, SessionPersistence};
+pub use session_persistence::{
+    leading_system_prompt_for_persist, SessionFlushCursor, SessionPersistence,
+};
 
 // Re-export context files
 pub use code_index::{CodeIndex, CodeIndexConfig, IndexStats, ReferenceHit, SymbolInfo};

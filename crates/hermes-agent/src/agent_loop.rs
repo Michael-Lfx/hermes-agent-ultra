@@ -62,6 +62,7 @@ use crate::python_alignment::{
     sanitize_surrogates, strip_budget_warnings_from_messages, strip_think_blocks_for_ack,
 };
 use crate::skill_orchestrator::SkillOrchestrator;
+use crate::session_persistence::SessionFlushCursor;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
 use crate::smart_model_routing::{
     PrimaryRuntime, ResolveTurnOutcome, ResolvedCheapRuntime, TurnRouteSignature,
@@ -2166,6 +2167,8 @@ pub struct AgentLoop {
     pending_steer: PendingSteer,
     /// Active turn task id (Python `_current_task_id`).
     pub(crate) current_task_id: Arc<Mutex<Option<String>>>,
+    /// Python `AIAgent._last_flushed_db_idx` — incremental SQLite session writes.
+    pub(crate) session_db_flush: Arc<Mutex<SessionFlushCursor>>,
     /// Python `agent.context_compressor.ContextCompressor` (LLM summary + boundary alignment).
     context_compressor: Arc<tokio::sync::Mutex<ContextCompressor>>,
 }
@@ -2598,7 +2601,15 @@ impl AgentLoop {
             async_tool_dispatch: None,
             pending_steer: PendingSteer::new(),
             current_task_id: Arc::new(Mutex::new(None)),
+            session_db_flush: Arc::new(Mutex::new(SessionFlushCursor::new())),
             context_compressor,
+        }
+    }
+
+    /// Reset incremental session DB flush cursor (e.g. after `/new` or compression rotation).
+    pub fn reset_session_db_flush_cursor(&self) {
+        if let Ok(mut guard) = self.session_db_flush.lock() {
+            guard.reset();
         }
     }
 
@@ -2661,6 +2672,7 @@ impl AgentLoop {
             async_tool_dispatch: None,
             pending_steer: PendingSteer::new(),
             current_task_id: Arc::new(Mutex::new(None)),
+            session_db_flush: Arc::new(Mutex::new(SessionFlushCursor::new())),
             context_compressor,
         }
     }

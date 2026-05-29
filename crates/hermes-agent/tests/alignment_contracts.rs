@@ -1,7 +1,8 @@
 //! Phase A — contract scenarios (see `python_alignment` module docs in `hermes-agent`).
 
 use hermes_agent::{
-    leading_system_prompt_for_persist, python_alignment, AgentConfig, AgentLoop, SessionPersistence,
+    leading_system_prompt_for_persist, python_alignment, AgentConfig, AgentLoop, SessionFlushCursor,
+    SessionPersistence,
 };
 use hermes_core::{AgentResult, Message};
 
@@ -10,9 +11,11 @@ fn hydrate_stored_system_prompt_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let sp = SessionPersistence::new(tmp.path());
     let messages = vec![Message::user("hi")];
+    let mut cursor = SessionFlushCursor::new();
     sp.persist_session(
         "sid-1",
         &messages,
+        &mut cursor,
         Some("gpt-4o"),
         None,
         None,

@@ -38,6 +38,24 @@ pub fn leading_system_prompt_for_persist(messages: &[Message]) -> Option<String>
     }
 }
 
+/// Tracks how many transcript messages were already written for a session.
+///
+/// Python parity: `AIAgent._last_flushed_db_idx` in `run_agent.py`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionFlushCursor {
+    pub last_flushed_db_idx: usize,
+}
+
+impl SessionFlushCursor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn reset(&mut self) {
+        self.last_flushed_db_idx = 0;
+    }
+}
+
 /// Manages session persistence to SQLite and markdown log files.
 pub struct SessionPersistence {
     /// Path to the SQLite database file.
@@ -367,11 +385,39 @@ impl SessionPersistence {
         result
     }
 
-    /// Persist a session's messages to SQLite.
+    /// Persist a session's messages to SQLite (incremental append only).
+    ///
+    /// Uses `cursor.last_flushed_db_idx` so repeated calls from multiple exit
+    /// paths only append new rows (Python `_flush_messages_to_session_db` / #860).
     pub fn persist_session(
         &self,
         session_id: &str,
         messages: &[Message],
+        cursor: &mut SessionFlushCursor,
+        model: Option<&str>,
+        platform: Option<&str>,
+        title: Option<&str>,
+        system_prompt: Option<&str>,
+    ) -> Result<(), AgentError> {
+        self.persist_session_with_history_len(
+            session_id,
+            messages,
+            cursor,
+            None,
+            model,
+            platform,
+            title,
+            system_prompt,
+        )
+    }
+
+    /// Like [`Self::persist_session`] but honors gateway `conversation_history` length.
+    pub fn persist_session_with_history_len(
+        &self,
+        session_id: &str,
+        messages: &[Message],
+        cursor: &mut SessionFlushCursor,
+        conversation_history_len: Option<usize>,
         model: Option<&str>,
         platform: Option<&str>,
         title: Option<&str>,
@@ -408,7 +454,12 @@ impl SessionPersistence {
         )
         .map_err(|e| AgentError::Io(format!("Failed to upsert session: {e}")))?;
 
-        self.flush_messages_in_transaction(&tx, session_id, messages)?;
+        let history_start = conversation_history_len.unwrap_or(0);
+        let flush_from = history_start.max(cursor.last_flushed_db_idx);
+        if flush_from < messages.len() {
+            self.append_messages_in_transaction(&tx, session_id, &messages[flush_from..])?;
+        }
+        cursor.last_flushed_db_idx = messages.len();
 
         tx.commit()
             .map_err(|e| AgentError::Io(format!("Failed to commit persist transaction: {e}")))?;
@@ -416,21 +467,41 @@ impl SessionPersistence {
         Ok(())
     }
 
-    /// Batch replace messages for a session inside an open transaction.
-    fn flush_messages_in_transaction(
+    /// Replace all messages for a session (post-compression rotation / explicit reset).
+    pub fn replace_session_messages(
         &self,
-        tx: &rusqlite::Transaction<'_>,
         session_id: &str,
         messages: &[Message],
+        cursor: &mut SessionFlushCursor,
     ) -> Result<(), AgentError> {
+        self.ensure_db()?;
+        let conn = rusqlite::Connection::open(&self.db_path)
+            .map_err(|e| AgentError::Io(format!("Failed to open sessions db: {e}")))?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AgentError::Io(format!("Failed to open replace transaction: {e}")))?;
         tx.execute(
             "DELETE FROM messages WHERE session_id = ?1",
             rusqlite::params![session_id],
         )
         .map_err(|e| AgentError::Io(format!("Failed to clear old messages: {e}")))?;
+        self.append_messages_in_transaction(&tx, session_id, messages)?;
+        cursor.last_flushed_db_idx = messages.len();
+        tx.commit()
+            .map_err(|e| AgentError::Io(format!("Failed to commit replace transaction: {e}")))?;
+        Ok(())
+    }
 
+    fn append_messages_in_transaction(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        session_id: &str,
+        messages: &[Message],
+    ) -> Result<(), AgentError> {
+        if messages.is_empty() {
+            return Ok(());
+        }
         let now = Utc::now().to_rfc3339();
-
         let mut stmt = tx
             .prepare(
                 "INSERT INTO messages (session_id, role, content, tool_call_id, tool_calls, reasoning_content, created_at)
@@ -667,6 +738,16 @@ mod tests {
         .expect("update updated_at");
     }
 
+    fn persist(
+        sp: &SessionPersistence,
+        session_id: &str,
+        messages: &[Message],
+        cursor: &mut SessionFlushCursor,
+    ) {
+        sp.persist_session(session_id, messages, cursor, None, None, None, None)
+            .expect("persist_session");
+    }
+
     #[test]
     fn test_persist_and_load_session() {
         let tmp = tempfile::tempdir().unwrap();
@@ -680,9 +761,11 @@ mod tests {
             assistant,
         ];
 
+        let mut cursor = SessionFlushCursor::new();
         sp.persist_session(
             "test-session-1",
             &messages,
+            &mut cursor,
             Some("gpt-4o"),
             None,
             Some("Test"),
@@ -737,7 +820,8 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
         let mut assistant = Message::assistant("legacy");
         assistant.reasoning_content = Some("legacy-think".to_string());
-        sp.persist_session("legacy-migrate", &[assistant], None, None, None, None)
+        let mut cursor = SessionFlushCursor::new();
+        sp.persist_session("legacy-migrate", &[assistant], &mut cursor, None, None, None, None)
             .unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -808,35 +892,54 @@ mod tests {
     }
 
     #[test]
-    fn test_persist_replaces_messages() {
+    fn test_persist_incremental_append_only_new_messages() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
+        let mut cursor = SessionFlushCursor::new();
 
         let messages1 = vec![Message::user("First")];
-        sp.persist_session("replace-test", &messages1, None, None, None, None)
-            .unwrap();
+        persist(&sp, "replace-test", &messages1, &mut cursor);
 
         let messages2 = vec![
             Message::user("First"),
             Message::assistant("Response"),
             Message::user("Second"),
         ];
-        sp.persist_session("replace-test", &messages2, None, None, None, None)
-            .unwrap();
+        persist(&sp, "replace-test", &messages2, &mut cursor);
 
         let loaded = sp.load_session("replace-test").unwrap();
         assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].content.as_deref(), Some("First"));
+        assert_eq!(loaded[1].content.as_deref(), Some("Response"));
+        assert_eq!(loaded[2].content.as_deref(), Some("Second"));
     }
 
     #[test]
-    fn test_fts_stays_in_sync_after_persist_replace() {
+    fn test_replace_session_messages_clears_and_rewrites() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
+        let mut cursor = SessionFlushCursor::new();
+        persist(&sp, "replace-test", &[Message::user("alpha")], &mut cursor);
+        sp.replace_session_messages("replace-test", &[Message::user("beta")], &mut cursor)
+            .unwrap();
+        let loaded = sp.load_session("replace-test").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].content.as_deref(), Some("beta"));
+    }
 
-        sp.persist_session("fts-sync", &[Message::user("alpha")], None, None, None, None)
-            .unwrap();
-        sp.persist_session("fts-sync", &[Message::user("beta")], None, None, None, None)
-            .unwrap();
+    #[test]
+    fn test_fts_stays_in_sync_after_incremental_persist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sp = SessionPersistence::new(tmp.path());
+        let mut cursor = SessionFlushCursor::new();
+
+        persist(&sp, "fts-sync", &[Message::user("alpha")], &mut cursor);
+        persist(
+            &sp,
+            "fts-sync",
+            &[Message::user("alpha"), Message::user("beta")],
+            &mut cursor,
+        );
 
         let conn = rusqlite::Connection::open(&sp.db_path).unwrap();
         let fts_count: i64 = conn
@@ -846,7 +949,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(fts_count, 1);
+        assert_eq!(fts_count, 2);
 
         let beta_hits: i64 = conn
             .query_row(
@@ -864,7 +967,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(alpha_hits, 0);
+        assert_eq!(alpha_hits, 1);
     }
 
     #[test]
@@ -885,11 +988,11 @@ mod tests {
         let old_messages = vec![Message::user("old"), Message::assistant("done")];
         let new_messages = vec![Message::user("fresh"), Message::assistant("ok")];
 
-        sp.persist_session("old-1", &old_messages, None, None, None, None)
+        sp.persist_session("old-1", &old_messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
-        sp.persist_session("old-2", &old_messages, None, None, None, None)
+        sp.persist_session("old-2", &old_messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
-        sp.persist_session("fresh-1", &new_messages, None, None, None, None)
+        sp.persist_session("fresh-1", &new_messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
         mark_session_old(&sp, "old-1", 100);
         mark_session_old(&sp, "old-2", 100);
@@ -913,14 +1016,14 @@ mod tests {
         let sp = SessionPersistence::new(tmp.path());
         let messages = vec![Message::user("old"), Message::assistant("done")];
 
-        sp.persist_session("old-1", &messages, None, None, None, None)
+        sp.persist_session("old-1", &messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
         mark_session_old(&sp, "old-1", 100);
         let first = sp.maybe_auto_prune_and_vacuum(90, 24, false);
         assert!(!first.skipped);
         assert_eq!(first.pruned, 1);
 
-        sp.persist_session("old-2", &messages, None, None, None, None)
+        sp.persist_session("old-2", &messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
         mark_session_old(&sp, "old-2", 100);
         let second = sp.maybe_auto_prune_and_vacuum(90, 24, false);
@@ -941,7 +1044,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
         let messages = vec![Message::user("fresh"), Message::assistant("ok")];
-        sp.persist_session("fresh-1", &messages, None, None, None, None)
+        sp.persist_session("fresh-1", &messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
 
         let result = sp.maybe_auto_prune_and_vacuum(90, 24, true);
@@ -956,7 +1059,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
         let messages = vec![Message::user("old"), Message::assistant("done")];
-        sp.persist_session("old-1", &messages, None, None, None, None)
+        sp.persist_session("old-1", &messages, &mut SessionFlushCursor::new(), None, None, None, None)
             .unwrap();
         mark_session_old(&sp, "old-1", 100);
         sp.set_meta("last_auto_prune", "not-a-timestamp").unwrap();
