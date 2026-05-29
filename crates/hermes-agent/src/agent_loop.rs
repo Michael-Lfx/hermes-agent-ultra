@@ -8918,6 +8918,8 @@ impl AgentLoop {
         let current_delegate_depth = self.delegate_depth;
         let orchestrator = self.sub_agent_orchestrator.clone();
         let async_tool_dispatch = self.async_tool_dispatch.clone();
+        let mut dedupe_search_seen: HashMap<String, String> = HashMap::new();
+        let mut dedupe_search_dups: Vec<(String, String)> = Vec::new();
 
         // Run orchestrated `delegate_task` calls sequentially in the caller's
         // task - this keeps the inner AgentLoop future out of the Send-bound
@@ -8995,6 +8997,22 @@ impl AgentLoop {
             // Skip `delegate_task` when an orchestrator already handled it.
             if orchestrator.is_some() && tc.function.name == "delegate_task" {
                 continue;
+            }
+            if tc.function.name == "search_files" {
+                if let Some(original_id) = dedupe_search_seen
+                    .get(&tc.function.arguments)
+                    .cloned()
+                {
+                    dedupe_search_dups.push((tc.id.clone(), original_id.clone()));
+                    tracing::debug!(
+                        tool = "search_files",
+                        duplicate_tool_call_id = %tc.id,
+                        original_tool_call_id = %original_id,
+                        "agent tool call deduplicated"
+                    );
+                    continue;
+                }
+                dedupe_search_seen.insert(tc.function.arguments.clone(), tc.id.clone());
             }
             if let Some(ref mut mgr) = checkpoint_mgr {
                 if let Ok(args) = serde_json::from_str::<Value>(&tc.function.arguments) {
@@ -9245,6 +9263,21 @@ impl AgentLoop {
                 }
                 Err(e) => {
                     tracing::error!("Task join error: {}", e);
+                }
+            }
+        }
+        if !dedupe_search_dups.is_empty() {
+            let mut by_id: HashMap<String, ToolResult> = HashMap::new();
+            for result in &results {
+                by_id.insert(result.tool_call_id.clone(), result.clone());
+            }
+            for (dup_id, original_id) in dedupe_search_dups {
+                if let Some(original) = by_id.get(&original_id) {
+                    results.push(ToolResult {
+                        tool_call_id: dup_id,
+                        content: original.content.clone(),
+                        is_error: original.is_error,
+                    });
                 }
             }
         }
