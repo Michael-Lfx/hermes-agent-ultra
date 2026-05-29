@@ -1,6 +1,8 @@
 //! Wire auxiliary vision + inbound preparer + voice/STT into gateway and tool registry.
 
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use std::time::{Duration, Instant};
 
 use hermes_agent::{
     build_auxiliary_client, register_agent_builtin_tools_with_voice, AgentInboundPreparer,
@@ -180,14 +182,41 @@ pub fn make_gateway_on_thinking_callback(
     _chat_id: String,
     _stream_emit: Option<Arc<dyn Fn(String) + Send + Sync>>,
 ) -> Box<dyn Fn(&str) + Send + Sync> {
+    struct ThinkingLogState {
+        started_at: Instant,
+        last_flush: Instant,
+        delta_count: u64,
+        total_chars: usize,
+    }
+    let state = Arc::new(StdMutex::new(ThinkingLogState {
+        started_at: Instant::now(),
+        last_flush: Instant::now(),
+        delta_count: 0,
+        total_chars: 0,
+    }));
     Box::new(move |thinking: &str| {
         if thinking.trim().is_empty() {
             return;
         }
-        tracing::debug!(
-            thinking_chars = thinking.chars().count(),
-            "gateway thinking delta (not sent to chat)"
-        );
+        let mut guard = match state.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        guard.delta_count = guard.delta_count.saturating_add(1);
+        guard.total_chars = guard.total_chars.saturating_add(thinking.chars().count());
+        let now = Instant::now();
+        if now.duration_since(guard.last_flush) >= Duration::from_millis(1000) || guard.delta_count >= 32 {
+            tracing::debug!(
+                thinking_delta_count = guard.delta_count,
+                thinking_total_chars = guard.total_chars,
+                thinking_window_ms = now.duration_since(guard.last_flush).as_millis() as u64,
+                thinking_elapsed_ms = now.duration_since(guard.started_at).as_millis() as u64,
+                "gateway thinking deltas aggregated (not sent to chat)"
+            );
+            guard.delta_count = 0;
+            guard.total_chars = 0;
+            guard.last_flush = now;
+        }
     })
 }
 
