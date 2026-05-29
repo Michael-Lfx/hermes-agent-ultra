@@ -2310,6 +2310,7 @@ dependencies = [
  "futures",
  "hermes-config",
  "hermes-core",
+ "hermes-skills",
  "hermes-tools",
  "hmac 0.13.0",
  "matrix-sdk-crypto",

@@ -252,12 +252,22 @@ pub fn raw_to_incoming(
     }
 }
 
+pub fn format_slash_command_text(command_name: &str, options: &[InteractionOption]) -> String {
+    super::slash::format_slash_command_text(command_name, options)
+}
+
 pub fn interaction_to_incoming(interaction: &InteractionData) -> Option<IncomingMessage> {
     if interaction.interaction_type != INTERACTION_TYPE_APPLICATION_COMMAND {
         return None;
     }
     let command_name = interaction.command_name.as_ref()?;
     let channel_id = interaction.channel_id.as_ref()?;
+    let text = format_slash_command_text(command_name, &interaction.command_options);
+    let text = if command_name == "skill" {
+        skill_interaction_text(&interaction.command_options).unwrap_or(text)
+    } else {
+        text
+    };
     Some(IncomingMessage {
         platform: "discord".into(),
         chat_id: channel_id.clone(),
@@ -265,7 +275,7 @@ pub fn interaction_to_incoming(interaction: &InteractionData) -> Option<Incoming
             .user_id
             .clone()
             .unwrap_or_else(|| "unknown".into()),
-        text: format!("/{command_name}"),
+        text,
         media_urls: vec![],
         media_types: vec![],
         message_id: None,
@@ -316,8 +326,34 @@ pub fn parse_message_update(data: &serde_json::Value) -> Option<MessageUpdateEve
     })
 }
 
+fn skill_interaction_text(options: &[InteractionOption]) -> Option<String> {
+    let name = options
+        .iter()
+        .find(|o| o.name == "name")
+        .and_then(|o| o.value.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(format!("/{name}"))
+}
+
 /// Discord application command interaction (`type` = 2).
 pub const INTERACTION_TYPE_APPLICATION_COMMAND: u8 = 2;
+
+/// Discord autocomplete interaction (`type` = 4).
+pub const INTERACTION_TYPE_AUTOCOMPLETE: u8 = 4;
+
+#[derive(Debug, Clone)]
+pub struct AutocompleteInteraction {
+    pub id: String,
+    pub token: String,
+    pub command_name: String,
+    pub focused_option: String,
+    pub focused_value: String,
+    pub user_id: Option<String>,
+    pub role_ids: Vec<String>,
+    pub guild_id: Option<String>,
+    pub is_dm: bool,
+}
 
 pub fn parse_interaction_create(data: &serde_json::Value) -> Option<InteractionData> {
     let id = json_snowflake(data.get("id")?)?;
@@ -371,6 +407,61 @@ pub fn parse_interaction_create(data: &serde_json::Value) -> Option<InteractionD
         command_name,
         command_options,
         role_ids: interaction_roles,
+    })
+}
+
+pub fn parse_autocomplete_interaction(data: &serde_json::Value) -> Option<AutocompleteInteraction> {
+    let interaction_type = data.get("type")?.as_u64()? as u8;
+    if interaction_type != INTERACTION_TYPE_AUTOCOMPLETE {
+        return None;
+    }
+    let id = json_snowflake(data.get("id")?)?;
+    let token = data.get("token")?.as_str()?.to_string();
+    let guild_id = data.get("guild_id").and_then(json_snowflake);
+    let user_id = data
+        .get("member")
+        .and_then(|m| m.get("user"))
+        .and_then(|u| u.get("id"))
+        .and_then(json_snowflake)
+        .or_else(|| data.get("user").and_then(|u| u.get("id")).and_then(json_snowflake));
+    let role_ids = data
+        .get("member")
+        .and_then(|m| m.get("roles"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(json_snowflake)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let cmd_data = data.get("data")?;
+    let command_name = cmd_data.get("name")?.as_str()?.to_string();
+    let mut focused_option = String::new();
+    let mut focused_value = String::new();
+    if let Some(options) = cmd_data.get("options").and_then(|v| v.as_array()) {
+        for opt in options {
+            if opt.get("focused") == Some(&serde_json::Value::Bool(true)) {
+                focused_option = opt.get("name")?.as_str()?.to_string();
+                focused_value = opt
+                    .get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                break;
+            }
+        }
+    }
+    let is_dm = guild_id.is_none();
+    Some(AutocompleteInteraction {
+        id,
+        token,
+        command_name,
+        focused_option,
+        focused_value,
+        user_id,
+        role_ids,
+        guild_id,
+        is_dm,
     })
 }
 

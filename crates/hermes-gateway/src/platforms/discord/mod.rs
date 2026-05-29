@@ -3,6 +3,7 @@
 mod allowed_mentions;
 mod auth;
 mod channel_context;
+pub mod command_sync;
 mod config;
 mod dedup;
 mod filter;
@@ -11,6 +12,7 @@ mod media;
 mod parse;
 mod rest;
 mod session;
+pub mod slash;
 mod text_batch;
 mod threads;
 mod types;
@@ -36,13 +38,14 @@ pub use allowed_mentions::{parse_bool_like, DiscordAllowedMentions};
 pub use dedup::MessageDedup;
 pub use filter::{should_accept_message, DiscordInboundConfig};
 pub use parse::{
-    interaction_to_incoming, parse_attachments, parse_dispatch, parse_interaction_create,
-    parse_message_create, parse_message_create_raw, parse_message_update, parse_reaction_event,
-    parse_voice_state_update, raw_to_incoming, DispatchEvent, DiscordAttachment,
-    IncomingDiscordMessage, InteractionData, InteractionOption, MessageUpdateEvent,
-    RawDiscordMessage, ReactionEvent, VoiceState, INTERACTION_TYPE_APPLICATION_COMMAND,
+    format_slash_command_text, interaction_to_incoming, parse_attachments, parse_autocomplete_interaction,
+    parse_dispatch, parse_interaction_create, parse_message_create, parse_message_create_raw,
+    parse_message_update, parse_reaction_event, parse_voice_state_update, raw_to_incoming,
+    AutocompleteInteraction, DispatchEvent, DiscordAttachment, IncomingDiscordMessage,
+    InteractionData, InteractionOption, MessageUpdateEvent, RawDiscordMessage, ReactionEvent,
+    VoiceState, INTERACTION_TYPE_APPLICATION_COMMAND, INTERACTION_TYPE_AUTOCOMPLETE,
 };
-pub use rest::{encode_emoji, split_message};
+pub use rest::{encode_emoji, is_forum_channel_type, outbound_upload_name, split_message};
 pub use types::basic_slash_commands;
 pub use gateway_loop::DiscordInner;
 pub use session::{
@@ -316,14 +319,22 @@ impl PlatformAdapter for DiscordAdapter {
             )
         {
             let inner = self.inner.clone();
+            let policy = self.inner.config.command_sync_policy;
             tokio::spawn(async move {
-                let commands = types::extended_slash_commands();
+                let commands = slash::build_desired_slash_commands().await;
                 let result = if let Some(guild_id) = inner.config.slash_guild_id.as_deref() {
                     inner
                         .register_guild_slash_commands(guild_id, &commands)
                         .await
                 } else {
-                    inner.register_slash_commands(&commands).await
+                    match policy {
+                        config::CommandSyncPolicy::Safe => {
+                            inner.safe_sync_slash_commands(&commands).await.map(|_| ())
+                        }
+                        config::CommandSyncPolicy::Bulk | config::CommandSyncPolicy::Off => {
+                            inner.register_slash_commands(&commands).await
+                        }
+                    }
                 };
                 if let Err(err) = result {
                     warn!("Discord slash command registration failed: {err}");

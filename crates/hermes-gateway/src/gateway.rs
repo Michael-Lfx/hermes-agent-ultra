@@ -2077,40 +2077,54 @@ impl Gateway {
                 }
             };
             if !final_text.trim().is_empty() {
+                let trimmed = final_text.trim();
+                #[cfg(feature = "discord")]
+                let chunks = if incoming.platform == "discord" {
+                    crate::platforms::discord::split_message(
+                        trimmed,
+                        crate::platforms::discord::MAX_MESSAGE_LENGTH,
+                    )
+                } else {
+                    vec![trimmed.to_string()]
+                };
+                #[cfg(not(feature = "discord"))]
+                let chunks = vec![trimmed.to_string()];
+
                 if let Some(message_id) = anchor_message_id {
                     if let Some(adapter) = self.get_adapter(&incoming.platform).await {
-                        if let Err(err) = adapter
-                            .edit_message(
-                                &incoming.chat_id,
-                                &message_id,
-                                final_text.trim(),
-                            )
-                            .await
-                        {
-                            warn!(
-                                platform = %incoming.platform,
-                                chat_id = %incoming.chat_id,
-                                message_id = %message_id,
-                                error = %err,
-                                "streaming final edit failed; sending full reply"
-                            );
-                            self.send_message(
-                                &incoming.platform,
-                                &incoming.chat_id,
-                                final_text.trim(),
-                                None,
-                            )
-                            .await?;
+                        if let Some(first) = chunks.first() {
+                            if let Err(err) = adapter
+                                .edit_message(&incoming.chat_id, &message_id, first)
+                                .await
+                            {
+                                warn!(
+                                    platform = %incoming.platform,
+                                    chat_id = %incoming.chat_id,
+                                    message_id = %message_id,
+                                    error = %err,
+                                    "streaming final edit failed; sending full reply"
+                                );
+                                adapter
+                                    .send_message(&incoming.chat_id, first, None)
+                                    .await?;
+                            }
+                        }
+                        for chunk in chunks.iter().skip(1) {
+                            adapter
+                                .send_message(&incoming.chat_id, chunk, None)
+                                .await?;
                         }
                     }
                 } else {
-                    self.send_message(
-                        &incoming.platform,
-                        &incoming.chat_id,
-                        final_text.trim(),
-                        None,
-                    )
-                    .await?;
+                    for chunk in &chunks {
+                        self.send_message(
+                            &incoming.platform,
+                            &incoming.chat_id,
+                            chunk,
+                            None,
+                        )
+                        .await?;
+                    }
                 }
             }
         }

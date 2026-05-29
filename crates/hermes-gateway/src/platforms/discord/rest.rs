@@ -38,6 +38,46 @@ pub fn split_message(text: &str, max_len: usize) -> Vec<String> {
     chunks
 }
 
+pub fn is_forum_channel_type(channel_type: Option<u8>) -> bool {
+    channel_type == Some(15)
+}
+
+pub fn outbound_upload_name(path: &str) -> (String, Option<&'static str>) {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".gif") {
+        return ("animation.gif".to_string(), Some("image/gif"));
+    }
+    if lower.ends_with(".mp4") || lower.ends_with(".mov") || lower.ends_with(".webm") {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("video.mp4")
+            .to_string();
+        return (name, Some("video/mp4"));
+    }
+    if lower.ends_with(".ogg")
+        || lower.ends_with(".opus")
+        || lower.ends_with(".mp3")
+        || lower.ends_with(".wav")
+        || lower.ends_with(".m4a")
+    {
+        let name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("voice.ogg")
+            .to_string();
+        return (name, Some("audio/ogg"));
+    }
+    (
+        std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string(),
+        None,
+    )
+}
+
 pub fn encode_emoji(emoji: &str) -> String {
     let mut out = String::new();
     for byte in emoji.as_bytes() {
@@ -113,12 +153,24 @@ impl DiscordInner {
         let mode = self.config.reply_to_mode;
         let mut message_ids = Vec::new();
         let split_delay = Duration::from_secs_f64(self.config.text_batch_split_delay_seconds);
+        let mut target_channel = channel_id.to_string();
+        let mut skip_first_post = false;
+        if let Some(channel_type) = self.fetch_channel_type(channel_id).await? {
+            if is_forum_channel_type(Some(channel_type)) {
+                let (thread_id, posted) = self.forum_thread_target(channel_id, &chunks[0]).await?;
+                target_channel = thread_id;
+                skip_first_post = posted;
+            }
+        }
         for (index, chunk) in chunks.iter().enumerate() {
+            if index == 0 && skip_first_post {
+                continue;
+            }
             if index > 0 && split_delay > Duration::ZERO {
                 tokio::time::sleep(split_delay).await;
             }
             let ref_id = mode.reference_for_index(index, reply_to_message_id);
-            let id = self.post_message(channel_id, chunk, ref_id).await?;
+            let id = self.post_message(&target_channel, chunk, ref_id).await?;
             message_ids.push(id);
         }
         Ok(message_ids)
@@ -184,6 +236,81 @@ impl DiscordInner {
         Ok(msg.id)
     }
 
+    pub async fn fetch_channel_type(&self, channel_id: &str) -> Result<Option<u8>, GatewayError> {
+        let url = format!("{}/channels/{channel_id}", self.rest_api());
+        let resp = self
+            .client
+            .get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| GatewayError::ConnectionFailed(format!("Discord GET channel: {e}")))?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let body: serde_json::Value = resp.json().await.map_err(|e| {
+            GatewayError::ConnectionFailed(format!("Discord GET channel json: {e}"))
+        })?;
+        Ok(body.get("type").and_then(|v| v.as_u64()).map(|v| v as u8))
+    }
+
+
+    pub async fn create_forum_thread(
+        &self,
+        forum_channel_id: &str,
+        name: &str,
+        message_content: &str,
+    ) -> Result<String, GatewayError> {
+        let url = format!("{}/channels/{forum_channel_id}/threads", self.rest_api());
+        let body = serde_json::json!({
+            "name": name,
+            "message": {
+                "content": message_content,
+                "allowed_mentions": self.config.allowed_mentions.to_api_value(),
+            },
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", self.auth_header())
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GatewayError::SendFailed(format!("Discord forum thread failed: {e}")))?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(GatewayError::SendFailed(format!(
+                "Discord forum thread API error: {text}"
+            )));
+        }
+        let thread: serde_json::Value = resp.json().await.map_err(|e| {
+            GatewayError::SendFailed(format!("Discord forum thread parse error: {e}"))
+        })?;
+        thread
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| GatewayError::SendFailed("forum thread missing id".into()))
+    }
+
+    async fn forum_thread_target(
+        &self,
+        forum_channel_id: &str,
+        first_chunk: &str,
+    ) -> Result<(String, bool), GatewayError> {
+        let name: String = first_chunk.chars().take(100).collect();
+        let name = if name.trim().is_empty() {
+            "Hermes post".to_string()
+        } else {
+            name
+        };
+        let thread_id = self
+            .create_forum_thread(forum_channel_id, &name, first_chunk)
+            .await?;
+        Ok((thread_id, true))
+    }
+
     pub async fn upload_file(
         &self,
         channel_id: &str,
@@ -194,12 +321,13 @@ impl DiscordInner {
         let file_bytes = tokio::fs::read(file_path).await.map_err(|e| {
             GatewayError::SendFailed(format!("Failed to read file {file_path}: {e}"))
         })?;
-        let file_name = std::path::Path::new(file_path)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("file")
-            .to_string();
-        let part = reqwest::multipart::Part::bytes(file_bytes).file_name(file_name);
+        let (file_name, mime) = outbound_upload_name(file_path);
+        let mut part = reqwest::multipart::Part::bytes(file_bytes).file_name(file_name);
+        if let Some(mime) = mime {
+            part = part.mime_str(mime).map_err(|e| {
+                GatewayError::SendFailed(format!("invalid mime for upload: {e}"))
+            })?;
+        }
         let mut form = reqwest::multipart::Form::new().part("files[0]", part);
         if let Some(cap) = caption {
             let payload = serde_json::json!({ "content": cap });
@@ -531,6 +659,49 @@ impl DiscordInner {
         Ok(())
     }
 
+    pub async fn respond_autocomplete(
+        &self,
+        interaction_id: &str,
+        interaction_token: &str,
+        choices: &[super::types::SlashCommandChoice],
+    ) -> Result<(), GatewayError> {
+        let url = format!(
+            "{}/interactions/{interaction_id}/{interaction_token}/callback",
+            self.rest_api()
+        );
+        let choices_json: Vec<serde_json::Value> = choices
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "name": c.name,
+                    "value": c.value,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "type": 8,
+            "data": { "choices": choices_json },
+        });
+        let resp = self
+            .client
+            .post(&url)
+            .header("Authorization", self.auth_header())
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
+                GatewayError::SendFailed(format!("Discord autocomplete callback failed: {e}"))
+            })?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(GatewayError::SendFailed(format!(
+                "Discord autocomplete API error: {text}"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn defer_interaction(
         &self,
         interaction_id: &str,
@@ -648,6 +819,16 @@ impl DiscordInner {
         if image_urls.is_empty() {
             return Ok(ids);
         }
+        let caption_text = caption.unwrap_or("");
+        let mut target_channel = channel_id.to_string();
+        let mut skip_first_embed = false;
+        if let Some(channel_type) = self.fetch_channel_type(channel_id).await? {
+            if is_forum_channel_type(Some(channel_type)) {
+                let (thread_id, posted) = self.forum_thread_target(channel_id, caption_text).await?;
+                target_channel = thread_id;
+                skip_first_embed = posted && !caption_text.trim().is_empty();
+            }
+        }
         let embeds: Vec<DiscordEmbed> = image_urls
             .iter()
             .map(|url| {
@@ -658,12 +839,15 @@ impl DiscordInner {
                 e
             })
             .collect();
-        let first_id = self
-            .send_embed(channel_id, caption, std::slice::from_ref(&embeds[0]))
-            .await?;
-        ids.push(first_id);
-        for embed in embeds.into_iter().skip(1) {
-            let id = self.send_embed(channel_id, None, &[embed]).await?;
+        if !skip_first_embed {
+            let first_id = self
+                .send_embed(&target_channel, caption, std::slice::from_ref(&embeds[0]))
+                .await?;
+            ids.push(first_id);
+        }
+        let start = if skip_first_embed { 0 } else { 1 };
+        for embed in embeds.into_iter().skip(start) {
+            let id = self.send_embed(&target_channel, None, &[embed]).await?;
             ids.push(id);
         }
         Ok(ids)

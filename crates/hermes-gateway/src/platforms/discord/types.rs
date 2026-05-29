@@ -57,17 +57,26 @@ pub fn basic_slash_commands() -> Vec<SlashCommand> {
 /// Extended slash set for P2-12 (registers alongside MVP commands).
 pub fn extended_slash_commands() -> Vec<SlashCommand> {
     let mut commands = basic_slash_commands();
-    for (name, description) in [
-        ("model", "Switch or show the active model"),
-        ("personality", "Switch agent personality"),
-        ("steer", "Steer the current conversation"),
-        ("compress", "Compress conversation context"),
-        ("retry", "Retry the last agent response"),
+    let string_opt = |name: &str, desc: &str, required: bool| SlashCommandOption {
+        name: name.into(),
+        description: desc.into(),
+        option_type: 3,
+        required: Some(required),
+        choices: None,
+        autocomplete: None,
+    };
+    for (name, description, has_args) in [
+        ("model", "Switch or show the active model", true),
+        ("personality", "Switch agent personality", true),
+        ("steer", "Steer the current conversation", true),
+        ("compress", "Compress conversation context", false),
+        ("retry", "Retry the last agent response", false),
     ] {
+        let options = has_args.then(|| vec![string_opt("args", "Optional arguments", false)]);
         commands.push(SlashCommand {
             name: name.into(),
             description: description.into(),
-            options: None,
+            options,
             command_type: 1,
         });
     }
@@ -84,6 +93,8 @@ pub struct SlashCommandOption {
     pub required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<SlashCommandChoice>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -19,9 +19,11 @@ use super::dedup::MessageDedup;
 use super::filter::{DiscordInboundConfig, should_accept_message};
 use super::media::cache_message_attachments;
 use super::parse::{
-    interaction_to_incoming, parse_interaction_create, parse_message_create_raw, raw_to_incoming,
-    ready_bot_user_id,
+    interaction_to_incoming, parse_autocomplete_interaction, parse_interaction_create,
+    parse_message_create_raw, raw_to_incoming, ready_bot_user_id, AutocompleteInteraction,
+
 };
+use super::slash::{model_autocomplete_choices, skill_autocomplete_choices};
 use super::threads::{auto_thread_name, should_auto_thread, ThreadParticipationTracker};
 use super::session::{
     GatewayAction, GatewayPayload, GatewaySession, IdentifyData, IdentifyProperties, ResumeData,
@@ -151,6 +153,9 @@ pub async fn process_gateway_payload(
                 }
             }
             if name == "INTERACTION_CREATE" {
+                if try_autocomplete_interaction(inner, data).await {
+                    continue;
+                }
                 if let Some(msgs) = try_interaction_create_inbound(inner, data).await {
                     inbounds.extend(msgs);
                 }
@@ -159,6 +164,46 @@ pub async fn process_gateway_payload(
     }
 
     (actions, inbounds)
+}
+
+async fn try_autocomplete_interaction(
+    inner: &DiscordInner,
+    data: &serde_json::Value,
+) -> bool {
+    let Some(ac) = parse_autocomplete_interaction(data) else {
+        return false;
+    };
+    let user_id = ac.user_id.as_deref().unwrap_or("unknown");
+    let auth = discord_auth_config(&inner.config);
+    if auth.has_restrictions()
+        && !is_discord_user_authorized(
+            user_id,
+            &ac.role_ids,
+            ac.guild_id.as_deref(),
+            ac.is_dm,
+            &auth,
+        )
+    {
+        let _ = inner
+            .respond_autocomplete(&ac.id, &ac.token, &[])
+            .await;
+        return true;
+    }
+    let choices = autocomplete_choices_for(&ac).await;
+    let _ = inner.respond_autocomplete(&ac.id, &ac.token, &choices).await;
+    true
+}
+
+async fn autocomplete_choices_for(
+    ac: &AutocompleteInteraction,
+) -> Vec<super::types::SlashCommandChoice> {
+    if ac.command_name == "skill" && ac.focused_option == "name" {
+        return skill_autocomplete_choices(&ac.focused_value).await;
+    }
+    if ac.command_name == "model" && ac.focused_option == "args" {
+        return model_autocomplete_choices(&ac.focused_value);
+    }
+    Vec::new()
 }
 
 async fn try_interaction_create_inbound(
