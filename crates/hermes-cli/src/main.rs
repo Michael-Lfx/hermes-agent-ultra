@@ -94,12 +94,13 @@ use hermes_telemetry::init_telemetry_from_env;
 use hermes_tools::{default_tool_policy_counters_path, load_tool_policy_counters, ToolRegistry};
 use hmac::KeyInit as _;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 
 fn auth_error_message(err: &AgentError) -> Option<String> {
@@ -2959,12 +2960,16 @@ async fn run_gateway(
             let config_arc_stream = config_arc.clone();
             let gateway_for_review = gateway.clone();
             let gateway_for_review_stream = gateway.clone();
+            let gateway_agent_cache: GatewayAgentCache =
+                Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+            let gateway_agent_cache_stream = gateway_agent_cache.clone();
             gateway
                 .set_message_handler_with_context(Arc::new(move |messages, ctx| {
                     let config = config_arc.clone();
                     let runtime_tools = tool_registry_for_msg.clone();
                     let gateway_for_review = gateway_for_review.clone();
                     let clarify = clarify_for_msg.clone();
+                    let gateway_agent_cache = gateway_agent_cache.clone();
                     Box::pin(async move {
                         if let Some(pending) = clarify.take_next().await {
                             let answer = messages
@@ -3123,13 +3128,14 @@ async fn run_gateway(
                             on_step_complete: Some(on_step_complete),
                             ..Default::default()
                         };
-                        let agent = build_agent_for_gateway_context(
+                        let agent = get_or_build_gateway_cached_agent(
+                            &gateway_agent_cache,
                             config.as_ref(),
                             &ctx,
                             agent_tools,
                             runtime_tools.clone(),
                         )
-                        .with_callbacks(callbacks);
+                        .await;
                         let (history, user_message) =
                             split_messages_for_run_conversation(messages).ok_or_else(|| {
                                 hermes_gateway::GatewayError::Platform(
@@ -3137,6 +3143,8 @@ async fn run_gateway(
                                 )
                             })?;
                         let task_id = Some(ctx.session_key.clone());
+                        let mut agent = agent.lock().await;
+                        agent.callbacks = Arc::new(callbacks);
                         let conv = agent
                             .run_conversation(RunConversationParams {
                                 user_message,
@@ -3161,6 +3169,7 @@ async fn run_gateway(
                     let runtime_tools = tool_registry_for_stream.clone();
                     let gateway_for_review = gateway_for_review_stream.clone();
                     let clarify = clarify_for_stream.clone();
+                    let gateway_agent_cache = gateway_agent_cache_stream.clone();
                     Box::pin(async move {
                         if let Some(pending) = clarify.take_next().await {
                             let answer = messages
@@ -3319,13 +3328,14 @@ async fn run_gateway(
                             on_step_complete: Some(on_step_complete),
                             ..Default::default()
                         };
-                        let agent = build_agent_for_gateway_context(
+                        let agent = get_or_build_gateway_cached_agent(
+                            &gateway_agent_cache,
                             config.as_ref(),
                             &ctx,
                             agent_tools,
                             runtime_tools.clone(),
                         )
-                        .with_callbacks(callbacks);
+                        .await;
                         let emit = on_chunk.clone();
                         let ui_state = Arc::new(Mutex::new((false, false))); // (muted, needs_break)
                         let ui_state_cb = ui_state.clone();
@@ -3373,6 +3383,8 @@ async fn run_gateway(
                                 )
                             })?;
                         let task_id = Some(ctx.session_key.clone());
+                        let mut agent = agent.lock().await;
+                        agent.callbacks = Arc::new(callbacks);
                         let conv = agent
                             .run_conversation(RunConversationParams {
                                 user_message,
@@ -4307,6 +4319,104 @@ fn build_agent_for_gateway_context(
         AgentLoop::new(agent_config, agent_tools, provider)
             .with_async_tool_dispatch(async_tool_dispatch_for(runtime_tools)),
     )
+}
+
+const GATEWAY_AGENT_CACHE_MAX_SIZE: usize = 128;
+const GATEWAY_AGENT_CACHE_IDLE_TTL: Duration = Duration::from_secs(3600);
+
+struct GatewayAgentCacheEntry {
+    signature: String,
+    agent: Arc<tokio::sync::Mutex<AgentLoop>>,
+    last_used: Instant,
+}
+
+type GatewayAgentCache = Arc<tokio::sync::Mutex<HashMap<String, GatewayAgentCacheEntry>>>;
+
+fn gateway_agent_signature(config: &hermes_config::GatewayConfig, ctx: &GatewayRuntimeContext) -> String {
+    let effective_model = resolve_model_for_gateway(config.model.as_deref().unwrap_or("gpt-4o"), ctx);
+    let home = ctx
+        .home
+        .as_deref()
+        .or(config.home_dir.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("");
+    let effective_session_id = if !ctx.session_id.trim().is_empty() {
+        ctx.session_id.as_str()
+    } else {
+        ctx.session_key.as_str()
+    };
+    let material = format!(
+        "{}|{}|{}|{}|{}|{}|{}",
+        effective_model,
+        ctx.platform,
+        ctx.provider.as_deref().unwrap_or(""),
+        ctx.personality.as_deref().unwrap_or(""),
+        effective_session_id,
+        home,
+        ctx.user_id,
+    );
+    hex::encode(Sha256::digest(material.as_bytes()))
+}
+
+fn prune_gateway_agent_cache(cache: &mut HashMap<String, GatewayAgentCacheEntry>) {
+    let now = Instant::now();
+    cache.retain(|_, entry| now.duration_since(entry.last_used) <= GATEWAY_AGENT_CACHE_IDLE_TTL);
+    if cache.len() <= GATEWAY_AGENT_CACHE_MAX_SIZE {
+        return;
+    }
+    let mut entries: Vec<(String, Instant)> = cache
+        .iter()
+        .map(|(k, v)| (k.clone(), v.last_used))
+        .collect();
+    entries.sort_by_key(|(_, used)| *used);
+    let overflow = cache.len().saturating_sub(GATEWAY_AGENT_CACHE_MAX_SIZE);
+    for (key, _) in entries.into_iter().take(overflow) {
+        cache.remove(&key);
+    }
+}
+
+async fn get_or_build_gateway_cached_agent(
+    cache: &GatewayAgentCache,
+    config: &hermes_config::GatewayConfig,
+    ctx: &GatewayRuntimeContext,
+    agent_tools: Arc<hermes_agent::agent_loop::ToolRegistry>,
+    runtime_tools: Arc<hermes_tools::ToolRegistry>,
+) -> Arc<tokio::sync::Mutex<AgentLoop>> {
+    let signature = gateway_agent_signature(config, ctx);
+    let session_key = ctx.session_key.clone();
+    {
+        let mut guard = cache.lock().await;
+        if let Some(entry) = guard.get_mut(&session_key) {
+            if entry.signature == signature {
+                entry.last_used = Instant::now();
+                return entry.agent.clone();
+            }
+        }
+    }
+    let built = Arc::new(tokio::sync::Mutex::new(build_agent_for_gateway_context(
+        config,
+        ctx,
+        agent_tools,
+        runtime_tools,
+    )));
+    let mut guard = cache.lock().await;
+    if let Some(entry) = guard.get_mut(&session_key) {
+        if entry.signature == signature {
+            entry.last_used = Instant::now();
+            return entry.agent.clone();
+        }
+    }
+    guard.insert(
+        session_key,
+        GatewayAgentCacheEntry {
+            signature,
+            agent: built.clone(),
+            last_used: Instant::now(),
+        },
+    );
+    prune_gateway_agent_cache(&mut guard);
+    built
 }
 
 fn extract_last_assistant_reply(messages: &[hermes_core::Message]) -> String {
@@ -14144,6 +14254,37 @@ mod tests {
             DmManager::with_pair_behavior(),
             hermes_gateway::gateway::GatewayConfig::default(),
         ))
+    }
+
+    #[test]
+    fn gateway_agent_signature_changes_when_user_changes() {
+        let cfg = GatewayConfig::default();
+        let mut ctx_a = GatewayRuntimeContext::default();
+        ctx_a.session_key = "wecom:room-1".to_string();
+        ctx_a.platform = "wecom".to_string();
+        ctx_a.user_id = "alice".to_string();
+        let mut ctx_b = ctx_a.clone();
+        ctx_b.user_id = "bob".to_string();
+        assert_ne!(
+            gateway_agent_signature(&cfg, &ctx_a),
+            gateway_agent_signature(&cfg, &ctx_b)
+        );
+    }
+
+    #[test]
+    fn gateway_agent_signature_changes_when_personality_changes() {
+        let cfg = GatewayConfig::default();
+        let mut ctx_a = GatewayRuntimeContext::default();
+        ctx_a.session_key = "wecom:room-1".to_string();
+        ctx_a.platform = "wecom".to_string();
+        ctx_a.user_id = "alice".to_string();
+        ctx_a.personality = Some("default".to_string());
+        let mut ctx_b = ctx_a.clone();
+        ctx_b.personality = Some("strict".to_string());
+        assert_ne!(
+            gateway_agent_signature(&cfg, &ctx_a),
+            gateway_agent_signature(&cfg, &ctx_b)
+        );
     }
 
     #[tokio::test]
