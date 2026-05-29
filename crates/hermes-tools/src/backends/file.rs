@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::tools::file::{PatchBackend, SearchBackend};
 use hermes_core::ToolError;
@@ -432,6 +434,234 @@ impl Default for LocalSearchBackend {
     }
 }
 
+impl LocalSearchBackend {
+    fn has_rg_command() -> bool {
+        Command::new("rg")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn rg_file_glob(pattern: &str) -> String {
+        if !pattern.contains('/') && !pattern.starts_with('*') {
+            format!("*{pattern}")
+        } else {
+            pattern.to_string()
+        }
+    }
+
+    fn search_files_rg_sync(
+        pattern: &str,
+        path: &str,
+        max: usize,
+        offset: usize,
+    ) -> Result<String, ToolError> {
+        let glob_pattern = Self::rg_file_glob(pattern);
+        let run = |sorted: bool| -> Result<Vec<String>, ToolError> {
+            let mut cmd = Command::new("rg");
+            cmd.arg("--files");
+            if sorted {
+                cmd.arg("--sortr=modified");
+            }
+            cmd.arg("-g").arg(&glob_pattern);
+            cmd.arg(path);
+            let output = cmd.output().map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "File search requires 'rg' (ripgrep). Install from https://github.com/BurntSushi/ripgrep#installation ({e})"
+                ))
+            })?;
+            if output.status.code() == Some(2) {
+                let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(ToolError::ExecutionFailed(format!("Search failed: {err}")));
+            }
+            Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect())
+        };
+        let all_files = run(true).or_else(|_| run(false))?;
+        let total = all_files.len();
+        let page: Vec<Value> = all_files
+            .into_iter()
+            .skip(offset)
+            .take(max)
+            .map(|path_str| {
+                let p = PathBuf::from(&path_str);
+                let name = p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                let is_dir = p.is_dir();
+                json!({
+                    "path": path_str,
+                    "name": name,
+                    "is_dir": is_dir,
+                })
+            })
+            .collect();
+        Ok(json!({
+            "files": page,
+            "total": total,
+            "pattern": pattern,
+            "truncated": total > offset.saturating_add(max),
+        })
+        .to_string())
+    }
+
+    fn search_content_rg_sync(
+        pattern: &str,
+        path: &str,
+        file_glob: Option<&str>,
+        max: usize,
+        offset: usize,
+        output_mode: &str,
+        context: usize,
+    ) -> Result<String, ToolError> {
+        let mut cmd = Command::new("rg");
+        cmd.arg("--line-number")
+            .arg("--no-heading")
+            .arg("--with-filename");
+        if context > 0 {
+            cmd.arg("-C").arg(context.to_string());
+        }
+        if let Some(glob) = file_glob {
+            cmd.arg("--glob").arg(glob);
+        }
+        match output_mode {
+            "files_only" => {
+                cmd.arg("-l");
+            }
+            "count" => {
+                cmd.arg("-c");
+            }
+            _ => {}
+        }
+        cmd.arg(pattern).arg(path);
+        let output = cmd.output().map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Content search requires ripgrep (rg) or grep. Install ripgrep: https://github.com/BurntSushi/ripgrep#installation ({e})"
+            ))
+        })?;
+        if output.status.code() == Some(2) && output.stdout.is_empty() {
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(ToolError::ExecutionFailed(format!("Search failed: {err}")));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let fetch_limit = if context > 0 {
+            max.saturating_add(offset).saturating_add(200)
+        } else {
+            max.saturating_add(offset)
+        };
+
+        match output_mode {
+            "files_only" => {
+                let all_files: Vec<String> = stdout
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                let total = all_files.len();
+                let page: Vec<String> = all_files
+                    .into_iter()
+                    .skip(offset)
+                    .take(max)
+                    .collect();
+                Ok(json!({
+                    "files": page,
+                    "total": total,
+                    "pattern": pattern,
+                })
+                .to_string())
+            }
+            "count" => {
+                let mut counts = BTreeMap::new();
+                for line in stdout.lines().filter(|l| !l.is_empty()) {
+                    if let Some((file, count)) = line.rsplit_once(':') {
+                        if let Ok(n) = count.parse::<usize>() {
+                            counts.insert(file.to_string(), n);
+                        }
+                    }
+                }
+                let total_count: usize = counts.values().sum();
+                Ok(json!({
+                    "counts": counts,
+                    "total": total_count,
+                    "pattern": pattern,
+                })
+                .to_string())
+            }
+            _ => {
+                let match_re =
+                    Regex::new(r"^([A-Za-z]:)?(.*?):(\d+):(.*)$").expect("rg match line regex");
+                let context_re =
+                    Regex::new(r"^([A-Za-z]:)?(.*?)-(\d+)-(.*)$").expect("rg context line regex");
+                let mut matches = Vec::new();
+                for line in stdout.lines() {
+                    if line.is_empty() || line == "--" {
+                        continue;
+                    }
+                    if let Some(caps) = match_re.captures(line) {
+                        let path_part = format!(
+                            "{}{}",
+                            caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                            caps.get(2).map(|m| m.as_str()).unwrap_or("")
+                        );
+                        let line_no: usize = caps
+                            .get(3)
+                            .and_then(|m| m.as_str().parse().ok())
+                            .unwrap_or(0);
+                        let content = caps
+                            .get(4)
+                            .map(|m| m.as_str().chars().take(500).collect::<String>())
+                            .unwrap_or_default();
+                        matches.push(json!({
+                            "file": path_part,
+                            "line": line_no,
+                            "content": content,
+                        }));
+                    } else if context > 0 {
+                        if let Some(caps) = context_re.captures(line) {
+                            let path_part = format!(
+                                "{}{}",
+                                caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                                caps.get(2).map(|m| m.as_str()).unwrap_or("")
+                            );
+                            let line_no: usize = caps
+                                .get(3)
+                                .and_then(|m| m.as_str().parse().ok())
+                                .unwrap_or(0);
+                            let content = caps
+                                .get(4)
+                                .map(|m| m.as_str().chars().take(500).collect::<String>())
+                                .unwrap_or_default();
+                            matches.push(json!({
+                                "file": path_part,
+                                "line": line_no,
+                                "content": content,
+                            }));
+                        }
+                    }
+                    if matches.len() >= fetch_limit {
+                        break;
+                    }
+                }
+                let total = matches.len();
+                let page: Vec<Value> = matches.into_iter().skip(offset).take(max).collect();
+                Ok(json!({
+                    "matches": page,
+                    "total": total,
+                    "pattern": pattern,
+                    "truncated": total > offset.saturating_add(max),
+                })
+                .to_string())
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl SearchBackend for LocalSearchBackend {
     async fn search_content(
@@ -444,13 +674,42 @@ impl SearchBackend for LocalSearchBackend {
         output_mode: Option<&str>,
         context: Option<usize>,
     ) -> Result<String, ToolError> {
-        let re = Regex::new(pattern)
-            .map_err(|e| ToolError::InvalidParams(format!("Invalid regex pattern: {}", e)))?;
+        let path_obj = Path::new(path);
+        if !path_obj.exists() {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Path '{}' does not exist",
+                path_obj.display()
+            )));
+        }
 
         let max = max_results.unwrap_or(50);
         let offset = offset.unwrap_or(0);
         let output_mode = output_mode.unwrap_or("content");
         let context = context.unwrap_or(0);
+
+        if Self::has_rg_command() {
+            let pattern_owned = pattern.to_string();
+            let path_owned = path.to_string();
+            let file_glob_owned = file_glob.map(str::to_string);
+            let output_mode_owned = output_mode.to_string();
+            return tokio::task::spawn_blocking(move || {
+                Self::search_content_rg_sync(
+                    &pattern_owned,
+                    &path_owned,
+                    file_glob_owned.as_deref(),
+                    max,
+                    offset,
+                    &output_mode_owned,
+                    context,
+                )
+            })
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("rg search task failed: {e}")))?;
+        }
+
+        let re = Regex::new(pattern)
+            .map_err(|e| ToolError::InvalidParams(format!("Invalid regex pattern: {}", e)))?;
+
         let fetch_limit = if context > 0 {
             max.saturating_add(offset).saturating_add(200)
         } else {
@@ -462,13 +721,6 @@ impl SearchBackend for LocalSearchBackend {
         let mut seen_files: HashSet<String> = HashSet::new();
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
 
-        let path = std::path::Path::new(path);
-        if !path.exists() {
-            return Err(ToolError::ExecutionFailed(format!(
-                "Path '{}' does not exist",
-                path.display()
-            )));
-        }
         let file_glob_re = match file_glob {
             Some(glob) => Some(Self::compile_glob_regex(glob)?),
             None => None,
@@ -476,7 +728,7 @@ impl SearchBackend for LocalSearchBackend {
 
         Self::search_dir_content(
             &re,
-            path,
+            path_obj,
             file_glob_re.as_ref(),
             context,
             fetch_limit,
@@ -528,7 +780,6 @@ impl SearchBackend for LocalSearchBackend {
         max_results: Option<usize>,
         offset: Option<usize>,
     ) -> Result<String, ToolError> {
-        let mut results: Vec<Value> = Vec::new();
         let base = std::path::Path::new(path);
 
         if !base.exists() {
@@ -538,11 +789,23 @@ impl SearchBackend for LocalSearchBackend {
             )));
         }
 
+        let max = max_results.unwrap_or(50);
+        let offset = offset.unwrap_or(0);
+
+        if Self::has_rg_command() {
+            let pattern_owned = pattern.to_string();
+            let path_owned = path.to_string();
+            return tokio::task::spawn_blocking(move || {
+                Self::search_files_rg_sync(&pattern_owned, &path_owned, max, offset)
+            })
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("rg files task failed: {e}")))?;
+        }
+
+        let mut results: Vec<Value> = Vec::new();
         let glob_re = Self::compile_glob_regex(pattern)?;
         Self::search_dir_names(&glob_re, base, &mut results).await;
 
-        let max = max_results.unwrap_or(50);
-        let offset = offset.unwrap_or(0);
         let total = results.len();
         let page: Vec<Value> = results.into_iter().skip(offset).take(max).collect();
 
