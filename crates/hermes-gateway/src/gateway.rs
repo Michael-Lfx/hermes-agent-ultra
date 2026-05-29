@@ -11,6 +11,7 @@
 
 use chrono::{DateTime, Utc};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -402,6 +403,23 @@ impl PlatformAccessPolicy {
 }
 
 impl Gateway {
+    fn route_correlation_id(incoming: &IncomingMessage, session_key: &str) -> String {
+        if let Some(mid) = incoming
+            .message_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return format!("{}:{mid}", incoming.platform);
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        incoming.platform.hash(&mut hasher);
+        incoming.chat_id.hash(&mut hasher);
+        incoming.user_id.hash(&mut hasher);
+        session_key.hash(&mut hasher);
+        format!("{}:{:016x}", incoming.platform, hasher.finish())
+    }
+
     /// Create a new `Gateway` with the given session manager and config.
     pub fn new(
         session_manager: Arc<SessionManager>,
@@ -800,6 +818,7 @@ impl Gateway {
             &incoming.user_id,
             is_dm,
         );
+        let route_id = Self::route_correlation_id(incoming, &session_key);
         let _session_serial = self.acquire_session_serial(&session_key).await;
 
         // 2. Get or create session
@@ -915,17 +934,23 @@ impl Gateway {
         }
 
         // 5. Process through agent loop (streaming or non-streaming)
+        let prep_ms = route_start.elapsed().as_millis() as u64;
+        let process_start = Instant::now();
         let processing_result = if self.config.streaming_enabled {
-            self.route_streaming(&incoming, messages, &session_key)
+            self.route_streaming(&incoming, messages, &session_key, &route_id)
                 .await
         } else {
-            self.route_non_streaming(&incoming, messages, &session_key)
+            self.route_non_streaming(&incoming, messages, &session_key, &route_id)
                 .await
         };
+        let processing_ms = process_start.elapsed().as_millis() as u64;
         debug!(
+            route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
             session_key = %session_key,
+            prep_ms = prep_ms,
+            processing_ms = processing_ms,
             elapsed_ms = route_start.elapsed().as_millis() as u64,
             success = processing_result.is_ok(),
             "gateway route finished"
@@ -1325,7 +1350,8 @@ impl Gateway {
                 self.session_manager
                     .replace_messages(session_key, messages.clone())
                     .await;
-                self.route_non_streaming(incoming, messages, session_key)
+                let route_id = Self::route_correlation_id(incoming, session_key);
+                self.route_non_streaming(incoming, messages, session_key, &route_id)
                     .await?;
                 Ok(true)
             }
@@ -1492,6 +1518,7 @@ impl Gateway {
         incoming: &IncomingMessage,
         messages: Vec<Message>,
         session_key: &str,
+        route_id: &str,
     ) -> Result<(), GatewayError> {
         self.emit_hook_event(
             "agent:start",
@@ -1512,6 +1539,7 @@ impl Gateway {
         let context_handler = self.message_handler_with_context.read().await.clone();
         let agent_start = Instant::now();
         debug!(
+            route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
             session_key = %session_key,
@@ -1548,6 +1576,7 @@ impl Gateway {
             }
         };
         debug!(
+            route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
             session_key = %session_key,
@@ -1598,6 +1627,7 @@ impl Gateway {
         incoming: &IncomingMessage,
         messages: Vec<Message>,
         session_key: &str,
+        route_id: &str,
     ) -> Result<(), GatewayError> {
         self.emit_hook_event(
             "agent:start",
@@ -1793,6 +1823,7 @@ impl Gateway {
         // Invoke the streaming handler
         let agent_start = Instant::now();
         debug!(
+            route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
             session_key = %session_key,
@@ -1828,6 +1859,7 @@ impl Gateway {
             }
         };
         debug!(
+            route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
             session_key = %session_key,
