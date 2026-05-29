@@ -80,6 +80,21 @@ pub fn describe_secret(secret: &str) -> String {
     format!("len={}, fp={hash:016x}", trimmed.chars().count())
 }
 
+/// Redact identifiers (bot id, chat id tokens) for operator logs.
+pub fn redact_identifier(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "missing".to_string();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() <= 8 {
+        return "****".to_string();
+    }
+    let prefix: String = chars.iter().take(4).copied().collect();
+    let suffix: String = chars.iter().rev().take(4).copied().collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{prefix}...{suffix}")
+}
+
 impl BasePlatformAdapter {
     /// Create a new `BasePlatformAdapter` with the given token.
     pub fn new(token: impl Into<String>) -> Self {
@@ -204,5 +219,14 @@ mod tests {
     fn describe_secret_empty() {
         assert_eq!(describe_secret(""), "missing");
         assert_eq!(describe_secret("   "), "missing");
+    }
+
+    #[test]
+    fn redact_identifier_masks_middle() {
+        assert_eq!(
+            redact_identifier("aibJXACFM4lDSnS5KAcEGVu5CkKJc5GQ7MZ"),
+            "aibJ...Q7MZ"
+        );
+        assert_eq!(redact_identifier("short"), "****");
     }
 }

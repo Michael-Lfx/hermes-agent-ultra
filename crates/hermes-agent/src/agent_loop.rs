@@ -6771,7 +6771,7 @@ impl AgentLoop {
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
             _total_tool_time_ms += tool_elapsed;
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            tracing::debug!(
+            tracing::info!(
                 turn = total_turns,
                 tool_count = tool_calls.len(),
                 result_count = results.len(),
@@ -8193,7 +8193,7 @@ impl AgentLoop {
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
             _total_tool_time_ms += tool_elapsed;
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            tracing::debug!(
+            tracing::info!(
                 turn = total_turns,
                 tool_count = tool_calls.len(),
                 result_count = results.len(),

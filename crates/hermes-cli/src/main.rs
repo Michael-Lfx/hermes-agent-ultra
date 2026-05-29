@@ -3,15 +3,15 @@
 //! Initializes logging, parses CLI arguments, and dispatches to the
 //! appropriate subcommand handler.
 
+mod gateway_handlers;
+
 use aes_gcm::aead::Aead;
 use aes_gcm::Aes256Gcm;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use clap_complete::{generate, Shell as CompletionShell};
 use hermes_agent::session_persistence::SessionPersistence;
-use hermes_agent::{
-    split_messages_for_run_conversation, AgentCallbacks, AgentLoop, RunConversationParams,
-};
+use hermes_agent::{AgentLoop};
 use hermes_auth::{
     exchange_refresh_token, AuthManager, FileTokenStore, OAuth2Endpoints, OAuthCredential,
 };
@@ -41,14 +41,12 @@ use hermes_cli::model_switch::{
     cached_provider_catalog_status, curated_provider_slugs, normalize_provider_model,
     provider_catalog_entries, provider_model_ids,
 };
-use hermes_cli::platform_toolsets::{resolve_platform_tool_schemas, tool_definition_summary};
 use hermes_cli::providers::provider_capability_for;
 use hermes_cli::cron_delivery::GatewayCronDeliveryBackend;
 use hermes_cli::runtime_tool_wiring::{
     wire_cron_scheduler_backend, wire_gateway_clarify_backend, wire_gateway_messaging_backend,
 };
 use hermes_cli::terminal_backend::build_terminal_backend;
-use hermes_cli::tool_preview::{build_tool_preview_from_value, tool_emoji};
 use hermes_cli::App;
 use hermes_config::{
     apply_user_config_patch, gateway_pid_path_in, hermes_home, load_config, load_user_config_file,
@@ -57,7 +55,7 @@ use hermes_config::{
 };
 use hermes_core::AgentError;
 use hermes_core::PlatformAdapter;
-use hermes_core::{MessageRole, StreamChunk};
+use hermes_core::MessageRole;
 use hermes_cron::{
     cron_scheduler_for_data_dir, CronCompletionEvent, CronError, CronRunner, CronScheduler,
     FileJobPersistence,
@@ -99,7 +97,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
 
@@ -300,6 +298,18 @@ fn oneshot_auto_verify_oauth_provider(
 
 fn main() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let status = std::thread::Builder::new()
+        .name("hermes-ultra-main".into())
+        .spawn(main_thread_entry)
+        .expect("failed to spawn main thread")
+        .join()
+        .expect("main thread panicked");
+    if let Err(code) = status {
+        std::process::exit(code);
+    }
+}
+
+fn main_thread_entry() -> Result<(), i32> {
     let (version, commit) = hermes_core::startup_commit_info();
     eprintln!(
         "[WARN] hermes-cli startup commit info: version={} commit={}",
@@ -318,7 +328,7 @@ fn main() {
             match parse_result {
                 Ok(_) => {
                     eprintln!("[probe] parse ok");
-                    return;
+                    return Ok(());
                 }
                 Err(err) => err.exit(),
             }
@@ -333,11 +343,12 @@ fn main() {
         Ok(runtime) => runtime,
         Err(err) => {
             eprintln!("Error: failed to initialize async runtime: {}", err);
-            std::process::exit(1);
+            return Err(1);
         }
     };
     runtime.block_on(async_main(cli));
     runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+    Ok(())
 }
 
 async fn async_main(cli: Cli) {
@@ -377,7 +388,7 @@ async fn run(cli: Cli) {
     }
     if let Ok(cfg) = load_config(cli.config_dir.as_deref()) {
         let applied = hydrate_env_from_config(&cfg);
-        tracing::debug!(
+        tracing::trace!(
             applied_env_vars = applied,
             "Hydrated environment from config.yaml"
         );
@@ -2954,457 +2965,35 @@ async fn run_gateway(
                 .set_messaging_session_context(messaging_session.clone())
                 .await;
             let clarify_dispatcher = ClarifyDispatcher::new();
-            let tool_registry_for_msg = tool_registry.clone();
-            let tool_registry_for_stream = tool_registry.clone();
             let agent_tools_for_cron = Arc::new(bridge_tool_registry(&tool_registry));
-            let clarify_for_msg = clarify_dispatcher.clone();
-            let clarify_for_stream = clarify_dispatcher.clone();
             let config_arc = Arc::new(config.clone());
-            let config_arc_stream = config_arc.clone();
-            let gateway_for_review = gateway.clone();
-            let gateway_for_review_stream = gateway.clone();
             let gateway_agent_cache: GatewayAgentCache =
                 Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-            let gateway_agent_cache_stream = gateway_agent_cache.clone();
+            let handler_deps = gateway_handlers::GatewayHandlerDeps {
+                config: config_arc.clone(),
+                runtime_tools: tool_registry.clone(),
+                gateway_for_review: gateway.clone(),
+                clarify: clarify_dispatcher.clone(),
+                gateway_agent_cache: gateway_agent_cache.clone(),
+            };
+            let handler_deps_stream = handler_deps.clone();
             gateway
                 .set_message_handler_with_context(Arc::new(move |messages, ctx| {
-                    let config = config_arc.clone();
-                    let runtime_tools = tool_registry_for_msg.clone();
-                    let gateway_for_review = gateway_for_review.clone();
-                    let clarify = clarify_for_msg.clone();
-                    let gateway_agent_cache = gateway_agent_cache.clone();
-                    Box::pin(async move {
-                        if let Some(pending) = clarify.take_next().await {
-                            let answer = messages
-                                .iter()
-                                .rev()
-                                .find_map(|m| {
-                                    (m.role == MessageRole::User)
-                                        .then(|| m.content.clone())
-                                        .flatten()
-                                })
-                                .unwrap_or_default();
-                            let _ = pending.respond(&clarify, answer).await;
-                            return Ok(
-                                "Clarification received. Continuing task execution...".to_string()
-                            );
-                        }
-                        let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
-                        let _effective_model = resolve_model_for_gateway(
-                            config.model.as_deref().unwrap_or("gpt-4o"),
-                            &ctx,
-                        );
-                        let tool_schemas = resolve_platform_tool_schemas(
-                            config.as_ref(),
-                            &ctx.platform,
-                            &runtime_tools,
-                        );
-                        let tool_defs = tool_definition_summary(&tool_schemas);
-                        gateway_for_review
-                            .emit_hook_event(
-                                "agent:tool_definitions",
-                                serde_json::json!({
-                                    "platform": ctx.platform,
-                                    "chat_id": ctx.chat_id,
-                                    "user_id": ctx.user_id,
-                                    "session_id": ctx.session_key,
-                                    "streaming": false,
-                                    "tools": tool_defs
-                                }),
-                            )
-                            .await;
-                        let platform_for_review = ctx.platform.clone();
-                        let chat_for_review = ctx.chat_id.clone();
-                        let deferred_queue = ctx.deferred_post_delivery_messages.clone();
-                        let deferred_released = ctx.deferred_post_delivery_released.clone();
-                        let gateway_for_review_cb = gateway_for_review.clone();
-                        let review_cb = Arc::new(move |text: &str| {
-                            if let (Some(queue), Some(released)) =
-                                (deferred_queue.as_ref(), deferred_released.as_ref())
-                            {
-                                if !released.load(Ordering::Acquire) {
-                                    if let Ok(mut guard) = queue.lock() {
-                                        guard.push(text.to_string());
-                                        return;
-                                    }
-                                }
-                            }
-                            let gw = gateway_for_review_cb.clone();
-                            let platform = platform_for_review.clone();
-                            let chat_id = chat_for_review.clone();
-                            let msg = text.to_string();
-                            tokio::spawn(async move {
-                                let _ = gw.send_message(&platform, &chat_id, &msg, None).await;
-                            });
-                        });
-                        let status_cb =
-                            hermes_cli::gateway_inbound_wiring::make_gateway_status_callback(
-                                gateway_for_review.clone(),
-                                ctx.platform.clone(),
-                                ctx.chat_id.clone(),
-                                ctx.user_id.clone(),
-                                ctx.session_key.clone(),
-                            );
-                        let on_thinking =
-                            hermes_cli::gateway_inbound_wiring::make_gateway_on_thinking_callback(
-                                gateway_for_review.clone(),
-                                ctx.platform.clone(),
-                                ctx.chat_id.clone(),
-                                None,
-                            );
-                        let tool_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-                        let tool_events_for_start = tool_events.clone();
-                        let on_tool_start: Box<dyn Fn(&str, &serde_json::Value) + Send + Sync> =
-                            Box::new(move |name: &str, args: &serde_json::Value| {
-                                let preview = build_tool_preview_from_value(name, args, 60)
-                                    .unwrap_or_default();
-                                let mut event = serde_json::json!({
-                                    "phase": "start",
-                                    "name": name,
-                                    "emoji": tool_emoji(name)
-                                });
-                                if !preview.is_empty() {
-                                    event["preview"] = serde_json::json!(preview);
-                                }
-                                if let Ok(mut guard) = tool_events_for_start.lock() {
-                                    guard.push(event);
-                                }
-                            });
-                        let tool_events_for_complete = tool_events.clone();
-                        let on_tool_complete: Box<dyn Fn(&str, &str) + Send + Sync> =
-                            Box::new(move |name: &str, result: &str| {
-                                if let Ok(mut guard) = tool_events_for_complete.lock() {
-                                    guard.push(serde_json::json!({
-                                        "phase": "complete",
-                                        "name": name,
-                                        "emoji": tool_emoji(name),
-                                        "result": truncate_hook_tool_result(result)
-                                    }));
-                                }
-                            });
-                        let tool_events_for_step = tool_events.clone();
-                        let gateway_for_step_hook = gateway_for_review.clone();
-                        let platform_for_step_hook = ctx.platform.clone();
-                        let user_for_step_hook = ctx.user_id.clone();
-                        let session_for_step_hook = ctx.session_key.clone();
-                        let on_step_complete: Box<dyn Fn(u32) + Send + Sync> =
-                            Box::new(move |iteration: u32| {
-                                let tools = if let Ok(mut guard) = tool_events_for_step.lock() {
-                                    std::mem::take(&mut *guard)
-                                } else {
-                                    Vec::new()
-                                };
-                                let tool_names: Vec<String> = tools
-                                    .iter()
-                                    .filter_map(|v| {
-                                        v.get("name")
-                                            .and_then(|n| n.as_str())
-                                            .map(|s| s.to_string())
-                                    })
-                                    .collect();
-                                let gw_hook = gateway_for_step_hook.clone();
-                                let platform = platform_for_step_hook.clone();
-                                let user_id = user_for_step_hook.clone();
-                                let session_id = session_for_step_hook.clone();
-                                tokio::spawn(async move {
-                                    gw_hook
-                                        .emit_hook_event(
-                                            "agent:step",
-                                            serde_json::json!({
-                                                "platform": platform,
-                                                "user_id": user_id,
-                                                "session_id": session_id,
-                                                "iteration": iteration,
-                                                "tool_names": tool_names,
-                                                "tools": tools
-                                            }),
-                                        )
-                                        .await;
-                                });
-                            });
-                        let callbacks = AgentCallbacks {
-                            background_review_callback: Some(review_cb),
-                            status_callback: Some(status_cb),
-                            on_thinking: Some(on_thinking),
-                            on_tool_start: Some(on_tool_start),
-                            on_tool_complete: Some(on_tool_complete),
-                            on_step_complete: Some(on_step_complete),
-                            ..Default::default()
-                        };
-                        let agent = get_or_build_gateway_cached_agent(
-                            &gateway_agent_cache,
-                            config.as_ref(),
-                            &ctx,
-                            agent_tools,
-                            runtime_tools.clone(),
-                        )
-                        .await;
-                        let (history, user_message) =
-                            split_messages_for_run_conversation(messages).ok_or_else(|| {
-                                hermes_gateway::GatewayError::Platform(
-                                    "session has no user message for run_conversation".into(),
-                                )
-                            })?;
-                        let task_id = Some(ctx.session_key.clone());
-                        let mut agent = agent.lock().await;
-                        agent.callbacks = Arc::new(callbacks);
-                        let conv = agent
-                            .run_conversation(RunConversationParams {
-                                user_message,
-                                conversation_history: history,
-                                task_id,
-                                stream_callback: None,
-                                persist_user_message: None,
-                                tools: Some(tool_schemas),
-                                persist_session: true,
-                            })
-                            .await
-                            .map_err(|e| hermes_gateway::GatewayError::Platform(e.to_string()))?;
-                        Ok(conv
-                            .final_response
-                            .unwrap_or_else(|| extract_last_assistant_reply(&conv.messages)))
-                    })
+                    let deps = handler_deps.clone();
+                    Box::pin(gateway_handlers::gateway_handle_message_non_streaming(
+                        messages, ctx, deps,
+                    ))
                 }))
                 .await;
             gateway
-                .set_streaming_handler_with_context(Arc::new(move |messages, ctx, on_chunk| {
-                    let config = config_arc_stream.clone();
-                    let runtime_tools = tool_registry_for_stream.clone();
-                    let gateway_for_review = gateway_for_review_stream.clone();
-                    let clarify = clarify_for_stream.clone();
-                    let gateway_agent_cache = gateway_agent_cache_stream.clone();
-                    Box::pin(async move {
-                        if let Some(pending) = clarify.take_next().await {
-                            let answer = messages
-                                .iter()
-                                .rev()
-                                .find_map(|m| {
-                                    (m.role == MessageRole::User)
-                                        .then(|| m.content.clone())
-                                        .flatten()
-                                })
-                                .unwrap_or_default();
-                            let _ = pending.respond(&clarify, answer).await;
-                            return Ok(
-                                "Clarification received. Continuing task execution...".to_string()
-                            );
-                        }
-                        let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
-                        let _effective_model = resolve_model_for_gateway(
-                            config.model.as_deref().unwrap_or("gpt-4o"),
-                            &ctx,
-                        );
-                        let tool_schemas = resolve_platform_tool_schemas(
-                            config.as_ref(),
-                            &ctx.platform,
-                            &runtime_tools,
-                        );
-                        let tool_defs = tool_definition_summary(&tool_schemas);
-                        gateway_for_review
-                            .emit_hook_event(
-                                "agent:tool_definitions",
-                                serde_json::json!({
-                                    "platform": ctx.platform,
-                                    "chat_id": ctx.chat_id,
-                                    "user_id": ctx.user_id,
-                                    "session_id": ctx.session_key,
-                                    "streaming": true,
-                                    "tools": tool_defs
-                                }),
-                            )
-                            .await;
-                        let platform_for_review = ctx.platform.clone();
-                        let chat_for_review = ctx.chat_id.clone();
-                        let deferred_queue = ctx.deferred_post_delivery_messages.clone();
-                        let deferred_released = ctx.deferred_post_delivery_released.clone();
-                        let gateway_for_review_cb = gateway_for_review.clone();
-                        let review_cb = Arc::new(move |text: &str| {
-                            if let (Some(queue), Some(released)) =
-                                (deferred_queue.as_ref(), deferred_released.as_ref())
-                            {
-                                if !released.load(Ordering::Acquire) {
-                                    if let Ok(mut guard) = queue.lock() {
-                                        guard.push(text.to_string());
-                                        return;
-                                    }
-                                }
-                            }
-                            let gw = gateway_for_review_cb.clone();
-                            let platform = platform_for_review.clone();
-                            let chat_id = chat_for_review.clone();
-                            let msg = text.to_string();
-                            tokio::spawn(async move {
-                                let _ = gw.send_message(&platform, &chat_id, &msg, None).await;
-                            });
-                        });
-                        let status_cb =
-                            hermes_cli::gateway_inbound_wiring::make_gateway_status_callback(
-                                gateway_for_review.clone(),
-                                ctx.platform.clone(),
-                                ctx.chat_id.clone(),
-                                ctx.user_id.clone(),
-                                ctx.session_key.clone(),
-                            );
-                        let on_thinking =
-                            hermes_cli::gateway_inbound_wiring::make_gateway_on_thinking_callback(
-                                gateway_for_review.clone(),
-                                ctx.platform.clone(),
-                                ctx.chat_id.clone(),
-                                None,
-                            );
-                        let tool_events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-                        let tool_events_for_start = tool_events.clone();
-                        let on_tool_start: Box<dyn Fn(&str, &serde_json::Value) + Send + Sync> =
-                            Box::new(move |name: &str, args: &serde_json::Value| {
-                                let preview = build_tool_preview_from_value(name, args, 60)
-                                    .unwrap_or_default();
-                                let mut event = serde_json::json!({
-                                    "phase": "start",
-                                    "name": name,
-                                    "emoji": tool_emoji(name)
-                                });
-                                if !preview.is_empty() {
-                                    event["preview"] = serde_json::json!(preview);
-                                }
-                                if let Ok(mut guard) = tool_events_for_start.lock() {
-                                    guard.push(event);
-                                }
-                            });
-                        let tool_events_for_complete = tool_events.clone();
-                        let on_tool_complete: Box<dyn Fn(&str, &str) + Send + Sync> =
-                            Box::new(move |name: &str, result: &str| {
-                                if let Ok(mut guard) = tool_events_for_complete.lock() {
-                                    guard.push(serde_json::json!({
-                                        "phase": "complete",
-                                        "name": name,
-                                        "emoji": tool_emoji(name),
-                                        "result": truncate_hook_tool_result(result)
-                                    }));
-                                }
-                            });
-                        let tool_events_for_step = tool_events.clone();
-                        let gateway_for_step_hook = gateway_for_review.clone();
-                        let platform_for_step_hook = ctx.platform.clone();
-                        let user_for_step_hook = ctx.user_id.clone();
-                        let session_for_step_hook = ctx.session_key.clone();
-                        let on_step_complete: Box<dyn Fn(u32) + Send + Sync> =
-                            Box::new(move |iteration: u32| {
-                                let tools = if let Ok(mut guard) = tool_events_for_step.lock() {
-                                    std::mem::take(&mut *guard)
-                                } else {
-                                    Vec::new()
-                                };
-                                let tool_names: Vec<String> = tools
-                                    .iter()
-                                    .filter_map(|v| {
-                                        v.get("name")
-                                            .and_then(|n| n.as_str())
-                                            .map(|s| s.to_string())
-                                    })
-                                    .collect();
-                                let gw_hook = gateway_for_step_hook.clone();
-                                let platform = platform_for_step_hook.clone();
-                                let user_id = user_for_step_hook.clone();
-                                let session_id = session_for_step_hook.clone();
-                                tokio::spawn(async move {
-                                    gw_hook
-                                        .emit_hook_event(
-                                            "agent:step",
-                                            serde_json::json!({
-                                                "platform": platform,
-                                                "user_id": user_id,
-                                                "session_id": session_id,
-                                                "iteration": iteration,
-                                                "tool_names": tool_names,
-                                                "tools": tools
-                                            }),
-                                        )
-                                        .await;
-                                });
-                            });
-                        let callbacks = AgentCallbacks {
-                            background_review_callback: Some(review_cb),
-                            status_callback: Some(status_cb),
-                            on_thinking: Some(on_thinking),
-                            on_tool_start: Some(on_tool_start),
-                            on_tool_complete: Some(on_tool_complete),
-                            on_step_complete: Some(on_step_complete),
-                            ..Default::default()
-                        };
-                        let agent = get_or_build_gateway_cached_agent(
-                            &gateway_agent_cache,
-                            config.as_ref(),
-                            &ctx,
-                            agent_tools,
-                            runtime_tools.clone(),
-                        )
-                        .await;
-                        let emit = on_chunk.clone();
-                        let ui_state = Arc::new(Mutex::new((false, false))); // (muted, needs_break)
-                        let ui_state_cb = ui_state.clone();
-                        let stream_cb: Box<dyn Fn(StreamChunk) + Send + Sync> =
-                            Box::new(move |chunk: StreamChunk| {
-                                if let Some(delta) = chunk.delta {
-                                    if let Some(extra) = delta.extra.as_ref() {
-                                        if let Some(control) =
-                                            extra.get("control").and_then(|v| v.as_str())
-                                        {
-                                            if control == "mute_post_response" {
-                                                let enabled = extra
-                                                    .get("enabled")
-                                                    .and_then(|v| v.as_bool())
-                                                    .unwrap_or(false);
-                                                if let Ok(mut st) = ui_state_cb.lock() {
-                                                    st.0 = enabled;
-                                                }
-                                            } else if control == "stream_break" {
-                                                if let Ok(mut st) = ui_state_cb.lock() {
-                                                    st.1 = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(text) = delta.content {
-                                        if let Ok(mut st) = ui_state_cb.lock() {
-                                            if st.0 {
-                                                return;
-                                            }
-                                            if st.1 {
-                                                emit("\n\n".to_string());
-                                                st.1 = false;
-                                            }
-                                        }
-                                        emit(text);
-                                    }
-                                }
-                            });
-
-                        let (history, user_message) =
-                            split_messages_for_run_conversation(messages).ok_or_else(|| {
-                                hermes_gateway::GatewayError::Platform(
-                                    "session has no user message for run_conversation".into(),
-                                )
-                            })?;
-                        let task_id = Some(ctx.session_key.clone());
-                        let mut agent = agent.lock().await;
-                        agent.callbacks = Arc::new(callbacks);
-                        let conv = agent
-                            .run_conversation(RunConversationParams {
-                                user_message,
-                                conversation_history: history,
-                                task_id,
-                                stream_callback: Some(stream_cb),
-                                persist_user_message: None,
-                                tools: Some(tool_schemas),
-                                persist_session: true,
-                            })
-                            .await
-                            .map_err(|e| hermes_gateway::GatewayError::Platform(e.to_string()))?;
-                        Ok(conv
-                            .final_response
-                            .unwrap_or_else(|| extract_last_assistant_reply(&conv.messages)))
-                    })
-                }))
+                .set_streaming_handler_with_context(Arc::new(
+                    move |messages, ctx, on_chunk| {
+                        let deps = handler_deps_stream.clone();
+                        Box::pin(gateway_handlers::gateway_handle_message_streaming(
+                            messages, ctx, on_chunk, deps,
+                        ))
+                    },
+                ))
                 .await;
 
             // Cron: same on-disk dir as `hermes cron` + real LLM/tools as the gateway agent.
@@ -4393,16 +3982,30 @@ async fn get_or_build_gateway_cached_agent(
         if let Some(entry) = guard.get_mut(&session_key) {
             if entry.signature == signature {
                 entry.last_used = Instant::now();
+                tracing::debug!(
+                    session_key = %session_key,
+                    "gateway agent cache hit"
+                );
                 return entry.agent.clone();
             }
         }
     }
+    let build_start = Instant::now();
+    tracing::info!(
+        session_key = %session_key,
+        "gateway agent cache miss; building agent"
+    );
     let built = Arc::new(tokio::sync::Mutex::new(build_agent_for_gateway_context(
         config,
         ctx,
         agent_tools,
         runtime_tools,
     )));
+    tracing::info!(
+        session_key = %session_key,
+        elapsed_ms = build_start.elapsed().as_millis() as u64,
+        "gateway agent built"
+    );
     let mut guard = cache.lock().await;
     if let Some(entry) = guard.get_mut(&session_key) {
         if entry.signature == signature {

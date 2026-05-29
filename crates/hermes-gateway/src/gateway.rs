@@ -410,6 +410,16 @@ impl PlatformAccessPolicy {
     }
 }
 
+fn inbound_text_log_fields(text: &str) -> (usize, String, String) {
+    let trimmed = text.trim();
+    let chars = trimmed.chars().count();
+    let preview: String = trimmed.chars().take(48).collect::<String>().replace('\n', " ");
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    trimmed.hash(&mut hasher);
+    let text_fp = format!("{:016x}", hasher.finish());
+    (chars, preview, text_fp)
+}
+
 impl Gateway {
     fn route_correlation_id(incoming: &IncomingMessage, session_key: &str) -> String {
         if let Some(mid) = incoming
@@ -707,15 +717,6 @@ impl Gateway {
         if let Some(ctx) = self.messaging_session.read().await.as_ref() {
             ctx.set(&incoming.platform, &incoming.chat_id);
         }
-        debug!(
-            platform = %incoming.platform,
-            chat_id = %incoming.chat_id,
-            user_id = %incoming.user_id,
-            is_dm = incoming.is_dm,
-            has_media = !incoming.media_urls.is_empty(),
-            text_chars = incoming.text.chars().count(),
-            "gateway route start"
-        );
         let access_policy = self.platform_access_policy(&incoming.platform).await;
         let is_slash_command = incoming.text.trim_start().starts_with('/');
         if let Some(policy) = access_policy.as_ref() {
@@ -941,6 +942,22 @@ impl Gateway {
             );
         }
 
+        let (text_chars, text_preview, text_fp) = inbound_text_log_fields(&incoming.text);
+        info!(
+            route_id = %route_id,
+            platform = %incoming.platform,
+            chat_id = %incoming.chat_id,
+            user_id = %incoming.user_id,
+            session_key = %session_key,
+            is_dm = incoming.is_dm,
+            has_media = !incoming.media_urls.is_empty(),
+            text_chars = text_chars,
+            text_preview = %text_preview,
+            text_fp = %text_fp,
+            message_count = messages.len(),
+            "gateway route start"
+        );
+
         // 5. Process through agent loop (streaming or non-streaming)
         let prep_ms = route_start.elapsed().as_millis() as u64;
         let process_start = Instant::now();
@@ -952,7 +969,7 @@ impl Gateway {
                 .await
         };
         let processing_ms = process_start.elapsed().as_millis() as u64;
-        debug!(
+        info!(
             route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
@@ -1560,7 +1577,7 @@ impl Gateway {
             });
         }
         let agent_start = Instant::now();
-        debug!(
+        info!(
             route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
@@ -1599,7 +1616,7 @@ impl Gateway {
             }
         };
         feedback_done.store(true, Ordering::Release);
-        debug!(
+        info!(
             route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
@@ -1846,7 +1863,7 @@ impl Gateway {
 
         // Invoke the streaming handler
         let agent_start = Instant::now();
-        debug!(
+        info!(
             route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,
@@ -1882,7 +1899,7 @@ impl Gateway {
                 return Err(e);
             }
         };
-        debug!(
+        info!(
             route_id = %route_id,
             platform = %incoming.platform,
             chat_id = %incoming.chat_id,

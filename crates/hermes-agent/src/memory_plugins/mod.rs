@@ -94,56 +94,55 @@ fn discover_available_provider_ids() -> Vec<String> {
 
     let honcho = honcho::HonchoMemoryPlugin::new();
     if honcho.is_available() {
-        tracing::info!("Discovered memory provider: honcho");
         names.push("honcho".to_string());
     }
 
     let contextlattice = contextlattice::ContextLatticeMemoryPlugin::new();
     if contextlattice.is_available() {
-        tracing::info!("Discovered memory provider: contextlattice");
         names.push("contextlattice".to_string());
     }
 
     let hindsight = hindsight::HindsightPlugin::new();
     if hindsight.is_available() {
-        tracing::info!("Discovered memory provider: hindsight");
         names.push("hindsight".to_string());
     }
 
     let retaindb = retaindb::RetainDbMemoryPlugin::new();
     if retaindb.is_available() {
-        tracing::info!("Discovered memory provider: retaindb");
         names.push("retaindb".to_string());
     }
 
     let openviking = openviking::OpenVikingMemoryPlugin::new();
     if openviking.is_available() {
-        tracing::info!("Discovered memory provider: openviking");
         names.push("openviking".to_string());
     }
 
     let brv = byterover::ByteRoverPlugin::new();
     if brv.is_available() {
-        tracing::info!("Discovered memory provider: byterover");
         names.push("byterover".to_string());
     }
 
     let mem0 = mem0::Mem0MemoryPlugin::new();
     if mem0.is_available() {
-        tracing::info!("Discovered memory provider: mem0");
         names.push("mem0".to_string());
     }
 
     let sm = supermemory::SupermemoryMemoryPlugin::new();
     if sm.is_available() {
-        tracing::info!("Discovered memory provider: supermemory");
         names.push("supermemory".to_string());
     }
 
     let holo = holographic::HolographicMemoryPlugin::new();
     if holo.is_available() {
-        tracing::info!("Discovered memory provider: holographic");
         names.push("holographic".to_string());
+    }
+
+    if !names.is_empty() {
+        tracing::info!(
+            provider_count = names.len(),
+            providers = %names.join(","),
+            "Discovered memory providers"
+        );
     }
 
     names

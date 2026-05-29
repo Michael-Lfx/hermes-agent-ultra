@@ -646,7 +646,10 @@ fn register_builtin_tools_impl(
         vec![],
     );
 
-    tracing::info!("Registered {} built-in tools", registry.list_tools().len());
+    tracing::info!(
+        tool_count = registry.list_tools().len(),
+        "Registered built-in tools"
+    );
 }
 
 /// Return the Hermes data directory (`~/.hermes/`), creating it if needed.

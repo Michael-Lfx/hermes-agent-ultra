@@ -46,9 +46,10 @@ where
         mut writer: format::Writer<'_>,
         event: &tracing::Event<'_>,
     ) -> std::fmt::Result {
-        let ts = chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%:z");
+        let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
         let meta = event.metadata();
         let level = *meta.level();
+        let pid = std::process::id();
 
         let location = match (meta.file(), meta.line()) {
             (Some(f), Some(l)) => format!("{}:{}", f, l),
@@ -63,13 +64,17 @@ where
             let (color, reset) = level_color(level);
             write!(
                 writer,
-                "{} {color}{:<5}{reset} [{}] thread={} ",
-                ts, level, location, thread_name,
+                "{} {color}{:<5}{reset} [{}] pid={} thread={} ",
+                ts, level, location, pid, thread_name,
                 color = color,
                 reset = reset,
             )?;
         } else {
-            write!(writer, "{} {:<5} [{}] thread={} ", ts, level, location, thread_name)?;
+            write!(
+                writer,
+                "{} {:<5} [{}] pid={} thread={} ",
+                ts, level, location, pid, thread_name
+            )?;
         }
 
         ctx.format_fields(writer.by_ref(), event)?;

@@ -206,15 +206,15 @@ impl CronScheduler {
         for mut job in jobs {
             job.normalize_schedule();
             job.refresh_next_run();
-            tracing::info!(
-                "Loaded persisted job '{}' ({})",
-                job.name.as_deref().unwrap_or(&job.id),
-                job.id
+            tracing::debug!(
+                job_id = %job.id,
+                job_name = job.name.as_deref().unwrap_or(&job.id),
+                "Loaded persisted cron job"
             );
             guard.insert(job.id.clone(), job);
         }
 
-        tracing::info!("Loaded {} persisted cron jobs", guard.len());
+        tracing::info!(job_count = guard.len(), "Loaded persisted cron jobs");
         Ok(())
     }
 

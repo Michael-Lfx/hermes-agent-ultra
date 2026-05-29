@@ -5804,9 +5804,11 @@ pub fn build_provider(config: &GatewayConfig, model: &str) -> Arc<dyn LlmProvide
         None if local_no_key_ok => "local-no-key".to_string(),
         None => {
             tracing::warn!(
-                "No API key for provider '{}'(runtime '{}'); using NoBackendProvider",
-                provider_name,
-                runtime_provider
+                provider = %provider_name,
+                runtime_provider = %runtime_provider,
+                model = %model,
+                impact = "llm requests will fail until a valid API key is configured",
+                "No API key for provider; using NoBackendProvider"
             );
             return Arc::new(NoBackendProvider {
                 model: model.to_string(),

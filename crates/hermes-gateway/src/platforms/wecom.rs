@@ -27,7 +27,7 @@ use uuid::Uuid;
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
-use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter, describe_secret};
+use crate::adapter::{redact_identifier, AdapterProxyConfig, BasePlatformAdapter};
 use crate::gateway::IncomingMessage;
 use crate::ssrf::is_safe_url;
 
@@ -1370,7 +1370,7 @@ impl WeComAdapter {
         };
 
         let delay = text_batch_delay_secs();
-        debug!(
+        info!(
             chat_id = %incoming.chat_id,
             user_id = %incoming.user_id,
             msg_id = ?incoming.message_id,
@@ -1545,7 +1545,7 @@ impl WeComAdapter {
             match tokio_tungstenite::connect_async(&inner.config.websocket_url).await {
                 Ok((ws_stream, _)) => {
                     info!(
-                        bot_id = %inner.config.bot_id,
+                        bot_id = %redact_identifier(&inner.config.bot_id),
                         ws = %inner.config.websocket_url,
                         "WeCom AI Bot websocket connected"
                     );
@@ -1994,8 +1994,7 @@ impl WeComAdapter {
 impl PlatformAdapter for WeComAdapter {
     async fn start(&self) -> Result<(), GatewayError> {
         info!(
-            bot_id = %self.inner.config.bot_id,
-            secret = %describe_secret(&self.inner.config.secret),
+            bot_id = %redact_identifier(&self.inner.config.bot_id),
             ws = %self.inner.config.websocket_url,
             "WeCom AI Bot adapter starting"
         );
