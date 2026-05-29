@@ -14,7 +14,7 @@ pub mod openviking;
 pub mod retaindb;
 pub mod supermemory;
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::memory_manager::{MemoryManager, MemoryProviderPlugin};
 
@@ -66,63 +66,84 @@ fn sort_by_preferred_order(
 /// Checks each provider's `is_available()` without making network calls.
 /// Returns them in priority order (API-first, then CLI/local).
 pub fn discover_available_providers() -> Vec<Arc<dyn MemoryProviderPlugin>> {
+    static AVAILABLE_PROVIDER_IDS: OnceLock<Vec<String>> = OnceLock::new();
+    let ids = AVAILABLE_PROVIDER_IDS.get_or_init(discover_available_provider_ids);
     let mut providers: Vec<Arc<dyn MemoryProviderPlugin>> = Vec::new();
+    for id in ids {
+        match id.as_str() {
+            "honcho" => providers.push(Arc::new(honcho::HonchoMemoryPlugin::new())),
+            "contextlattice" => providers.push(Arc::new(contextlattice::ContextLatticeMemoryPlugin::new())),
+            "hindsight" => providers.push(Arc::new(hindsight::HindsightPlugin::new())),
+            "retaindb" => providers.push(Arc::new(retaindb::RetainDbMemoryPlugin::new())),
+            "openviking" => providers.push(Arc::new(openviking::OpenVikingMemoryPlugin::new())),
+            "byterover" => providers.push(Arc::new(byterover::ByteRoverPlugin::new())),
+            "mem0" => providers.push(Arc::new(mem0::Mem0MemoryPlugin::new())),
+            "supermemory" => providers.push(Arc::new(supermemory::SupermemoryMemoryPlugin::new())),
+            "holographic" => providers.push(Arc::new(holographic::HolographicMemoryPlugin::new())),
+            _ => {}
+        }
+    }
+    sort_by_preferred_order(providers)
+}
+
+fn discover_available_provider_ids() -> Vec<String> {
+    let mut names = Vec::new();
 
     let honcho = honcho::HonchoMemoryPlugin::new();
     if honcho.is_available() {
         tracing::info!("Discovered memory provider: honcho");
-        providers.push(Arc::new(honcho));
+        names.push("honcho".to_string());
     }
 
     let contextlattice = contextlattice::ContextLatticeMemoryPlugin::new();
     if contextlattice.is_available() {
         tracing::info!("Discovered memory provider: contextlattice");
-        providers.push(Arc::new(contextlattice));
+        names.push("contextlattice".to_string());
     }
 
     let hindsight = hindsight::HindsightPlugin::new();
     if hindsight.is_available() {
         tracing::info!("Discovered memory provider: hindsight");
-        providers.push(Arc::new(hindsight));
+        names.push("hindsight".to_string());
     }
 
     let retaindb = retaindb::RetainDbMemoryPlugin::new();
     if retaindb.is_available() {
         tracing::info!("Discovered memory provider: retaindb");
-        providers.push(Arc::new(retaindb));
+        names.push("retaindb".to_string());
     }
 
     let openviking = openviking::OpenVikingMemoryPlugin::new();
     if openviking.is_available() {
         tracing::info!("Discovered memory provider: openviking");
-        providers.push(Arc::new(openviking));
+        names.push("openviking".to_string());
     }
 
     let brv = byterover::ByteRoverPlugin::new();
     if brv.is_available() {
         tracing::info!("Discovered memory provider: byterover");
-        providers.push(Arc::new(brv));
+        names.push("byterover".to_string());
     }
 
     let mem0 = mem0::Mem0MemoryPlugin::new();
     if mem0.is_available() {
         tracing::info!("Discovered memory provider: mem0");
-        providers.push(Arc::new(mem0));
+        names.push("mem0".to_string());
     }
 
     let sm = supermemory::SupermemoryMemoryPlugin::new();
     if sm.is_available() {
         tracing::info!("Discovered memory provider: supermemory");
-        providers.push(Arc::new(sm));
+        names.push("supermemory".to_string());
     }
 
     let holo = holographic::HolographicMemoryPlugin::new();
     if holo.is_available() {
         tracing::info!("Discovered memory provider: holographic");
-        providers.push(Arc::new(holo));
+        names.push("holographic".to_string());
     }
 
-    sort_by_preferred_order(providers)
+    names
 }
 
 /// Auto-register the first available external memory provider into the
