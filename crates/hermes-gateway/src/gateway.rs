@@ -1895,6 +1895,19 @@ impl Gateway {
             let visible_emitted = first_visible_emitted.clone();
             let visible_ms = first_visible_chunk_ms.clone();
             let visible_start = stream_visible_start;
+            #[cfg(feature = "discord")]
+            let discord_progressive_edit_gate = if incoming.platform == "discord" {
+                Some(Arc::new(TokioMutex::new(
+                    Instant::now()
+                        - Duration::from_millis(
+                            crate::platforms::discord::stream_finalize::DISCORD_PROGRESSIVE_EDIT_MIN_MS,
+                        ),
+                )))
+            } else {
+                None
+            };
+            #[cfg(not(feature = "discord"))]
+            let discord_progressive_edit_gate: Option<Arc<TokioMutex<Instant>>> = None;
 
             Arc::new(move |chunk: String| {
                 if !chunk.trim().is_empty() && !visible_emitted.swap(true, Ordering::AcqRel) {
@@ -1910,6 +1923,8 @@ impl Gateway {
                 let adapters = gateway_adapters.clone();
                 let edit_lock = edit_lock.clone();
                 let finalized = finalized_flag.clone();
+                #[cfg(feature = "discord")]
+                let discord_progressive_edit_gate = discord_progressive_edit_gate.clone();
 
                 tokio::spawn(async move {
                     let Some(should_flush) = sm.update_stream(&sid, &chunk).await else {
@@ -1922,6 +1937,19 @@ impl Gateway {
                     if finalized.load(Ordering::Acquire) {
                         return;
                     }
+                    #[cfg(feature = "discord")]
+                    if platform == "discord" {
+                        if let Some(gate) = discord_progressive_edit_gate.as_ref() {
+                            let last = *gate.lock().await;
+                            if last.elapsed()
+                                < Duration::from_millis(
+                                    crate::platforms::discord::stream_finalize::DISCORD_PROGRESSIVE_EDIT_MIN_MS,
+                                )
+                            {
+                                return;
+                            }
+                        }
+                    }
                     let Some(content) = sm.get_stream_content(&sid).await else {
                         return;
                     };
@@ -1932,10 +1960,17 @@ impl Gateway {
                         return;
                     };
                     if let Some(message_id) = sm.get_message_id(&sid).await {
-                        if let Err(err) = adapter
+                        let edit_result = adapter
                             .edit_message(&chat_id, &message_id, &content)
-                            .await
-                        {
+                            .await;
+                        if edit_result.is_ok() {
+                            #[cfg(feature = "discord")]
+                            if platform == "discord" {
+                                if let Some(gate) = discord_progressive_edit_gate.as_ref() {
+                                    *gate.lock().await = Instant::now();
+                                }
+                            }
+                        } else if let Err(err) = edit_result {
                             warn!(
                                 platform = %platform,
                                 chat_id = %chat_id,
@@ -2090,29 +2125,49 @@ impl Gateway {
                 #[cfg(not(feature = "discord"))]
                 let chunks = vec![trimmed.to_string()];
 
-                if let Some(message_id) = anchor_message_id {
-                    if let Some(adapter) = self.get_adapter(&incoming.platform).await {
-                        if let Some(first) = chunks.first() {
-                            if let Err(err) = adapter
-                                .edit_message(&incoming.chat_id, &message_id, first)
-                                .await
-                            {
-                                warn!(
-                                    platform = %incoming.platform,
-                                    chat_id = %incoming.chat_id,
-                                    message_id = %message_id,
-                                    error = %err,
-                                    "streaming final edit failed; sending full reply"
-                                );
+                if let Some(adapter) = self.get_adapter(&incoming.platform).await {
+                    #[cfg(feature = "discord")]
+                    {
+                        crate::platforms::discord::stream_finalize::deliver_legacy_stream_final(
+                            adapter.as_ref(),
+                            &incoming.platform,
+                            &incoming.chat_id,
+                            anchor_message_id.as_deref(),
+                            &chunks,
+                        )
+                        .await?;
+                    }
+                    #[cfg(not(feature = "discord"))]
+                    {
+                        if let Some(message_id) = anchor_message_id.as_deref() {
+                            if let Some(first) = chunks.first() {
+                                if let Err(err) = adapter
+                                    .edit_message(&incoming.chat_id, message_id, first)
+                                    .await
+                                {
+                                    warn!(
+                                        platform = %incoming.platform,
+                                        chat_id = %incoming.chat_id,
+                                        message_id = %message_id,
+                                        error = %err,
+                                        "streaming final edit failed; sending full reply"
+                                    );
+                                    adapter
+                                        .send_message(&incoming.chat_id, first, None)
+                                        .await?;
+                                }
+                            }
+                            for chunk in chunks.iter().skip(1) {
                                 adapter
-                                    .send_message(&incoming.chat_id, first, None)
+                                    .send_message(&incoming.chat_id, chunk, None)
                                     .await?;
                             }
-                        }
-                        for chunk in chunks.iter().skip(1) {
-                            adapter
-                                .send_message(&incoming.chat_id, chunk, None)
-                                .await?;
+                        } else {
+                            for chunk in &chunks {
+                                adapter
+                                    .send_message(&incoming.chat_id, chunk, None)
+                                    .await?;
+                            }
                         }
                     }
                 } else {

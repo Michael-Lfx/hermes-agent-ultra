@@ -16,24 +16,65 @@ pub fn auth_header(token: &str) -> String {
     format!("Bot {token}")
 }
 
-pub fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
+pub fn char_count(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// First `max_chars` Unicode scalars of `text` (Discord counts characters, not bytes).
+pub fn truncate_to_char_limit(text: &str, max_chars: usize) -> String {
+    if char_count(text) <= max_chars {
+        return text.to_string();
+    }
+    text.chars().take(max_chars).collect()
+}
+
+pub fn split_message(text: &str, max_chars: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    if char_count(text) <= max_chars {
         return vec![text.to_string()];
     }
     let mut chunks = Vec::new();
-    let mut start = 0;
-    while start < text.len() {
-        let end = (start + max_len).min(text.len());
-        if end >= text.len() {
-            chunks.push(text[start..].to_string());
+    let mut rest = text;
+    while !rest.is_empty() {
+        if char_count(rest) <= max_chars {
+            chunks.push(rest.to_string());
             break;
         }
-        let break_at = text[start..end]
+
+        let mut end_byte = 0;
+        let mut count = 0;
+        for (byte_idx, ch) in rest.char_indices() {
+            count += 1;
+            end_byte = byte_idx + ch.len_utf8();
+            if count >= max_chars {
+                break;
+            }
+        }
+
+        if end_byte >= rest.len() {
+            chunks.push(rest.to_string());
+            break;
+        }
+
+        let break_at = rest[..end_byte]
             .rfind('\n')
-            .map(|pos| start + pos + 1)
-            .unwrap_or(end);
-        chunks.push(text[start..break_at].to_string());
-        start = break_at;
+            .map(|pos| pos + 1)
+            .filter(|&pos| pos > 0)
+            .unwrap_or(end_byte);
+
+        chunks.push(rest[..break_at].to_string());
+        rest = &rest[break_at..];
+        if break_at == 0 {
+            let ch_len = rest
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+            chunks.push(rest[..ch_len.min(rest.len())].to_string());
+            rest = &rest[ch_len.min(rest.len())..];
+        }
     }
     chunks
 }
@@ -187,7 +228,7 @@ impl DiscordInner {
             self.rest_api()
         );
         let body = serde_json::json!({
-            "content": &content[..content.len().min(MAX_MESSAGE_LENGTH)],
+            "content": truncate_to_char_limit(content, MAX_MESSAGE_LENGTH),
             "allowed_mentions": self.config.allowed_mentions.to_api_value(),
         });
         let resp = self
@@ -202,6 +243,31 @@ impl DiscordInner {
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(GatewayError::SendFailed(format!("Discord edit API error: {text}")));
+        }
+        Ok(())
+    }
+
+    pub async fn delete_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<(), GatewayError> {
+        let url = format!(
+            "{}/channels/{channel_id}/messages/{message_id}",
+            self.rest_api()
+        );
+        let resp = self
+            .client
+            .delete(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| GatewayError::SendFailed(format!("Discord delete failed: {e}")))?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(GatewayError::SendFailed(format!(
+                "Discord delete API error: {text}"
+            )));
         }
         Ok(())
     }
@@ -540,7 +606,7 @@ impl DiscordInner {
             self.rest_api()
         );
         let mut data = serde_json::json!({
-            "content": &content[..content.len().min(MAX_MESSAGE_LENGTH)],
+            "content": truncate_to_char_limit(content, MAX_MESSAGE_LENGTH),
         });
         if ephemeral {
             data["flags"] = serde_json::json!(INTERACTION_FLAG_EPHEMERAL);
@@ -580,7 +646,7 @@ impl DiscordInner {
             self.rest_api()
         );
         let body = serde_json::json!({
-            "content": &content[..content.len().min(MAX_MESSAGE_LENGTH)],
+            "content": truncate_to_char_limit(content, MAX_MESSAGE_LENGTH),
         });
         let resp = self
             .client
@@ -612,7 +678,7 @@ impl DiscordInner {
             self.rest_api()
         );
         let body = serde_json::json!({
-            "content": &content[..content.len().min(MAX_MESSAGE_LENGTH)],
+            "content": truncate_to_char_limit(content, MAX_MESSAGE_LENGTH),
         });
         let resp = self
             .client
@@ -869,8 +935,25 @@ mod tests {
         let text = "a".repeat(3000);
         let chunks = split_message(&text, 2000);
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].len(), 2000);
-        assert_eq!(chunks[1].len(), 1000);
+        assert_eq!(char_count(&chunks[0]), 2000);
+        assert_eq!(char_count(&chunks[1]), 1000);
+    }
+
+    #[test]
+    fn split_message_chinese_does_not_panic_at_char_boundary() {
+        let text = "好".repeat(2500);
+        let chunks = split_message(&text, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(char_count(&chunks[0]), 2000);
+        assert_eq!(char_count(&chunks[1]), 500);
+        assert!(chunks.join("").chars().eq(text.chars()));
+    }
+
+    #[test]
+    fn truncate_to_char_limit_chinese() {
+        let text = "雨夜来客".repeat(600);
+        let truncated = truncate_to_char_limit(&text, 2000);
+        assert_eq!(char_count(&truncated), 2000);
     }
 
     #[test]

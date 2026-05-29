@@ -13,6 +13,7 @@ mod parse;
 mod rest;
 mod session;
 pub mod slash;
+pub mod stream_finalize;
 mod text_batch;
 mod threads;
 mod types;
@@ -187,6 +188,14 @@ impl DiscordAdapter {
         content: &str,
     ) -> Result<(), GatewayError> {
         self.inner.edit_text(channel_id, message_id, content).await
+    }
+
+    pub async fn delete_message(
+        &self,
+        channel_id: &str,
+        message_id: &str,
+    ) -> Result<(), GatewayError> {
+        self.inner.delete_message(channel_id, message_id).await
     }
 
     pub async fn send_embed(
@@ -392,6 +401,14 @@ impl PlatformAdapter for DiscordAdapter {
     ) -> Result<(), GatewayError> {
         let formatted = Self::format_outbound(text, None);
         self.edit_text(chat_id, message_id, &formatted).await
+    }
+
+    async fn delete_message(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+    ) -> Result<(), GatewayError> {
+        self.inner.delete_message(chat_id, message_id).await
     }
 
     async fn send_file(

@@ -118,6 +118,18 @@ pub trait PlatformAdapter: Send + Sync {
         text: &str,
     ) -> Result<(), GatewayError>;
 
+    /// Delete an existing message when the platform supports it.
+    async fn delete_message(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+    ) -> Result<(), GatewayError> {
+        let _ = (chat_id, message_id);
+        Err(GatewayError::Platform(
+            "message delete not supported on this platform".into(),
+        ))
+    }
+
     /// Send a file to a chat with an optional caption.
     async fn send_file(
         &self,

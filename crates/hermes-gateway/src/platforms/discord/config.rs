@@ -81,7 +81,7 @@ impl CommandSyncPolicy {
     }
 }
 
-/// Maximum message length for Discord (2000 characters).
+/// Maximum message length for Discord (2000 Unicode characters).
 pub const MAX_MESSAGE_LENGTH: usize = 2000;
 
 /// Discord API base URL.
