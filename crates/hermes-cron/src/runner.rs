@@ -66,6 +66,8 @@ const DEFAULT_SCRIPT_TIMEOUT_SECS: u64 = 120;
 const MAX_SCRIPT_OUTPUT_CHARS: usize = 64_000;
 static PROFILE_ID_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9_-]{0,63}$").expect("valid regex"));
+static ENV_VAR_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("valid regex"));
 const CRON_HARD_DISABLED_TOOLSETS: &[&str] = &["cronjob", "messaging", "clarify"];
 const CRON_DEFAULT_OFF_TOOLSETS: &[&str] = &[
     "moa",
@@ -277,6 +279,8 @@ struct CronToolPolicy {
     disabled_toolsets: Vec<String>,
     known_plugin_toolsets: Vec<String>,
     enabled_mcp_servers: Vec<String>,
+    default_model: Option<String>,
+    fallback_models: Vec<String>,
 }
 
 fn parse_yaml_string_list(raw: Option<&YamlValue>) -> Option<Vec<String>> {
@@ -291,6 +295,27 @@ fn parse_yaml_string_list(raw: Option<&YamlValue>) -> Option<Vec<String>> {
         }
     }
     Some(out)
+}
+
+fn expand_env_refs(value: &str) -> String {
+    ENV_VAR_REF_RE
+        .replace_all(value, |caps: &regex::Captures| {
+            std::env::var(&caps[1]).unwrap_or_default()
+        })
+        .to_string()
+}
+
+fn parse_yaml_string(raw: Option<&YamlValue>) -> Option<String> {
+    let s = raw?.as_str()?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let expanded = expand_env_refs(s).trim().to_string();
+    if expanded.is_empty() {
+        None
+    } else {
+        Some(expanded)
+    }
 }
 
 fn parse_yaml_bool_like(raw: Option<&YamlValue>, default: bool) -> bool {
@@ -315,6 +340,45 @@ fn parse_yaml_bool_like(raw: Option<&YamlValue>, default: bool) -> bool {
     default
 }
 
+fn parse_fallback_model_entry(raw: &YamlValue) -> Option<String> {
+    if let Some(s) = parse_yaml_string(Some(raw)) {
+        return Some(s);
+    }
+    let model = yaml_get(raw, "model").and_then(|v| parse_yaml_string(Some(v)))?;
+    let provider = yaml_get(raw, "provider").and_then(|v| parse_yaml_string(Some(v)));
+    match provider {
+        Some(p) if !model.contains(':') => Some(format!("{p}:{model}")),
+        _ => Some(model),
+    }
+}
+
+fn parse_fallback_models(doc: &YamlValue) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push_unique = |candidate: Option<String>| {
+        let Some(v) = candidate else {
+            return;
+        };
+        if !out.iter().any(|e| e.eq_ignore_ascii_case(&v)) {
+            out.push(v);
+        }
+    };
+
+    if let Some(items) = yaml_get(doc, "fallback_providers").and_then(|v| v.as_sequence()) {
+        for item in items {
+            push_unique(parse_fallback_model_entry(item));
+        }
+    } else if let Some(raw) = yaml_get(doc, "fallback_model") {
+        if let Some(seq) = raw.as_sequence() {
+            for item in seq {
+                push_unique(parse_fallback_model_entry(item));
+            }
+        } else {
+            push_unique(parse_fallback_model_entry(raw));
+        }
+    }
+    out
+}
+
 fn load_cron_tool_policy() -> CronToolPolicy {
     let mut policy = CronToolPolicy::default();
     let cfg_path = default_hermes_home().join("config.yaml");
@@ -328,6 +392,11 @@ fn load_cron_tool_policy() -> CronToolPolicy {
         .and_then(|pt| yaml_get(pt, "cron"))
         .and_then(|v| parse_yaml_string_list(Some(v)))
         .filter(|v| !v.is_empty());
+    policy.default_model = match yaml_get(&doc, "model") {
+        Some(model) if model.is_mapping() => yaml_get(model, "default").and_then(|v| parse_yaml_string(Some(v))),
+        Some(model) => parse_yaml_string(Some(model)),
+        None => None,
+    };
     policy.disabled_toolsets = yaml_get(&doc, "agent")
         .and_then(|a| yaml_get(a, "disabled_toolsets"))
         .and_then(|v| parse_yaml_string_list(Some(v)))
@@ -353,6 +422,7 @@ fn load_cron_tool_policy() -> CronToolPolicy {
         }
         policy.enabled_mcp_servers = out;
     }
+    policy.fallback_models = parse_fallback_models(&doc);
     policy
 }
 
@@ -590,6 +660,7 @@ impl CronRunner {
         }
         let profile_home = resolve_profile_home(job.profile.as_deref())?;
         let _scope = self.apply_runtime_scope(job, profile_home.as_deref())?;
+        let policy = load_cron_tool_policy();
 
         if job.no_agent {
             let result = self.run_script_only_job(job).await?;
@@ -628,6 +699,28 @@ impl CronRunner {
                     config.runtime_providers.insert(provider.clone(), rp);
                 }
             }
+        }
+        if job
+            .model
+            .as_ref()
+            .and_then(|m| m.model.as_ref())
+            .map(|m| m.trim().is_empty())
+            .unwrap_or(true)
+        {
+            if let Ok(env_model) = std::env::var("HERMES_MODEL") {
+                let trimmed = env_model.trim();
+                if !trimmed.is_empty() {
+                    config.model = trimmed.to_string();
+                } else if let Some(default_model) = policy.default_model.as_ref() {
+                    config.model = default_model.clone();
+                }
+            } else if let Some(default_model) = policy.default_model.as_ref() {
+                config.model = default_model.clone();
+            }
+        }
+        if !policy.fallback_models.is_empty() {
+            config.retry.fallback_models = policy.fallback_models.clone();
+            config.retry.fallback_model = policy.fallback_models.first().cloned();
         }
         // System prompt includes safety notice that cron tools are unavailable
         config.system_prompt = Some(format!(
@@ -1201,6 +1294,44 @@ mcp_servers:
                 let schemas = runner.filtered_tool_schemas(&job);
                 let names: Vec<&str> = schemas.iter().map(|s| s.name.as_str()).collect();
                 assert!(!names.contains(&"github__mcp_tool"));
+            },
+        );
+    }
+
+    #[test]
+    fn test_load_cron_tool_policy_reads_model_default_and_fallback_chain() {
+        let prior_fb = std::env::var("CRON_FB_MODEL").ok();
+        with_temp_hermes_home_config(
+            r#"
+model:
+  default: kimi-k2-0711-preview
+fallback_providers:
+  - provider: openrouter
+    model: ${CRON_FB_MODEL}
+  - provider: anthropic
+    model: claude-3-5-haiku-latest
+"#,
+            || {
+                unsafe {
+                    std::env::set_var("CRON_FB_MODEL", "anthropic/claude-sonnet-4");
+                }
+                let policy = load_cron_tool_policy();
+                assert_eq!(policy.default_model.as_deref(), Some("kimi-k2-0711-preview"));
+                assert_eq!(policy.fallback_models.len(), 2);
+                assert_eq!(
+                    policy.fallback_models.first().map(String::as_str),
+                    Some("openrouter:anthropic/claude-sonnet-4")
+                );
+                assert_eq!(
+                    policy.fallback_models.get(1).map(String::as_str),
+                    Some("anthropic:claude-3-5-haiku-latest")
+                );
+                unsafe {
+                    match prior_fb.as_ref() {
+                        Some(v) => std::env::set_var("CRON_FB_MODEL", v),
+                        None => std::env::remove_var("CRON_FB_MODEL"),
+                    }
+                }
             },
         );
     }
