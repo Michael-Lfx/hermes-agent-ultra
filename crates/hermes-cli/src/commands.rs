@@ -23488,44 +23488,27 @@ async fn whatsapp_qr() -> Result<(), hermes_core::AgentError> {
 }
 
 /// Render QR data as Unicode block art in the terminal.
-///
-/// Uses a simple bit-encoding approach: each character in the input
-/// string controls whether a "module" is dark or light. Two rows are
-/// packed into one terminal line using half-block characters.
 fn render_qr_to_terminal(data: &str) {
-    // Determine a square side length from the data
-    let len = data.len();
-    let side = (len as f64).sqrt().ceil() as usize;
-    if side == 0 {
-        println!("(empty QR data)");
-        return;
-    }
-
-    let bytes = data.as_bytes();
-
-    // Dark module = odd byte value, light = even (simple heuristic)
-    let is_dark = |row: usize, col: usize| -> bool {
-        let idx = row * side + col;
-        if idx < bytes.len() {
-            bytes[idx] % 2 == 1
-        } else {
-            false
+    let code = match qrcode::QrCode::new(data.as_bytes()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("QR 码生成失败: {}", e);
+            return;
         }
     };
-
-    // Print using half-block characters: each terminal row encodes two QR rows.
-    // ▀ = top dark, bottom light | ▄ = top light, bottom dark
-    // █ = both dark              | ' ' = both light
-    let mut row = 0;
-    while row < side {
+    let side = code.width() as usize;
+    let modules = code.to_colors();
+    let padded = side + 8;
+    let is_dark = |r: usize, c: usize| modules[r * side + c] == qrcode::Color::Dark;
+    let mut row = 0usize;
+    while row < padded {
         let mut line = String::new();
-        for col in 0..side {
-            let top = is_dark(row, col);
-            let bottom = if row + 1 < side {
-                is_dark(row + 1, col)
-            } else {
-                false
-            };
+        for col in 0..padded {
+            let qr_row = row.wrapping_sub(4);
+            let qr_col = col.wrapping_sub(4);
+            let top = qr_row < side && qr_col < side && is_dark(qr_row, qr_col);
+            let qr_row2 = (row + 1).wrapping_sub(4);
+            let bottom = qr_row2 < side && qr_col < side && is_dark(qr_row2, qr_col);
             line.push(match (top, bottom) {
                 (true, true) => '█',
                 (true, false) => '▀',

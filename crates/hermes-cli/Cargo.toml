@@ -94,6 +94,7 @@ arboard = "3.6"
 rustls = { version = "0.23", features = ["aws-lc-rs"] }
 unicode-width = "0.2"
 keepawake = "0.6"
+qrcode = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Power"] }

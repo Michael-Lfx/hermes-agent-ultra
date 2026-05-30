@@ -6092,6 +6092,142 @@ fn weixin_login_endpoints_from_disk(disk: &hermes_config::GatewayConfig) -> (Str
     (start_ep, poll_ep)
 }
 
+// ── WeCom QR login helpers ──
+
+#[derive(serde::Deserialize)]
+struct WeComQRGenerateResponse {
+    #[serde(default)]
+    errcode: i32,
+    #[serde(default)]
+    errmsg: String,
+    data: Option<WeComQRData>,
+}
+
+#[derive(serde::Deserialize)]
+struct WeComQRData {
+    #[serde(default)]
+    scode: String,
+    #[serde(default)]
+    auth_url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct WeComQRQueryResponse {
+    #[serde(default)]
+    errcode: i32,
+    #[serde(default)]
+    errmsg: String,
+    data: Option<WeComQRQueryData>,
+}
+
+#[derive(serde::Deserialize)]
+struct WeComQRQueryData {
+    #[serde(default)]
+    status: String,
+    bot_info: Option<WeComBotInfo>,
+}
+
+#[derive(serde::Deserialize)]
+struct WeComBotInfo {
+    #[serde(default)]
+    botid: String,
+    #[serde(default)]
+    secret: String,
+}
+
+async fn wecom_qr_login_flow() -> Result<(String, String), AgentError> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AgentError::Config(format!("build client: {}", e)))?;
+
+    let resp: WeComQRGenerateResponse = client
+        .get("https://work.weixin.qq.com/ai/qc/generate")
+        .query(&[("source", "hermes"), ("plat", "1")])
+        .send()
+        .await
+        .map_err(|e| AgentError::Config(format!("wecom qr generate request: {}", e)))?
+        .json()
+        .await
+        .map_err(|e| AgentError::Config(format!("wecom qr generate parse: {}", e)))?;
+
+    if resp.errcode != 0 {
+        return Err(AgentError::Config(format!(
+            "WeCom QR API error {}: {}",
+            resp.errcode, resp.errmsg
+        )));
+    }
+    let data = resp.data.ok_or_else(|| {
+        AgentError::Config("WeCom QR response missing data".to_string())
+    })?;
+    if data.auth_url.is_empty() {
+        return Err(AgentError::Config("WeCom QR response has empty auth_url".to_string()));
+    }
+
+    println!();
+    println!("{}", data.auth_url);
+    render_qr_to_terminal(&data.auth_url);
+    println!();
+    println!("请使用企业微信扫描二维码，创建新的机器人。");
+    println!("扫描后等待确认...");
+
+    let poll_interval = std::time::Duration::from_secs(2);
+    let timeout = std::time::Duration::from_secs(300);
+    let started = std::time::Instant::now();
+
+    loop {
+        if started.elapsed() >= timeout {
+            return Err(AgentError::Config(
+                "WeCom QR login timed out after 300s".to_string(),
+            ));
+        }
+        tokio::time::sleep(poll_interval).await;
+
+        let poll_resp: WeComQRQueryResponse = client
+            .get("https://work.weixin.qq.com/ai/qc/query_result")
+            .query(&[("scode", &data.scode)])
+            .send()
+            .await
+            .map_err(|e| AgentError::Config(format!("wecom qr poll request: {}", e)))?
+            .json()
+            .await
+            .map_err(|e| AgentError::Config(format!("wecom qr poll parse: {}", e)))?;
+
+        if poll_resp.errcode != 0 {
+            return Err(AgentError::Config(format!(
+                "WeCom QR poll error {}: {}",
+                poll_resp.errcode, poll_resp.errmsg
+            )));
+        }
+        let poll_data = match poll_resp.data {
+            Some(d) => d,
+            None => continue,
+        };
+
+        match poll_data.status.as_str() {
+            "success" => {
+                if let Some(info) = poll_data.bot_info {
+                    println!("WeCom 机器人创建成功！bot_id: {}", info.botid);
+                    return Ok((info.botid, info.secret));
+                }
+                return Err(AgentError::Config(
+                    "WeCom QR confirmed but missing bot_info".to_string(),
+                ));
+            }
+            "waiting" | "scanning" => continue,
+            "expired" => {
+                return Err(AgentError::Config(
+                    "WeCom QR code expired, please try again".to_string(),
+                ));
+            }
+            other => {
+                println!("WeCom QR status: {} (等待中...)", other);
+                continue;
+            }
+        }
+    }
+}
+
 fn weixin_extract_string(v: &serde_json::Value, keys: &[&str]) -> Option<String> {
     for key in keys {
         if let Some(s) = v.get(*key).and_then(|x| x.as_str()) {
@@ -6105,31 +6241,26 @@ fn weixin_extract_string(v: &serde_json::Value, keys: &[&str]) -> Option<String>
 }
 
 fn render_qr_to_terminal(data: &str) {
-    let len = data.len();
-    let side = (len as f64).sqrt().ceil() as usize;
-    if side == 0 {
-        println!("(empty QR data)");
-        return;
-    }
-    let bytes = data.as_bytes();
-    let is_dark = |row: usize, col: usize| -> bool {
-        let idx = row * side + col;
-        if idx < bytes.len() {
-            bytes[idx] % 2 == 1
-        } else {
-            false
+    let code = match qrcode::QrCode::new(data.as_bytes()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("QR 码生成失败: {}", e);
+            return;
         }
     };
-    let mut row = 0;
-    while row < side {
+    let side = code.width() as usize;
+    let modules = code.to_colors();
+    let padded = side + 8;
+    let is_dark = |r: usize, c: usize| modules[r * side + c] == qrcode::Color::Dark;
+    let mut row = 0usize;
+    while row < padded {
         let mut line = String::new();
-        for col in 0..side {
-            let top = is_dark(row, col);
-            let bottom = if row + 1 < side {
-                is_dark(row + 1, col)
-            } else {
-                false
-            };
+        for col in 0..padded {
+            let qr_row = row.wrapping_sub(4);
+            let qr_col = col.wrapping_sub(4);
+            let top = qr_row < side && qr_col < side && is_dark(qr_row, qr_col);
+            let qr_row2 = (row + 1).wrapping_sub(4);
+            let bottom = qr_row2 < side && qr_col < side && is_dark(qr_row2, qr_col);
             line.push(match (top, bottom) {
                 (true, true) => '█',
                 (true, false) => '▀',
@@ -7545,6 +7676,89 @@ async fn run_auth(
                     .map_err(|e| AgentError::Config(e.to_string()))?;
                 println!(
                     "Weixin: account_id/token saved and platform enabled in {}",
+                    cfg_path.display()
+                );
+                return Ok(());
+            }
+            if provider == "wecom" {
+                let cfg_path = hermes_state_root(&cli).join("config.yaml");
+                let mut disk = load_user_config_file(&cfg_path)
+                    .map_err(|e| AgentError::Config(e.to_string()))?;
+                let qr_preferred = qr
+                    || std::env::var("HERMES_WECOM_QR_LOGIN")
+                        .ok()
+                        .map(|v| is_truthy(&v))
+                        .unwrap_or(false);
+                if qr_preferred {
+                    match wecom_qr_login_flow().await {
+                        Ok((bot_id, secret)) => {
+                            let wc = disk
+                                .platforms
+                                .entry("wecom".to_string())
+                                .or_insert_with(PlatformConfig::default);
+                            wc.enabled = true;
+                            wc.extra.insert(
+                                "bot_id".to_string(),
+                                serde_json::Value::String(bot_id.clone()),
+                            );
+                            wc.extra.insert(
+                                "secret".to_string(),
+                                serde_json::Value::String(secret.clone()),
+                            );
+                            wc.extra.insert(
+                                "websocket_url".to_string(),
+                                serde_json::Value::String(
+                                    "wss://openws.work.weixin.qq.com".to_string(),
+                                ),
+                            );
+                            validate_config(&disk)
+                                .map_err(|e| AgentError::Config(e.to_string()))?;
+                            save_config_yaml(&cfg_path, &disk)
+                                .map_err(|e| AgentError::Config(e.to_string()))?;
+                            println!(
+                                "WeCom: bot_id/secret saved and platform enabled in {}",
+                                cfg_path.display()
+                            );
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            println!(
+                                "WeCom QR 登录失败，将回退到手动输入: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+                let wc = disk
+                    .platforms
+                    .entry("wecom".to_string())
+                    .or_insert_with(PlatformConfig::default);
+                wc.enabled = true;
+                let bot_id = prompt_line("WeCom AI Bot bot_id (WECOM_BOT_ID): ").await?;
+                wc.extra.insert(
+                    "bot_id".to_string(),
+                    serde_json::Value::String(bot_id),
+                );
+                let secret = prompt_line("WeCom AI Bot secret (WECOM_SECRET): ").await?;
+                wc.extra.insert(
+                    "secret".to_string(),
+                    serde_json::Value::String(secret),
+                );
+                let ws = prompt_line(
+                    "WeCom websocket_url (default wss://openws.work.weixin.qq.com): ",
+                )
+                .await?;
+                if !ws.trim().is_empty() {
+                    wc.extra.insert(
+                        "websocket_url".to_string(),
+                        serde_json::Value::String(ws.trim().to_string()),
+                    );
+                }
+                validate_config(&disk).map_err(|e| AgentError::Config(e.to_string()))?;
+                save_config_yaml(&cfg_path, &disk)
+                    .map_err(|e| AgentError::Config(e.to_string()))?;
+                println!(
+                    "WeCom: bot_id/secret saved and platform enabled in {}",
                     cfg_path.display()
                 );
                 return Ok(());
