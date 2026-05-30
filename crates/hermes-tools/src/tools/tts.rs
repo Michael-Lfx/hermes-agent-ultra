@@ -21,6 +21,8 @@ pub trait TtsBackend: Send + Sync {
         text: &str,
         voice: Option<&str>,
         provider: Option<&str>,
+        output_path: Option<&str>,
+        speed: Option<f64>,
     ) -> Result<String, ToolError>;
 }
 
@@ -49,8 +51,12 @@ impl ToolHandler for TextToSpeechHandler {
 
         let voice = params.get("voice").and_then(|v| v.as_str());
         let provider = params.get("provider").and_then(|v| v.as_str());
+        let output_path = params.get("output_path").and_then(|v| v.as_str());
+        let speed = params.get("speed").and_then(|v| v.as_f64());
 
-        self.backend.synthesize(text, voice, provider).await
+        self.backend
+            .synthesize(text, voice, provider, output_path, speed)
+            .await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -78,6 +84,20 @@ impl ToolHandler for TextToSpeechHandler {
                 "default": "openai"
             }),
         );
+        props.insert(
+            "output_path".into(),
+            json!({
+                "type": "string",
+                "description": "Optional output file path. Defaults to a temporary audio file."
+            }),
+        );
+        props.insert(
+            "speed".into(),
+            json!({
+                "type": "number",
+                "description": "Optional provider-specific speech speed multiplier."
+            }),
+        );
 
         tool_schema(
             "text_to_speech",
@@ -99,6 +119,8 @@ mod tests {
             text: &str,
             _voice: Option<&str>,
             _provider: Option<&str>,
+            _output_path: Option<&str>,
+            _speed: Option<f64>,
         ) -> Result<String, ToolError> {
             Ok(format!("Audio for: {}", text))
         }

@@ -1,48 +1,48 @@
 # Parity Matrix
 
-Generated: `2026-05-30T09:51:22.516485+00:00`
+Generated: `2026-05-30T10:26:04.996490+00:00`
 
 ## Scope
 
-- Local ref: `main` (`51096a1a8016770af8ece117d6ae92afec19e099`)
-- Upstream ref: `upstream/main` (`bcc83010006c7059ee4d0be63fe74afc74867625`)
+- Local ref: `main` (`4c993b1011827da6eb6059783b6e9a678f296c8a`)
+- Upstream ref: `upstream/main` (`61268ff7a9be93673361e433cbf2e775798a13ae`)
 - Merge base: `none (history divergence)`
 
 ## Summary
 
 | Metric | Value |
 | --- | ---: |
-| Commits behind local (`upstream` ancestry only) | 4403 |
-| Commits ahead local (`local` ancestry only) | 857 |
-| Upstream commits missing by patch-id (`git cherry local upstream`, `+`) | 4285 |
+| Commits behind local (`upstream` ancestry only) | 4466 |
+| Commits ahead local (`local` ancestry only) | 859 |
+| Upstream commits missing by patch-id (`git cherry local upstream`, `+`) | 4346 |
 | Upstream commits represented by patch-id (`git cherry local upstream`, `-`) | 2 |
-| Local commits unique by patch-id (`git cherry upstream local`, `+`) | 712 |
-| Files only in upstream tree | 1474 |
+| Local commits unique by patch-id (`git cherry upstream local`, `+`) | 713 |
+| Files only in upstream tree | 1484 |
 | Files only in local tree | 570 |
-| Shared files identical content | 1701 |
-| Shared files different content | 1018 |
-| Total files changed (`local` vs `upstream`) | 3062 |
-| Insertions (`local` vs `upstream`) | 740489 |
-| Deletions (`local` vs `upstream`) | 391368 |
+| Shared files identical content | 1691 |
+| Shared files different content | 1028 |
+| Total files changed (`local` vs `upstream`) | 3082 |
+| Insertions (`local` vs `upstream`) | 746550 |
+| Deletions (`local` vs `upstream`) | 392534 |
 
 ## Top 40 upstream-only buckets
 
 | Bucket | Files |
 | --- | ---: |
 | `website/i18n` | 332 |
-| `tests/hermes_cli` | 86 |
+| `tests/hermes_cli` | 90 |
 | `web/src` | 77 |
-| `tests/agent` | 53 |
-| `tests/gateway` | 40 |
+| `tests/agent` | 54 |
+| `tests/gateway` | 41 |
 | `gateway/platforms` | 39 |
 | `skills/creative` | 36 |
 | `tests/tools` | 34 |
 | `website/docs` | 34 |
 | `optional-skills/research` | 33 |
 | `tests/plugins` | 21 |
-| `tests/run_agent` | 19 |
+| `tests/run_agent` | 20 |
 | `ui-tui/src` | 19 |
-| `tests/cli` | 17 |
+| `tests/cli` | 18 |
 | `.github/workflows` | 15 |
 | `tests/docker` | 12 |
 | `agent/lsp` | 11 |
@@ -75,21 +75,21 @@ Generated: `2026-05-30T09:51:22.516485+00:00`
 | Bucket | Files |
 | --- | ---: |
 | `tests/gateway` | 172 |
-| `website/docs` | 138 |
-| `tests/tools` | 137 |
-| `tests/hermes_cli` | 126 |
+| `website/docs` | 139 |
+| `tests/tools` | 138 |
+| `tests/hermes_cli` | 127 |
+| `ui-tui/src` | 60 |
 | `tests/agent` | 58 |
-| `ui-tui/src` | 58 |
-| `tests/run_agent` | 56 |
+| `tests/run_agent` | 57 |
 | `tests/cli` | 29 |
 | `ui-tui/packages` | 18 |
-| `tests/plugins` | 16 |
+| `tests/plugins` | 17 |
 | `skills/creative` | 11 |
 | `tests/cron` | 11 |
 | `plugins/google_meet` | 9 |
+| `plugins/memory` | 9 |
 | `plugins/platforms` | 9 |
 | `tests/acp` | 8 |
-| `plugins/memory` | 7 |
 | `skills/productivity` | 7 |
 | `tests/skills` | 6 |
 | `plugins/model-providers` | 5 |
@@ -164,20 +164,20 @@ Generated: `2026-05-30T09:51:22.516485+00:00`
 
 | Workstream | Issue | Name | Upstream-only | Shared-different | Risk | Effort |
 | --- | ---: | --- | ---: | ---: | --- | --- |
-| `WS6` | #10 | Tests and CI parity | 320 | 683 | critical | XL |
-| `WS5` | #9 | UX parity | 493 | 231 | high | XL |
-| `WS8` | #12 | Compatibility and divergence policy | 392 | 12 | high | XL |
-| `WS3` | #7 | Tools and adapters parity | 114 | 53 | high | L |
-| `WS4` | #8 | Skills parity | 93 | 39 | medium | L |
+| `WS6` | #10 | Tests and CI parity | 329 | 687 | critical | XL |
+| `WS5` | #9 | UX parity | 493 | 234 | high | XL |
+| `WS8` | #12 | Compatibility and divergence policy | 393 | 12 | high | XL |
+| `WS3` | #7 | Tools and adapters parity | 114 | 55 | high | L |
+| `WS4` | #8 | Skills parity | 93 | 40 | medium | L |
 | `WS2` | #6 | Core runtime parity | 62 | 0 | critical | M |
 | `WS7` | #11 | Security/secrets/store/webhook parity | 0 | 0 | critical | S |
 
 ## Commit Mapping
 
-- Upstream missing by patch-id: `4285`
+- Upstream missing by patch-id: `4346`
 - Upstream represented by patch-id: `2`
-- Local unique by patch-id: `712`
-- Intentional divergence tracked items: `8` (covered files: `900`)
+- Local unique by patch-id: `713`
+- Intentional divergence tracked items: `8` (covered files: `904`)
 - Merge base is absent; patch-id mapping is used as primary commit equivalence signal.
 
 ## Intentional Divergence Registry
@@ -187,11 +187,11 @@ Generated: `2026-05-30T09:51:22.516485+00:00`
 | `ultra-contextlattice-memory-plugin` | approved | WS3 | 2 | Keep ContextLattice native memory plugin and provider discovery in the Rust agent runtime. |
 | `ultra-webhook-queue-backends` | approved | WS7 | 4 | Preserve webhook-driven sync queue worker architecture with sqlite, SQS, and Kafka support. |
 | `ultra-launchd-webhook-lifecycle` | approved | WS7 | 4 | Preserve launchd-based interactive dev lifecycle management for webhook listener and worker. |
-| `rust-skills-catalog-governance` | approved | WS4 | 146 | Track upstream skills and optional-skills catalogs via parity audits while keeping Rust runtime skill loading externalized (no direct Python skill-tree vendoring). |
+| `rust-skills-catalog-governance` | approved | WS4 | 147 | Track upstream skills and optional-skills catalogs via parity audits while keeping Rust runtime skill loading externalized (no direct Python skill-tree vendoring). |
 | `rust-gateway-platform-plugin-parity` | approved | WS3 | 5 | Keep platform adapter parity in the Rust gateway instead of vendoring upstream Python platform-plugin trees. |
 | `upstream-python-plugin-backend-drift-20260527` | temporary | WS3 | 10 | Track newly added upstream Python plugin/backend trees separately from surgical Rust issue-triage fixes. |
 | `upstream-s6-plan-doc-archive` | approved | WS7 | 1 | Do not import upstream implementation-plan archive documents unless they change local runtime or release behavior. |
-| `rust-cli-tui-primary-ux-surface` | approved | WS5 | 728 | Treat Rust CLI/TUI and gateway as primary UX surface; upstream web/ui-tui trees are tracked as intentional divergence unless explicitly ported. |
+| `rust-cli-tui-primary-ux-surface` | approved | WS5 | 731 | Treat Rust CLI/TUI and gateway as primary UX surface; upstream web/ui-tui trees are tracked as intentional divergence unless explicitly ported. |
 
 
 ## Notes

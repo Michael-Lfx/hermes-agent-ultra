@@ -46,6 +46,31 @@ fn audio_extension_format(path: &str) -> &'static str {
         .unwrap_or("wav")
 }
 
+pub(crate) fn transcription_response_format_for_model(model: &str) -> &'static str {
+    if model.trim().eq_ignore_ascii_case("whisper-1") {
+        "text"
+    } else {
+        "json"
+    }
+}
+
+pub(crate) fn parse_transcription_response(
+    body: &str,
+    response_format: &str,
+) -> Result<String, ToolError> {
+    if response_format.eq_ignore_ascii_case("text") {
+        return Ok(body.trim().to_string());
+    }
+    let json: Value = serde_json::from_str(body)
+        .map_err(|e| ToolError::ExecutionFailed(format!("Whisper JSON: {e}")))?;
+    Ok(json
+        .get("text")
+        .and_then(|t| t.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string())
+}
+
 /// Compose the (endpoint, bearer, transport_label) tuple for a Whisper
 /// request. Pure helper so it can be unit-tested without touching the
 /// network.
@@ -99,6 +124,18 @@ impl ToolHandler for TranscriptionHandler {
             .map_err(|e| ToolError::ExecutionFailed(format!("Cannot read audio file: {e}")))?;
 
         let fmt = audio_extension_format(path);
+        let model = params
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("whisper-1");
+        let response_format = params
+            .get("response_format")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| transcription_response_format_for_model(model));
         let client = reqwest::Client::new();
         let part = reqwest::multipart::Part::bytes(bytes)
             .file_name(format!("audio.{fmt}"))
@@ -107,7 +144,8 @@ impl ToolHandler for TranscriptionHandler {
 
         let form = reqwest::multipart::Form::new()
             .part("file", part)
-            .text("model", "whisper-1");
+            .text("model", model.to_string())
+            .text("response_format", response_format.to_string());
 
         let resp = client
             .post(&endpoint)
@@ -125,19 +163,17 @@ impl ToolHandler for TranscriptionHandler {
             )));
         }
 
-        let json: Value = resp
-            .json()
+        let body = resp
+            .text()
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Whisper JSON: {e}")))?;
-        let text = json
-            .get("text")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string();
+            .map_err(|e| ToolError::ExecutionFailed(format!("Whisper read body: {e}")))?;
+        let text = parse_transcription_response(&body, response_format)?;
 
         Ok(json!({
             "audio_path": path,
+            "model": model,
             "text": text,
+            "response_format": response_format,
             "transport": transport,
             "status": "transcribed",
         })
@@ -225,6 +261,27 @@ mod tests {
         assert_eq!(audio_extension_format("a.xyz"), "wav");
         assert_eq!(audio_extension_format("noext"), "wav");
         assert_eq!(audio_extension_format(""), "wav");
+    }
+
+    #[test]
+    fn response_format_matches_openai_audio_model_contract() {
+        assert_eq!(transcription_response_format_for_model("whisper-1"), "text");
+        assert_eq!(
+            transcription_response_format_for_model("gpt-4o-mini-transcribe"),
+            "json"
+        );
+    }
+
+    #[test]
+    fn parse_transcription_response_handles_text_and_json_shapes() {
+        assert_eq!(
+            parse_transcription_response("  hello from whisper\n", "text").unwrap(),
+            "hello from whisper"
+        );
+        assert_eq!(
+            parse_transcription_response(r#"{"text":"hello from gpt-4o"}"#, "json").unwrap(),
+            "hello from gpt-4o"
+        );
     }
 
     #[test]
