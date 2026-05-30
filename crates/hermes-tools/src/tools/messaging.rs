@@ -8,6 +8,29 @@ use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
 
 use std::sync::Arc;
 
+/// Platform identifiers accepted by the Rust gateway-backed messaging tool.
+pub const SUPPORTED_MESSAGING_PLATFORMS: &[&str] = &[
+    "telegram",
+    "discord",
+    "slack",
+    "whatsapp",
+    "signal",
+    "email",
+    "sms",
+    "matrix",
+    "mattermost",
+    "dingtalk",
+    "homeassistant",
+    "feishu",
+    "ntfy",
+    "qqbot",
+    "wecom",
+    "wecom_callback",
+    "webhook",
+    "weixin",
+    "bluebubbles",
+];
+
 // ---------------------------------------------------------------------------
 // MessagingBackend trait
 // ---------------------------------------------------------------------------
@@ -62,11 +85,14 @@ impl ToolHandler for SendMessageHandler {
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
-        props.insert("platform".into(), json!({
-            "type": "string",
-            "description": "Platform to send the message on (e.g. 'telegram', 'discord', 'slack')",
-            "enum": ["telegram", "discord", "slack", "whatsapp", "signal", "email", "sms"]
-        }));
+        props.insert(
+            "platform".into(),
+            json!({
+                "type": "string",
+                "description": "Platform to send the message on.",
+                "enum": SUPPORTED_MESSAGING_PLATFORMS
+            }),
+        );
         props.insert(
             "recipient".into(),
             json!({

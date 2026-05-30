@@ -1,22 +1,22 @@
 # Shared-Different Backlog
 
-Generated: `2026-05-30T17:41:19.343165+00:00`
+Generated: `2026-05-30T18:13:55.708786+00:00`
 
 ## Summary
 
 - Total shared-different paths: `1031`
 - Pending classification: `0`
-- Pending functional review: `645`
+- Pending functional review: `634`
 - Cleared non-runtime: `170`
-- Cleared intentional divergence: `216`
+- Cleared intentional divergence: `227`
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| `cleared_intentional_divergence` | 216 |
+| `cleared_intentional_divergence` | 227 |
 | `cleared_non_runtime` | 170 |
-| `pending_review` | 645 |
+| `pending_review` | 634 |
 
 ## Workstream Counts
 
@@ -39,7 +39,7 @@ Generated: `2026-05-30T17:41:19.343165+00:00`
 | --- | ---: |
 | `tests/gateway` | 145 |
 | `tests/hermes_cli` | 127 |
-| `tests/tools` | 95 |
+| `tests/tools` | 84 |
 | `ui-tui/src` | 60 |
 | `tests/run_agent` | 56 |
 | `tests` | 40 |

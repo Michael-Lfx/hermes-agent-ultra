@@ -1744,6 +1744,83 @@
       "rationale": "xurl skill documentation is curated locally for Hermes Agent Ultra safety guidance while skill loading and execution are governed separately.",
       "owner": "sheawinkler",
       "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_base_environment.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream Python base environment wrapper tests are covered by the Rust TerminalBackend contract and hermes-environments local backend tests, including command execution, cwd handling, stdin defaults, background process lifecycle, env sanitization, and file read/write behavior.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_clarify_tool.py",
+      "classification": "intentional_divergence",
+      "rationale": "Clarify tool behavior is covered by Rust-native ClarifyHandler contracts, including schema naming, required question validation, question trimming, choices normalization/limiting, invalid choices rejection, and backend callback forwarding.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_code_execution.py",
+      "classification": "intentional_divergence",
+      "rationale": "Code execution is intentionally Rust-only and excludes Python execution by schema/validation; Rust ExecuteCodeHandler contracts cover explicit language requirements, supported JavaScript/TypeScript/shell schema, timeout forwarding, and backend dispatch.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_cronjob_tools.py",
+      "classification": "intentional_divergence",
+      "rationale": "Cron job tool behavior is covered by Rust CronjobHandler and hermes-cron contracts, including create/list/update/pause/resume/remove/run action dispatch, extended create/update fields, no-agent script mode, context_from forwarding, workdir handling, and prompt-injection guards.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_homeassistant_tool.py",
+      "classification": "intentional_divergence",
+      "rationale": "Home Assistant tool behavior is covered by Rust Ha* handlers and HaRestBackend contracts, including list/get/service/call schemas, required entity/service parameters, entity/service validation, blocked service domains, env configuration, auth headers, and REST response parsing.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_memory_tool.py",
+      "classification": "intentional_divergence",
+      "rationale": "Memory tool behavior is covered by Rust MemoryHandler and FileMemoryBackend contracts, including add/replace/remove schema and dispatch, memory/user target validation, persistence formatting, snapshot sanitization, and external drift guards.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_process_registry.py",
+      "classification": "intentional_divergence",
+      "rationale": "Process registry behavior is covered by Rust ProcessRegistryHandler, terminal/process backend, and notification formatting contracts, including register/get/poll/update/list/remove/clear actions, status normalization, pid validation, background process lifecycle, log reads, and event draining semantics.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_registry.py",
+      "classification": "intentional_divergence",
+      "rationale": "Tool registry behavior is covered by Rust ToolRegistry and dispatch contracts, including registration, availability, lookup/listing, JSON success/error wrapping, unknown-tool errors, result truncation, policy audit/simulation/deny paths, and builtin tool discovery.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_send_message_missing_platforms.py",
+      "classification": "intentional_divergence",
+      "rationale": "Missing-platform send-message behavior is covered by the Rust gateway-backed messaging tool and platform adapters; SendMessageHandler now exposes all supported gateway platform names, while matrix, mattermost, dingtalk, and homeassistant delivery contracts live in Rust gateway adapter tests.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_send_message_tool.py",
+      "classification": "intentional_divergence",
+      "rationale": "Send message tool behavior is covered by Rust SendMessageHandler, GatewayMessagingBackend, and platform adapter contracts, including required platform/recipient/message parameters, schema platform coverage, backend forwarding, gateway dispatch, chunking/media fallbacks, and platform-specific delivery tests.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_session_search.py",
+      "classification": "intentional_divergence",
+      "rationale": "Session search behavior is covered by Rust SessionSearchHandler and SqliteSessionSearchBackend contracts, including schema shape, browse/search modes, role filters, current-session exclusion, result limit capping, timestamp formatting, scrolling, pattern matching, and hidden-source filtering.",
+      "owner": "sheawinkler",
+      "ticket": 25
     }
   ]
 }
