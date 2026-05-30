@@ -366,14 +366,27 @@ impl SessionManager {
         session_clone
     }
 
-    /// Reset a session by ID, clearing all messages.
-    pub async fn reset_session(&self, session_id: &str) {
+    /// Reset a session by key, clearing all messages and rotating the logical
+    /// session id. Returns the pre-reset and post-reset session snapshots.
+    pub async fn reset_session_with_snapshots(
+        &self,
+        session_id: &str,
+    ) -> Option<(Session, Session)> {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
+            let old = session.clone();
             session.messages.clear();
+            session.id = Uuid::new_v4().to_string();
             session.created_at = Utc::now();
             session.last_active_at = Utc::now();
+            return Some((old, session.clone()));
         }
+        None
+    }
+
+    /// Reset a session by key, clearing all messages.
+    pub async fn reset_session(&self, session_id: &str) {
+        let _ = self.reset_session_with_snapshots(session_id).await;
     }
 
     /// Add a message to a session.
@@ -508,21 +521,50 @@ impl SessionManager {
         all
     }
 
+    /// Return all current session snapshots with their canonical keys.
+    pub async fn all_sessions(&self) -> Vec<(String, Session)> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .iter()
+            .map(|(key, session)| (key.clone(), session.clone()))
+            .collect()
+    }
+
     /// Expire idle sessions according to their reset policy.
     ///
-    /// Returns the number of removed sessions.
-    pub async fn expire_idle_sessions(&self) -> usize {
+    /// Returns the removed session snapshots with their canonical keys.
+    pub async fn expire_idle_session_snapshots(&self) -> Vec<(String, Session)> {
         let mut sessions = self.sessions.write().await;
-        let before = sessions.len();
         let stale_ids: Vec<String> = sessions
             .iter()
             .filter(|(_, s)| s.should_reset())
             .map(|(id, _)| id.clone())
             .collect();
-        for id in &stale_ids {
-            sessions.remove(id);
+        let mut expired = Vec::new();
+        for id in stale_ids {
+            if let Some(session) = sessions.remove(&id) {
+                expired.push((id, session));
+            }
         }
-        before.saturating_sub(sessions.len())
+        drop(sessions);
+
+        if !expired.is_empty() {
+            let mut user_sessions = self.user_sessions.write().await;
+            for (id, session) in &expired {
+                if let Some(ids) = user_sessions.get_mut(&session.user_id) {
+                    ids.retain(|existing| existing != id);
+                }
+            }
+        }
+
+        expired
+    }
+
+    /// Expire idle sessions according to their reset policy.
+    ///
+    /// Returns the number of removed sessions.
+    pub async fn expire_idle_sessions(&self) -> usize {
+        self.expire_idle_session_snapshots().await.len()
     }
 
     /// Infer the session type from the chat_id format.
@@ -704,6 +746,52 @@ mod tests {
 
         manager.reset_session(&sid).await;
         assert!(manager.get_messages(&sid).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_manager_reset_returns_old_and_new_logical_ids() {
+        let config = SessionConfig::default();
+        let manager = SessionManager::new(config);
+        let session = manager
+            .get_or_create_session("telegram", "chat-reset-id", "user1")
+            .await;
+        let sid =
+            manager.compose_session_key(&session.platform, &session.chat_id, &session.user_id);
+        manager.add_message(&sid, Message::user("hello")).await;
+
+        let (old_session, new_session) = manager
+            .reset_session_with_snapshots(&sid)
+            .await
+            .expect("session should reset");
+
+        assert_eq!(old_session.id, session.id);
+        assert_ne!(new_session.id, old_session.id);
+        assert_eq!(new_session.platform, "telegram");
+        assert_eq!(new_session.chat_id, "chat-reset-id");
+        assert!(new_session.messages.is_empty());
+        assert!(manager.get_messages(&sid).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_manager_expire_returns_snapshots_and_cleans_user_index() {
+        let config = SessionConfig {
+            reset_policy: SessionResetPolicy::Idle { timeout_minutes: 0 },
+            ..SessionConfig::default()
+        };
+        let manager = SessionManager::new(config);
+        let session = manager
+            .get_or_create_session("telegram", "chat-expire", "user1")
+            .await;
+        let sid =
+            manager.compose_session_key(&session.platform, &session.chat_id, &session.user_id);
+
+        let expired = manager.expire_idle_session_snapshots().await;
+
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].0, sid);
+        assert_eq!(expired[0].1.id, session.id);
+        assert!(manager.get_session(&sid).await.is_none());
+        assert!(manager.get_user_sessions("user1").await.is_empty());
     }
 
     #[test]

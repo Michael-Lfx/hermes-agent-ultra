@@ -157,6 +157,13 @@
       "ticket": 25
     },
     {
+      "path": "tests/gateway/test_session_boundary_hooks.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream gateway session-boundary lifecycle intent is covered by Rust hermes-gateway contracts for reset ordering, old logical session finalize hooks, new logical session reset hooks, hook error containment, shutdown finalization for active sessions, and idle-expiry finalization before session removal.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
       "path": "tests/gateway/test_discord_allowed_mentions.py",
       "classification": "intentional_divergence",
       "rationale": "Upstream Discord allowed_mentions safe-default intent is covered by Rust hermes-gateway DiscordAllowedMentions payload construction and env-style parsing tests; the Python test file remains reference-only.",
@@ -811,6 +818,13 @@
       "path": "tests/cli",
       "classification": "functional",
       "rationale": "CLI test deltas cover command contracts and user-visible runtime behavior.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/cli/test_session_boundary_hooks.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream CLI session-boundary hook intent is covered by Rust hermes-agent HookType registration and panic containment plus Rust hermes-cli App tests that invoke on_session_finalize and on_session_reset for /new-style session rotation and same-session reset.",
       "owner": "sheawinkler",
       "ticket": 25
     },
