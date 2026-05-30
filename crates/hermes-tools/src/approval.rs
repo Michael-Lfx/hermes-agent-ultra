@@ -1746,12 +1746,17 @@ mod tests {
 
     #[test]
     fn test_clear_session_removes_session_yolo_state() {
-        enable_session_yolo("session-a");
-        assert!(is_session_yolo_enabled("session-a"));
+        let _guard = lock_test_state();
+        reset_approval_state_unlocked();
+        let session = "clear-session-yolo";
 
-        clear_session("session-a");
+        enable_session_yolo(session);
+        assert!(is_session_yolo_enabled(session));
 
-        assert!(!is_session_yolo_enabled("session-a"));
+        clear_session(session);
+
+        assert!(!is_session_yolo_enabled(session));
+        reset_approval_state_unlocked();
     }
 
     #[test]
