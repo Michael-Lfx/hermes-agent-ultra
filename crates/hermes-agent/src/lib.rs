@@ -37,6 +37,7 @@ pub mod file_mutation_tracker;
 pub mod stream_scrubber;
 pub mod vision_message_prepare;
 mod prompt_builder;
+mod system_prompt;
 pub mod prompt_caching;
 pub mod provider;
 pub mod providers_extra;

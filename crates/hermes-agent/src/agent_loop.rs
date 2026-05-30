@@ -73,7 +73,11 @@ use crate::prompt_builder::{
     DEFAULT_AGENT_IDENTITY,
     SKILLS_GUIDANCE, KANBAN_GUIDANCE, TOOL_USE_ENFORCEMENT_GUIDANCE,
     MEMORY_GUIDANCE, SESSION_SEARCH_GUIDANCE, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
-    COMPUTER_USE_GUIDANCE, REMOTE_TERMINAL_BACKENDS, WSL_ENVIRONMENT_HINT,
+    COMPUTER_USE_GUIDANCE,
+};
+use crate::system_prompt::{
+    BACKEND_PROBE_COMMAND, build_environment_hints, format_probe_output, platform_hint_for,
+    probe_remote_backend_cached,
 };
 
 // ---------------------------------------------------------------------------
@@ -3463,25 +3467,16 @@ impl AgentLoop {
     }
 
     fn platform_hint_text(&self) -> Option<&'static str> {
-        let platform_key = self
-            .config()
-            .platform
-            .as_deref()
-            .map(|s| s.trim().to_lowercase())
-            .unwrap_or_default();
-        match platform_key.as_str() {
-            "cli" => Some(
-                "You are a CLI AI Agent. Prefer concise plain text output suitable for terminals.",
-            ),
-            "telegram" | "discord" | "slack" => Some(
-                "You are responding on a chat platform. Keep responses concise and avoid heavy formatting.",
-            ),
-            "email" => {
-                Some("You are responding over email. Use clear structure and complete sentences.")
-            }
-            "sms" => Some("You are responding over SMS. Keep responses short and high-signal."),
-            _ => None,
-        }
+        platform_hint_for(self.config().platform.as_deref())
+    }
+
+    fn probe_remote_backend_text(&self, env_type: &str) -> Option<String> {
+        let cwd_hint = std::env::var("TERMINAL_CWD").unwrap_or_default();
+        probe_remote_backend_cached(env_type, &cwd_hint, || {
+            let terminal = self.tool_registry.get("terminal")?;
+            let output = (terminal.handler)(json!({ "command": BACKEND_PROBE_COMMAND })).ok()?;
+            format_probe_output(output.trim())
+        })
     }
 
     fn effective_provider_for_prompt(&self, model: &str) -> Option<String> {
@@ -4637,6 +4632,11 @@ impl AgentLoop {
                 "You are powered by the model named {}. The exact model ID is {}. When asked what model you are, always answer based on this information, not on any model name returned by the API.",
                 model_short, model_for_prompt
             ));
+        }
+
+        let environment_hints = build_environment_hints(|backend| self.probe_remote_backend_text(backend));
+        if !environment_hints.trim().is_empty() {
+            builder = builder.with_block(&environment_hints);
         }
 
         if let Some(hint) = self.platform_hint_text() {
