@@ -1,25 +1,25 @@
 {
-  "generated_at_utc": "2026-05-30T09:51:22.516485+00:00",
+  "generated_at_utc": "2026-05-30T10:26:04.996490+00:00",
   "refs": {
     "local_ref": "main",
-    "local_sha": "51096a1a8016770af8ece117d6ae92afec19e099",
+    "local_sha": "4c993b1011827da6eb6059783b6e9a678f296c8a",
     "upstream_ref": "upstream/main",
-    "upstream_sha": "bcc83010006c7059ee4d0be63fe74afc74867625",
+    "upstream_sha": "61268ff7a9be93673361e433cbf2e775798a13ae",
     "merge_base": null
   },
   "summary": {
-    "commits_behind": 4403,
-    "commits_ahead": 857,
-    "upstream_patch_missing": 4285,
+    "commits_behind": 4466,
+    "commits_ahead": 859,
+    "upstream_patch_missing": 4346,
     "upstream_patch_represented": 2,
-    "local_patch_unique": 712,
-    "files_only_upstream": 1474,
+    "local_patch_unique": 713,
+    "files_only_upstream": 1484,
     "files_only_local": 570,
-    "files_shared_identical": 1701,
-    "files_shared_different": 1018,
-    "tree_files_changed": 3062,
-    "tree_insertions": 740489,
-    "tree_deletions": 391368
+    "files_shared_identical": 1691,
+    "files_shared_different": 1028,
+    "tree_files_changed": 3082,
+    "tree_insertions": 746550,
+    "tree_deletions": 392534
   },
   "top_upstream_only": [
     {
@@ -28,7 +28,7 @@
     },
     {
       "path": "tests/hermes_cli",
-      "count": 86
+      "count": 90
     },
     {
       "path": "web/src",
@@ -36,11 +36,11 @@
     },
     {
       "path": "tests/agent",
-      "count": 53
+      "count": 54
     },
     {
       "path": "tests/gateway",
-      "count": 40
+      "count": 41
     },
     {
       "path": "gateway/platforms",
@@ -68,7 +68,7 @@
     },
     {
       "path": "tests/run_agent",
-      "count": 19
+      "count": 20
     },
     {
       "path": "ui-tui/src",
@@ -76,7 +76,7 @@
     },
     {
       "path": "tests/cli",
-      "count": 17
+      "count": 18
     },
     {
       "path": ".github/workflows",
@@ -190,27 +190,27 @@
     },
     {
       "path": "website/docs",
-      "count": 138
+      "count": 139
     },
     {
       "path": "tests/tools",
-      "count": 137
+      "count": 138
     },
     {
       "path": "tests/hermes_cli",
-      "count": 126
+      "count": 127
+    },
+    {
+      "path": "ui-tui/src",
+      "count": 60
     },
     {
       "path": "tests/agent",
       "count": 58
     },
     {
-      "path": "ui-tui/src",
-      "count": 58
-    },
-    {
       "path": "tests/run_agent",
-      "count": 56
+      "count": 57
     },
     {
       "path": "tests/cli",
@@ -222,7 +222,7 @@
     },
     {
       "path": "tests/plugins",
-      "count": 16
+      "count": 17
     },
     {
       "path": "skills/creative",
@@ -237,16 +237,16 @@
       "count": 9
     },
     {
+      "path": "plugins/memory",
+      "count": 9
+    },
+    {
       "path": "plugins/platforms",
       "count": 9
     },
     {
       "path": "tests/acp",
       "count": 8
-    },
-    {
-      "path": "plugins/memory",
-      "count": 7
     },
     {
       "path": "skills/productivity",
@@ -514,7 +514,7 @@
     },
     {
       "path": "tests/hermes_cli",
-      "count": 86
+      "count": 90
     },
     {
       "path": "web/src",
@@ -522,11 +522,11 @@
     },
     {
       "path": "tests/agent",
-      "count": 53
+      "count": 54
     },
     {
       "path": "tests/gateway",
-      "count": 40
+      "count": 41
     },
     {
       "path": "gateway/platforms",
@@ -554,7 +554,7 @@
     },
     {
       "path": "tests/run_agent",
-      "count": 19
+      "count": 20
     },
     {
       "path": "ui-tui/src",
@@ -562,7 +562,7 @@
     },
     {
       "path": "tests/cli",
-      "count": 17
+      "count": 18
     },
     {
       "path": ".github/workflows",
@@ -836,8 +836,8 @@
       "workstream": "WS6",
       "issue": 10,
       "name": "Tests and CI parity",
-      "upstream_only": 320,
-      "shared_different": 683,
+      "upstream_only": 329,
+      "shared_different": 687,
       "local_only": 34,
       "risk": "critical",
       "effort": "XL"
@@ -847,7 +847,7 @@
       "issue": 9,
       "name": "UX parity",
       "upstream_only": 493,
-      "shared_different": 231,
+      "shared_different": 234,
       "local_only": 72,
       "risk": "high",
       "effort": "XL"
@@ -856,7 +856,7 @@
       "workstream": "WS8",
       "issue": 12,
       "name": "Compatibility and divergence policy",
-      "upstream_only": 392,
+      "upstream_only": 393,
       "shared_different": 12,
       "local_only": 195,
       "risk": "high",
@@ -867,7 +867,7 @@
       "issue": 7,
       "name": "Tools and adapters parity",
       "upstream_only": 114,
-      "shared_different": 53,
+      "shared_different": 55,
       "local_only": 104,
       "risk": "high",
       "effort": "L"
@@ -877,7 +877,7 @@
       "issue": 8,
       "name": "Skills parity",
       "upstream_only": 93,
-      "shared_different": 39,
+      "shared_different": 40,
       "local_only": 14,
       "risk": "medium",
       "effort": "L"
@@ -904,9 +904,9 @@
     }
   ],
   "commit_mapping": {
-    "upstream_patch_missing": 4285,
+    "upstream_patch_missing": 4346,
     "upstream_patch_represented": 2,
-    "local_patch_unique": 712,
+    "local_patch_unique": 713,
     "local_patch_equivalent_to_upstream": 1,
     "upstream_patch_missing_sample": [
       "99af222ecf56c0eed0d3eb82903a6bf33b6ff7d5",
@@ -960,7 +960,7 @@
       "6b69de4772eac5f982c097553dc6bcfeb60350e6"
     ],
     "intentional_divergence_items": 8,
-    "intentional_divergence_covered_files": 900
+    "intentional_divergence_covered_files": 904
   },
   "intentional_divergence": [
     {
@@ -1005,11 +1005,12 @@
       "status": "approved",
       "workstream": "WS4",
       "summary": "Track upstream skills and optional-skills catalogs via parity audits while keeping Rust runtime skill loading externalized (no direct Python skill-tree vendoring).",
-      "matched_files": 146,
+      "matched_files": 147,
       "matched_sample": [
         "optional-skills/autonomous-ai-agents/antigravity-cli/SKILL.md",
         "optional-skills/autonomous-ai-agents/antigravity-cli/references/cli-docs.md",
         "optional-skills/autonomous-ai-agents/grok/SKILL.md",
+        "optional-skills/autonomous-ai-agents/honcho/SKILL.md",
         "optional-skills/autonomous-ai-agents/openhands/SKILL.md",
         "optional-skills/blockchain/base/SKILL.md",
         "optional-skills/blockchain/base/scripts/base_client.py",
@@ -1025,8 +1026,7 @@
         "optional-skills/devops/pinggy-tunnel/SKILL.md",
         "optional-skills/devops/watchers/scripts/watch_rss.py",
         "optional-skills/finance/SKILL.md",
-        "optional-skills/finance/dcf-model/scripts/validate_dcf.py",
-        "optional-skills/finance/scripts/stocks_client.py"
+        "optional-skills/finance/dcf-model/scripts/validate_dcf.py"
       ]
     },
     {
@@ -1077,7 +1077,7 @@
       "status": "approved",
       "workstream": "WS5",
       "summary": "Treat Rust CLI/TUI and gateway as primary UX surface; upstream web/ui-tui trees are tracked as intentional divergence unless explicitly ported.",
-      "matched_files": 728,
+      "matched_files": 731,
       "matched_sample": [
         "ui-tui/README.md",
         "ui-tui/babel.compiler.config.cjs",

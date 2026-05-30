@@ -1,31 +1,31 @@
 # Shared-Different Backlog
 
-Generated: `2026-05-30T09:51:28.970397+00:00`
+Generated: `2026-05-30T10:26:05.130629+00:00`
 
 ## Summary
 
-- Total shared-different paths: `1018`
+- Total shared-different paths: `1028`
 - Pending classification: `0`
-- Pending functional review: `705`
-- Cleared non-runtime: `169`
-- Cleared intentional divergence: `144`
+- Pending functional review: `697`
+- Cleared non-runtime: `170`
+- Cleared intentional divergence: `161`
 
 ## Status Counts
 
 | Status | Count |
 | --- | ---: |
-| `cleared_intentional_divergence` | 144 |
-| `cleared_non_runtime` | 169 |
-| `pending_review` | 705 |
+| `cleared_intentional_divergence` | 161 |
+| `cleared_non_runtime` | 170 |
+| `pending_review` | 697 |
 
 ## Workstream Counts
 
 | Workstream | Count |
 | --- | ---: |
-| `WS3` | 53 |
-| `WS4` | 39 |
-| `WS5` | 230 |
-| `WS6` | 683 |
+| `WS3` | 55 |
+| `WS4` | 40 |
+| `WS5` | 233 |
+| `WS6` | 687 |
 | `WS8` | 13 |
 
 ## Pending Classification
@@ -38,15 +38,15 @@ Generated: `2026-05-30T09:51:28.970397+00:00`
 | Classification Path | Count |
 | --- | ---: |
 | `tests/gateway` | 147 |
-| `tests/tools` | 127 |
-| `tests/hermes_cli` | 126 |
-| `ui-tui/src` | 58 |
-| `tests/run_agent` | 55 |
+| `tests/hermes_cli` | 127 |
+| `tests/tools` | 112 |
+| `ui-tui/src` | 60 |
+| `tests/run_agent` | 56 |
 | `tests/agent` | 46 |
 | `tests` | 40 |
 | `tests/cli` | 29 |
 | `ui-tui/packages` | 18 |
-| `tests/plugins` | 16 |
+| `tests/plugins` | 17 |
 | `tests/cron` | 11 |
 | `tests/skills` | 6 |
 | `tests/honcho_plugin` | 5 |
@@ -55,4 +55,5 @@ Generated: `2026-05-30T09:51:28.970397+00:00`
 | `tests/tui_gateway` | 4 |
 | `tests/integration` | 3 |
 | `ui-tui` | 3 |
+| `plugins/memory` | 2 |
 | `tests/e2e` | 2 |

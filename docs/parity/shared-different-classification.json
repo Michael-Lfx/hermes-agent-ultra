@@ -388,6 +388,118 @@
       "ticket": 25
     },
     {
+      "path": "tests/tools/test_managed_media_gateways.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream managed media gateway behavior is covered by Rust OpenAI-audio managed endpoint contracts for TTS and transcription plus FAL managed video-generation contracts; direct keys still override managed gateways where required.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_signal_media.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream Signal media behavior is covered by Rust gateway SignalAdapter attachment upload, image-url download, text fallback, and platform registration contracts; the Python send_message_tool tests remain reference-only.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_transcription.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream transcription behavior is covered by Rust transcription handler contracts for audio extension mapping, credential/gateway endpoint resolution, missing-path errors, and model-specific response parsing.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_transcription_dotenv_fallback.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream transcription key fallback behavior is covered by Rust openai-audio credential resolution contracts that prefer VOICE_TOOLS_OPENAI_KEY before HERMES_OPENAI_API_KEY and legacy OPENAI_API_KEY.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_transcription_tools.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream STT provider semantics are covered by Rust transcription contracts for explicit OpenAI-audio routing, managed/direct credential order, extension MIME mapping, and whisper text versus GPT transcribe JSON response formats.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_command_providers.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream command-provider TTS behavior is covered by Rust MultiTtsBackend contracts for provider lookup, reserved built-in names, command template quoting, timeout/output validation, output format, voice-compatible media tags, and max_text_length.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_dotenv_fallback.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream TTS credential fallback behavior is covered by Rust openai-audio contracts that prefer VOICE_TOOLS_OPENAI_KEY, then HERMES_OPENAI_API_KEY, then OPENAI_API_KEY, with Nous-managed audio gateway support.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_kittentts.py",
+      "classification": "intentional_divergence",
+      "rationale": "KittenTTS remains an intentional Python-provider divergence in Hermes Agent Ultra; Rust TTS contracts reject Python-only providers with migration guidance while retaining Rust-native OpenAI, ElevenLabs, MiniMax, Piper, and command-provider paths.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_max_text_length.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream per-provider TTS length behavior is covered by Rust resolve_max_text_length contracts for OpenAI, xAI, MiniMax, ElevenLabs model-specific limits, Piper, command providers, overrides, and fallback limits.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_piper.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream Piper behavior is covered by Rust-native Piper contracts using the local piper binary and PIPER_MODEL/PIPER_* knobs, with model-required errors and zero-Python runtime enforcement.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_tts_speed.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream TTS speed behavior is covered by Rust contracts for provider/global speed precedence, OpenAI speed clamping, command-provider speed placeholder rendering, and MiniMax raw-audio payload shape without legacy voice_setting.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_video_analyze.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream video analysis behavior is covered by Rust VideoAnalyzeHandler and VisionFrameSamplingVideoBackend contracts for schema/aliases, safe prompt defaults, max frame clamping, MIME detection, data-url encoding, unsupported formats, and frame-sampled vision synthesis.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_vision_native_fast_path.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream native-vision intent is covered by Rust ACP/provider multimodal contracts and OpenAI-compatible vision backend contracts for data URLs, image MIME detection, unsafe URL rejection, and auxiliary vision model selection.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_vision_tools.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream vision tool behavior is covered by Rust VisionAnalyzeHandler and OpenAiVisionBackend contracts for schemas, question forwarding, AUXILIARY_VISION_MODEL precedence, local image base64 data URLs, MIME detection, and URL safety.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_voice_cli_integration.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream CLI voice integration is covered by Rust voice_mode toggle, TTS streaming pipeline, markdown/think scrubbing, CLI /voice status, and tool-preview contracts; Python microphone-loop tests remain reference-only.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
+      "path": "tests/tools/test_voice_mode.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream voice-mode behavior is covered by Rust voice_mode state contracts plus gateway voice manager STT/TTS join/leave/VAD contracts; local Python audio-stack detection is intentionally not part of the Rust runtime.",
+      "owner": "sheawinkler",
+      "ticket": 25
+    },
+    {
       "path": "website/docs",
       "classification": "policy_only",
       "rationale": "Documentation-site content differs by project positioning and release policy; runtime behavior is unaffected.",

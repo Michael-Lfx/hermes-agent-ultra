@@ -88,6 +88,16 @@ pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub auxiliary: BTreeMap<String, AuxiliaryTaskConfig>,
 
+    /// Upstream-compatible TTS configuration block.
+    ///
+    /// Kept as structured JSON because upstream accepts provider-specific
+    /// nested maps (`tts.openai`, `tts.providers.<name>`, `tts.piper`, etc.).
+    /// Runtime consumers validate the subkeys they understand and ignore the
+    /// rest so future upstream TTS knobs do not get dropped during config
+    /// round-trips.
+    #[serde(default, skip_serializing_if = "is_json_null")]
+    pub tts: serde_json::Value,
+
     /// Optional HTTP/SOCKS proxy settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<ProxyConfig>,
@@ -145,6 +155,7 @@ impl Default for GatewayConfig {
             fallback_models: Vec::new(),
             smart_model_routing: SmartModelRoutingConfig::default(),
             auxiliary: BTreeMap::new(),
+            tts: serde_json::Value::Null,
             proxy: None,
             approval: ApprovalConfig::default(),
             security: SecurityConfig::default(),
@@ -156,6 +167,10 @@ impl Default for GatewayConfig {
             home_dir: None,
         }
     }
+}
+
+fn is_json_null(value: &serde_json::Value) -> bool {
+    value.is_null()
 }
 
 /// User-facing override for one auxiliary side task.
@@ -843,6 +858,7 @@ mod tests {
         assert!(!cfg.tools.is_empty());
         assert!(cfg.model.is_none());
         assert!(cfg.auxiliary.is_empty());
+        assert!(cfg.tts.is_null());
         assert!(cfg.proxy.is_none());
         assert_eq!(
             cfg.platform_toolsets
@@ -871,11 +887,16 @@ mod tests {
                 ..Default::default()
             },
         );
+        cfg.tts = serde_json::json!({
+            "provider": "piper",
+            "piper": {"voice": "en_US-lessac-medium"}
+        });
         let json = serde_json::to_string(&cfg).unwrap();
         let back: GatewayConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.max_turns, cfg.max_turns);
         assert_eq!(back.tools, cfg.tools);
         assert_eq!(back.auxiliary["vision"].model, "google/gemini-2.5-flash");
+        assert_eq!(back.tts["provider"], "piper");
     }
 
     #[test]

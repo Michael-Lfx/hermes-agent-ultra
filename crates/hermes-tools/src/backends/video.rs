@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(test)]
+use base64::Engine;
 use tokio::process::Command;
 
 use crate::tools::video::VideoBackend;
@@ -48,6 +50,12 @@ impl VisionFrameSamplingVideoBackend {
             if !path.exists() {
                 return Err(ToolError::ExecutionFailed(format!(
                     "video path does not exist: {}",
+                    path.display()
+                )));
+            }
+            if detect_video_mime_type(&path).is_none() {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "unsupported video format: {}",
                     path.display()
                 )));
             }
@@ -102,6 +110,39 @@ impl VisionFrameSamplingVideoBackend {
         }
         Ok(frames)
     }
+}
+
+pub(crate) fn detect_video_mime_type(path: &Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mp4") => Some("video/mp4"),
+        Some("webm") => Some("video/webm"),
+        Some("mov") => Some("video/mov"),
+        Some("mpeg") | Some("mpg") => Some("video/mpeg"),
+        Some("avi") | Some("mkv") => Some("video/mp4"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn video_to_base64_data_url(
+    path: &Path,
+    mime_type: Option<&str>,
+) -> Result<String, ToolError> {
+    let bytes = std::fs::read(path).map_err(|e| {
+        ToolError::ExecutionFailed(format!("failed to read video {}: {e}", path.display()))
+    })?;
+    let mime = mime_type
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .or_else(|| detect_video_mime_type(path))
+        .unwrap_or("video/mp4");
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
 }
 
 #[async_trait]
@@ -162,5 +203,63 @@ impl VideoBackend for VisionFrameSamplingVideoBackend {
         // Best-effort cleanup.
         let _ = tokio::fs::remove_dir_all(&work_dir).await;
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_video_mime_type_matches_upstream_extension_table() {
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.mp4")),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.MP4")),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.webm")),
+            Some("video/webm")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.mov")),
+            Some("video/mov")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.mpeg")),
+            Some("video/mpeg")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.mpg")),
+            Some("video/mpeg")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.avi")),
+            Some("video/mp4")
+        );
+        assert_eq!(
+            detect_video_mime_type(Path::new("clip.mkv")),
+            Some("video/mp4")
+        );
+        assert_eq!(detect_video_mime_type(Path::new("clip.flv")), None);
+    }
+
+    #[test]
+    fn video_data_url_uses_detected_or_custom_mime_type() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mp4 = tmp.path().join("demo.mp4");
+        std::fs::write(&mp4, [0_u8, 1, 2, 3]).unwrap();
+        assert!(video_to_base64_data_url(&mp4, None)
+            .unwrap()
+            .starts_with("data:video/mp4;base64,"));
+
+        let webm = tmp.path().join("demo.webm");
+        std::fs::write(&webm, [0_u8, 1, 2, 3]).unwrap();
+        assert!(video_to_base64_data_url(&webm, Some("video/webm"))
+            .unwrap()
+            .starts_with("data:video/webm;base64,"));
     }
 }

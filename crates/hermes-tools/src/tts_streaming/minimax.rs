@@ -176,6 +176,8 @@ impl TtsBackend for MiniMaxTtsBackend {
         text: &str,
         voice: Option<&str>,
         _provider: Option<&str>,
+        output_path: Option<&str>,
+        _speed: Option<f64>,
     ) -> Result<String, ToolError> {
         let audio = self.synthesize_to_bytes(text, voice).await?;
         let suffix = match self.settings.format.as_str() {
@@ -183,8 +185,12 @@ impl TtsBackend for MiniMaxTtsBackend {
             "flac" => "flac",
             _ => "mp3",
         };
-        let path =
-            std::env::temp_dir().join(format!("hermes_minimax_{}.{suffix}", uuid::Uuid::new_v4()));
+        let path = output_path
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join(format!("hermes_minimax_{}.{suffix}", uuid::Uuid::new_v4()))
+            });
         tokio::fs::write(&path, &audio)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("write audio: {e}")))?;
@@ -367,7 +373,10 @@ mod tests {
             model: "m".into(),
             settings: MiniMaxVoiceSettings::default(),
         };
-        let err = backend.synthesize("hello", None, None).await.unwrap_err();
+        let err = backend
+            .synthesize("hello", None, None, None, None)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("MINIMAX_API_KEY"));
     }
 }
