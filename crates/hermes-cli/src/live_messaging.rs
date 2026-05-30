@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use hermes_config::{extra_string, platform_token_or_extra, GatewayConfig, PlatformConfig};
+use hermes_config::{GatewayConfig, PlatformConfig, extra_string, platform_token_or_extra};
 use hermes_core::ToolHandler;
 use hermes_gateway::gateway::GatewayConfig as RuntimeGatewayConfig;
 use hermes_gateway::platforms::api_server::{ApiServerAdapter, ApiServerConfig};
@@ -22,12 +22,11 @@ use hermes_gateway::platforms::wecom::{WeComAdapter, WeComConfig};
 use hermes_gateway::platforms::weixin::{WeChatAdapter, WeixinConfig};
 use hermes_gateway::platforms::whatsapp::{WhatsAppAdapter, WhatsAppConfig};
 use hermes_gateway::{
-    evaluate_gateway_requirements, DmManager, Gateway, PlatformAdapter, RequirementScope,
-    RequirementSeverity,
-    SessionManager,
+    DmManager, Gateway, PlatformAdapter, RequirementScope, RequirementSeverity, SessionManager,
+    evaluate_gateway_requirements,
 };
-use hermes_tools::tools::messaging::SendMessageHandler;
 use hermes_tools::ToolRegistry;
+use hermes_tools::tools::messaging::SendMessageHandler;
 
 fn extra_bool(platform_cfg: &PlatformConfig, key: &str, default: bool) -> bool {
     platform_cfg
@@ -289,6 +288,7 @@ async fn register_outbound_adapters(config: &GatewayConfig, gateway: &Arc<Gatewa
                 let feishu_cfg = FeishuConfig {
                     app_id,
                     app_secret,
+                    domain: extra_string(platform_cfg, "domain"),
                     verification_token: extra_string(platform_cfg, "verification_token"),
                     encrypt_key: extra_string(platform_cfg, "encrypt_key"),
                     proxy: Default::default(),

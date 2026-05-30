@@ -7,26 +7,36 @@
 //! - Event subscription verification and incoming message parsing
 //! - Mention detection and stripping
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures::{SinkExt, StreamExt};
+use prost::Message as ProstMessage;
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
+use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
+use url::Url;
 
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter};
+use crate::gateway::IncomingMessage;
 
 const FEISHU_API_BASE: &str = "https://open.feishu.cn/open-apis";
+const FEISHU_WS_ENDPOINT_PATH: &str = "/callback/ws/endpoints";
 
 /// Feishu tokens expire in 2 hours; refresh 5 minutes early.
 const TOKEN_EXPIRY_SECS: u64 = 2 * 60 * 60;
 const TOKEN_REFRESH_MARGIN_SECS: u64 = 5 * 60;
+const DEFAULT_WS_PING_INTERVAL_MS: u64 = 120_000;
+const RECONNECT_SECS: &[u64] = &[2, 5, 10, 30, 60];
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -36,6 +46,8 @@ const TOKEN_REFRESH_MARGIN_SECS: u64 = 5 * 60;
 pub struct FeishuConfig {
     pub app_id: String,
     pub app_secret: String,
+    #[serde(default)]
+    pub domain: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,7 +236,89 @@ pub struct FeishuAdapter {
     config: FeishuConfig,
     client: Client,
     tenant_token: RwLock<Option<CachedToken>>,
+    inbound_tx: Arc<RwLock<Option<mpsc::Sender<IncomingMessage>>>>,
+    run_task: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    ws_ping_interval_ms: Arc<RwLock<u64>>,
+    ws_chunk_cache: Arc<Mutex<HashMap<String, FeishuChunkState>>>,
+    ws_running: Arc<AtomicBool>,
     stop_signal: Arc<Notify>,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct WsHeader {
+    #[prost(string, tag = "1")]
+    key: String,
+    #[prost(string, tag = "2")]
+    value: String,
+}
+
+#[derive(Clone, PartialEq, ProstMessage)]
+struct WsFrame {
+    #[prost(uint64, tag = "1")]
+    seq_id: u64,
+    #[prost(uint64, tag = "2")]
+    log_id: u64,
+    #[prost(int32, tag = "3")]
+    service: i32,
+    #[prost(int32, tag = "4")]
+    method: i32,
+    #[prost(message, repeated, tag = "5")]
+    headers: Vec<WsHeader>,
+    #[prost(string, tag = "6")]
+    payload_encoding: String,
+    #[prost(string, tag = "7")]
+    payload_type: String,
+    #[prost(bytes = "vec", tag = "8")]
+    payload: Vec<u8>,
+    #[prost(string, tag = "9")]
+    log_id_new: String,
+}
+
+#[derive(Debug, Clone)]
+struct FeishuWsConnectConfig {
+    connect_url: String,
+    service_id: i32,
+    ping_interval_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeishuWsConfigResponse {
+    code: i64,
+    #[serde(default)]
+    msg: Option<String>,
+    #[serde(default, rename = "data")]
+    data: Option<FeishuWsConfigData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeishuWsConfigData {
+    #[serde(rename = "URL")]
+    url: String,
+    #[serde(rename = "ClientConfig")]
+    client_config: FeishuWsClientConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct FeishuWsClientConfig {
+    #[serde(rename = "PingInterval")]
+    ping_interval: u64,
+}
+
+#[derive(Debug)]
+struct FeishuChunkState {
+    parts: Vec<Option<Vec<u8>>>,
+    created_at: Instant,
+}
+
+#[derive(Clone)]
+struct FeishuWsTaskCtx {
+    config: FeishuConfig,
+    client: Client,
+    stop_signal: Arc<Notify>,
+    inbound_tx: Arc<RwLock<Option<mpsc::Sender<IncomingMessage>>>>,
+    ws_ping_interval_ms: Arc<RwLock<u64>>,
+    ws_chunk_cache: Arc<Mutex<HashMap<String, FeishuChunkState>>>,
+    running: Arc<AtomicBool>,
 }
 
 impl FeishuAdapter {
@@ -237,12 +331,21 @@ impl FeishuAdapter {
             config,
             client,
             tenant_token: RwLock::new(None),
+            inbound_tx: Arc::new(RwLock::new(None)),
+            run_task: RwLock::new(None),
+            ws_ping_interval_ms: Arc::new(RwLock::new(DEFAULT_WS_PING_INTERVAL_MS)),
+            ws_chunk_cache: Arc::new(Mutex::new(HashMap::new())),
+            ws_running: Arc::new(AtomicBool::new(false)),
             stop_signal: Arc::new(Notify::new()),
         })
     }
 
     pub fn config(&self) -> &FeishuConfig {
         &self.config
+    }
+
+    pub async fn set_inbound_sender(&self, tx: mpsc::Sender<IncomingMessage>) {
+        *self.inbound_tx.write().await = Some(tx);
     }
 
     // -----------------------------------------------------------------------
@@ -308,6 +411,293 @@ impl FeishuAdapter {
     /// Force-invalidate the cached token so the next call fetches a new one.
     pub async fn invalidate_token(&self) {
         *self.tenant_token.write().await = None;
+    }
+
+    fn frame_header<'a>(frame: &'a WsFrame, key: &str) -> Option<&'a str> {
+        frame
+            .headers
+            .iter()
+            .find(|h| h.key == key)
+            .map(|h| h.value.as_str())
+    }
+
+    async fn merge_event_payload(
+        chunk_cache: &Mutex<HashMap<String, FeishuChunkState>>,
+        frame: &WsFrame,
+    ) -> Option<Vec<u8>> {
+        let message_id = Self::frame_header(frame, "message_id")?.to_string();
+        let sum = Self::frame_header(frame, "sum")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(1);
+        let seq = Self::frame_header(frame, "seq")
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(0);
+        if sum <= 1 {
+            return Some(frame.payload.clone());
+        }
+        let mut cache = chunk_cache.lock().await;
+        let entry = cache
+            .entry(message_id.clone())
+            .or_insert_with(|| FeishuChunkState {
+                parts: vec![None; sum],
+                created_at: Instant::now(),
+            });
+        if entry.parts.len() != sum {
+            entry.parts = vec![None; sum];
+        }
+        if seq >= entry.parts.len() {
+            return None;
+        }
+        entry.parts[seq] = Some(frame.payload.clone());
+        if !entry.parts.iter().all(Option::is_some) {
+            cache.retain(|_, v| v.created_at.elapsed() < Duration::from_secs(10));
+            return None;
+        }
+        let mut merged = Vec::new();
+        for part in &entry.parts {
+            if let Some(bytes) = part {
+                merged.extend_from_slice(bytes);
+            }
+        }
+        cache.remove(&message_id);
+        Some(merged)
+    }
+
+    async fn route_ws_event_payload(
+        inbound_tx: &RwLock<Option<mpsc::Sender<IncomingMessage>>>,
+        payload: &[u8],
+    ) -> Result<(), GatewayError> {
+        let event: FeishuEvent = serde_json::from_slice(payload)
+            .map_err(|e| GatewayError::Platform(format!("Feishu ws event parse failed: {e}")))?;
+        let event_type = event
+            .header
+            .as_ref()
+            .map(|h| h.event_type.as_str())
+            .or(event.event_type.as_deref())
+            .unwrap_or("");
+        if event_type != "im.message.receive_v1" {
+            return Ok(());
+        }
+        let body = event
+            .event
+            .as_ref()
+            .ok_or_else(|| GatewayError::Platform("Feishu ws event missing body".into()))?;
+        let parsed = match Self::parse_message_event(body) {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+        // 对齐 Python 行为：群聊默认只响应 @ 提及。
+        if parsed.chat_type == "group" && !parsed.is_mention {
+            return Ok(());
+        }
+        let text = parsed.text.trim();
+        if text.is_empty() {
+            return Ok(());
+        }
+        let incoming = IncomingMessage {
+            platform: "feishu".to_string(),
+            chat_id: parsed.chat_id.clone(),
+            user_id: parsed.sender_id.unwrap_or_else(|| parsed.chat_id.clone()),
+            text: text.to_string(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some(parsed.message_id),
+            is_dm: parsed.chat_type == "p2p",
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+            parent_channel_id: None,
+            channel_prompt: None,
+            channel_skills: vec![],
+            channel_topic: None,
+        };
+        if let Some(tx) = inbound_tx.read().await.clone() {
+            let _ = tx.send(incoming).await;
+        } else {
+            debug!("Feishu inbound sender not set; dropping inbound event");
+        }
+        Ok(())
+    }
+
+    fn encode_ws_frame(frame: &WsFrame) -> Vec<u8> {
+        let mut out = Vec::with_capacity(frame.encoded_len());
+        let _ = frame.encode(&mut out);
+        out
+    }
+
+    fn make_ping_frame(service_id: i32) -> WsFrame {
+        WsFrame {
+            seq_id: 0,
+            log_id: 0,
+            service: service_id,
+            method: 0,
+            headers: vec![WsHeader {
+                key: "type".to_string(),
+                value: "ping".to_string(),
+            }],
+            payload_encoding: String::new(),
+            payload_type: String::new(),
+            payload: vec![],
+            log_id_new: String::new(),
+        }
+    }
+
+    fn make_ack_frame(base: &WsFrame, code: u16, elapsed_ms: u128) -> WsFrame {
+        let mut headers = base.headers.clone();
+        headers.push(WsHeader {
+            key: "biz_rt".to_string(),
+            value: elapsed_ms.to_string(),
+        });
+        let payload = serde_json::json!({ "code": code }).to_string().into_bytes();
+        WsFrame {
+            seq_id: base.seq_id,
+            log_id: base.log_id,
+            service: base.service,
+            method: base.method,
+            headers,
+            payload_encoding: base.payload_encoding.clone(),
+            payload_type: base.payload_type.clone(),
+            payload,
+            log_id_new: base.log_id_new.clone(),
+        }
+    }
+
+    async fn pull_ws_connect_config_for(
+        client: &Client,
+        config: &FeishuConfig,
+    ) -> Result<FeishuWsConnectConfig, GatewayError> {
+        let domain = config
+            .domain
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("https://open.feishu.cn")
+            .trim_end_matches('/');
+        let endpoint = format!("{}{}", domain, FEISHU_WS_ENDPOINT_PATH);
+        let payload = serde_json::json!({
+            "AppID": config.app_id,
+            "AppSecret": config.app_secret
+        });
+        let resp = client
+            .post(endpoint)
+            .header("locale", "zh")
+            .header("User-Agent", "HermesGateway-FeishuWS/1.0")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                GatewayError::ConnectionFailed(format!("Feishu ws config request failed: {e}"))
+            })?;
+        let ws_cfg: FeishuWsConfigResponse = resp.json().await.map_err(|e| {
+            GatewayError::ConnectionFailed(format!("Feishu ws config parse failed: {e}"))
+        })?;
+        if ws_cfg.code != 0 {
+            let msg = ws_cfg.msg.unwrap_or_else(|| "unknown error".to_string());
+            return Err(GatewayError::ConnectionFailed(format!(
+                "Feishu ws config failed code={} msg={msg}",
+                ws_cfg.code
+            )));
+        }
+        let data = ws_cfg.data.ok_or_else(|| {
+            GatewayError::ConnectionFailed("Feishu ws config missing data".into())
+        })?;
+        let url = Url::parse(&data.url)
+            .map_err(|e| GatewayError::ConnectionFailed(format!("Feishu ws URL invalid: {e}")))?;
+        let service_id = url
+            .query_pairs()
+            .find(|(k, _)| k == "service_id")
+            .and_then(|(_, v)| v.parse::<i32>().ok())
+            .unwrap_or(0);
+        Ok(FeishuWsConnectConfig {
+            connect_url: data.url,
+            service_id,
+            ping_interval_ms: data.client_config.ping_interval.saturating_mul(1000),
+        })
+    }
+
+    async fn stream_loop(ctx: FeishuWsTaskCtx) {
+        let mut backoff = 0usize;
+        while ctx.running.load(Ordering::Acquire) {
+            let cfg = match Self::pull_ws_connect_config_for(&ctx.client, &ctx.config).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, "Feishu ws pull config failed");
+                    let wait = RECONNECT_SECS[backoff.min(RECONNECT_SECS.len() - 1)];
+                    backoff = (backoff + 1).min(RECONNECT_SECS.len() - 1);
+                    tokio::time::sleep(Duration::from_secs(wait)).await;
+                    continue;
+                }
+            };
+            *ctx.ws_ping_interval_ms.write().await = cfg.ping_interval_ms.max(5_000);
+            match tokio_tungstenite::connect_async(&cfg.connect_url).await {
+                Ok((mut ws, _)) => {
+                    backoff = 0;
+                    info!("Feishu websocket connected");
+                    let mut heartbeat = tokio::time::interval(Duration::from_millis(
+                        *ctx.ws_ping_interval_ms.read().await,
+                    ));
+                    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        if !ctx.running.load(Ordering::Acquire) {
+                            let _ = ws.close(None).await;
+                            break;
+                        }
+                        tokio::select! {
+                            _ = ctx.stop_signal.notified() => {
+                                let _ = ws.close(None).await;
+                                return;
+                            }
+                            _ = heartbeat.tick() => {
+                                let ping = Self::make_ping_frame(cfg.service_id);
+                                let _ = ws.send(WsMessage::Binary(Self::encode_ws_frame(&ping).into())).await;
+                            }
+                            msg = ws.next() => {
+                                match msg {
+                                    Some(Ok(WsMessage::Binary(bin))) => {
+                                        let frame = match WsFrame::decode(bin.as_ref()) {
+                                            Ok(v) => v,
+                                            Err(e) => {
+                                                debug!(error = %e, "Feishu ws frame decode failed");
+                                                continue;
+                                            }
+                                        };
+                                        if frame.method == 1 {
+                                            let start = Instant::now();
+                                            let evt_type = Self::frame_header(&frame, "type").unwrap_or("");
+                                            if evt_type == "event" {
+                                                let code = match Self::merge_event_payload(&ctx.ws_chunk_cache, &frame).await {
+                                                    Some(payload) => {
+                                                        if Self::route_ws_event_payload(&ctx.inbound_tx, &payload).await.is_ok() { 200 } else { 500 }
+                                                    }
+                                                    None => 200,
+                                                };
+                                                let ack = Self::make_ack_frame(&frame, code, start.elapsed().as_millis());
+                                                let _ = ws.send(WsMessage::Binary(Self::encode_ws_frame(&ack).into())).await;
+                                            }
+                                        }
+                                    }
+                                    Some(Ok(WsMessage::Ping(p))) => {
+                                        let _ = ws.send(WsMessage::Pong(p)).await;
+                                    }
+                                    Some(Ok(WsMessage::Close(_))) | None => break,
+                                    Some(Err(e)) => {
+                                        warn!(error = %e, "Feishu websocket read error");
+                                        break;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, "Feishu websocket connect failed");
+                }
+            }
+            let wait = RECONNECT_SECS[backoff.min(RECONNECT_SECS.len() - 1)];
+            backoff = (backoff + 1).min(RECONNECT_SECS.len() - 1);
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1283,13 +1673,31 @@ impl PlatformAdapter for FeishuAdapter {
         info!("Feishu adapter starting (app_id: {})", self.config.app_id);
         self.get_tenant_token().await?;
         self.base.mark_running();
+        self.ws_running.store(true, Ordering::Release);
+        let ctx = FeishuWsTaskCtx {
+            config: self.config.clone(),
+            client: self.client.clone(),
+            stop_signal: self.stop_signal.clone(),
+            inbound_tx: self.inbound_tx.clone(),
+            ws_ping_interval_ms: self.ws_ping_interval_ms.clone(),
+            ws_chunk_cache: self.ws_chunk_cache.clone(),
+            running: self.ws_running.clone(),
+        };
+        let handle = tokio::spawn(async move {
+            FeishuAdapter::stream_loop(ctx).await;
+        });
+        *self.run_task.write().await = Some(handle);
         Ok(())
     }
 
     async fn stop(&self) -> Result<(), GatewayError> {
         info!("Feishu adapter stopping");
+        self.ws_running.store(false, Ordering::Release);
         self.base.mark_stopped();
         self.stop_signal.notify_one();
+        if let Some(task) = self.run_task.write().await.take() {
+            task.abort();
+        }
         Ok(())
     }
 

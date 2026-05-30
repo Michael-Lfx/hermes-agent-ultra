@@ -4738,12 +4738,22 @@ async fn register_gateway_adapters(
                 let feishu_cfg = FeishuConfig {
                     app_id,
                     app_secret,
+                    domain: extra_string(platform_cfg, "domain"),
                     verification_token: extra_string(platform_cfg, "verification_token"),
                     encrypt_key: extra_string(platform_cfg, "encrypt_key"),
                     proxy: Default::default(),
                 };
                 match FeishuAdapter::new(feishu_cfg) {
-                    Ok(adapter) => gateway.register_adapter("feishu", Arc::new(adapter)).await,
+                    Ok(adapter) => {
+                        let adapter = Arc::new(adapter);
+                        let (tx, rx) = mpsc::channel::<GatewayIncomingMessage>(512);
+                        adapter.set_inbound_sender(tx).await;
+                        gateway.register_adapter("feishu", adapter).await;
+                        let gw_clone = gateway.clone();
+                        sidecar_tasks.push(tokio::spawn(async move {
+                            run_gateway_incoming_loop(gw_clone, rx, "feishu").await;
+                        }));
+                    }
                     Err(e) => println!("Feishu enabled but failed to initialize: {}", e),
                 }
             }
@@ -6176,11 +6186,13 @@ async fn wecom_qr_login_flow() -> Result<(String, String), AgentError> {
             resp.errcode, resp.errmsg
         )));
     }
-    let data = resp.data.ok_or_else(|| {
-        AgentError::Config("WeCom QR response missing data".to_string())
-    })?;
+    let data = resp
+        .data
+        .ok_or_else(|| AgentError::Config("WeCom QR response missing data".to_string()))?;
     if data.auth_url.is_empty() {
-        return Err(AgentError::Config("WeCom QR response has empty auth_url".to_string()));
+        return Err(AgentError::Config(
+            "WeCom QR response has empty auth_url".to_string(),
+        ));
     }
 
     println!();
@@ -7741,10 +7753,7 @@ async fn run_auth(
                             return Ok(());
                         }
                         Err(e) => {
-                            println!(
-                                "WeCom QR 登录失败，将回退到手动输入: {}",
-                                e
-                            );
+                            println!("WeCom QR 登录失败，将回退到手动输入: {}", e);
                         }
                     }
                 }
@@ -7754,19 +7763,14 @@ async fn run_auth(
                     .or_insert_with(PlatformConfig::default);
                 wc.enabled = true;
                 let bot_id = prompt_line("WeCom AI Bot bot_id (WECOM_BOT_ID): ").await?;
-                wc.extra.insert(
-                    "bot_id".to_string(),
-                    serde_json::Value::String(bot_id),
-                );
+                wc.extra
+                    .insert("bot_id".to_string(), serde_json::Value::String(bot_id));
                 let secret = prompt_line("WeCom AI Bot secret (WECOM_SECRET): ").await?;
-                wc.extra.insert(
-                    "secret".to_string(),
-                    serde_json::Value::String(secret),
-                );
-                let ws = prompt_line(
-                    "WeCom websocket_url (default wss://openws.work.weixin.qq.com): ",
-                )
-                .await?;
+                wc.extra
+                    .insert("secret".to_string(), serde_json::Value::String(secret));
+                let ws =
+                    prompt_line("WeCom websocket_url (default wss://openws.work.weixin.qq.com): ")
+                        .await?;
                 if !ws.trim().is_empty() {
                     wc.extra.insert(
                         "websocket_url".to_string(),

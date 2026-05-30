@@ -2317,6 +2317,7 @@ dependencies = [
  "matrix-sdk-crypto",
  "md5",
  "proptest",
+ "prost",
  "rand 0.10.1",
  "regex",
  "reqwest 0.13.3",
