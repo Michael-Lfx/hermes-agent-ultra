@@ -14,6 +14,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use hermes_agent::agent_loop::ToolRegistry as AgentToolRegistry;
+use hermes_agent::plugins::HookType;
 use hermes_agent::provider::{
     openai_codex_provider, AnthropicProvider, GenericProvider, OpenAiProvider, OpenRouterProvider,
     OPENAI_CODEX_BASE_URL,
@@ -2292,6 +2293,8 @@ impl App {
 
     /// Create a new session, clearing all messages.
     pub fn new_session(&mut self) {
+        let old_session_id = self.session_id.clone();
+        self.invoke_session_lifecycle_hook(HookType::OnSessionFinalize, &old_session_id);
         self.session_id = Uuid::new_v4().to_string();
         self.messages.clear();
         self.ui_messages.clear();
@@ -2300,16 +2303,35 @@ impl App {
         self.input_history.clear();
         self.history_index = 0;
         self.ensure_session_stub_snapshot();
+        self.invoke_session_lifecycle_hook(HookType::OnSessionReset, &self.session_id);
     }
 
     /// Reset the current session (clear messages but keep session ID).
     pub fn reset_session(&mut self) {
+        let session_id = self.session_id.clone();
+        self.invoke_session_lifecycle_hook(HookType::OnSessionFinalize, &session_id);
         self.messages.clear();
         self.ui_messages.clear();
         self.pending_image_hint = None;
         self.session_objective = None;
         self.input_history.clear();
         self.history_index = 0;
+        self.invoke_session_lifecycle_hook(HookType::OnSessionReset, &session_id);
+    }
+
+    fn invoke_session_lifecycle_hook(&self, hook: HookType, session_id: &str) {
+        let Some(plugin_manager) = self.agent.plugin_manager.as_ref() else {
+            return;
+        };
+        let Ok(plugin_manager) = plugin_manager.lock() else {
+            tracing::warn!(hook = hook.as_str(), "Plugin manager lock poisoned");
+            return;
+        };
+        let context = serde_json::json!({
+            "session_id": session_id,
+            "platform": "cli",
+        });
+        let _ = plugin_manager.invoke_hook(hook, &context);
     }
 
     /// Set or clear a durable session objective.
@@ -3665,6 +3687,7 @@ mod tests {
         upsert_objective_contract,
     };
     use crate::test_env_lock;
+    use hermes_agent::plugins::{HookResult, Plugin, PluginContext, PluginManager};
     use hermes_config::LlmProviderConfig;
     use std::collections::HashMap;
 
@@ -3716,6 +3739,117 @@ mod tests {
             quorum_armed_once: false,
             pet_settings: PetSettings::default(),
         }
+    }
+
+    struct LifecycleHookPlugin {
+        seen: Arc<StdMutex<Vec<(String, String)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Plugin for LifecycleHookPlugin {
+        fn meta(&self) -> hermes_agent::plugins::PluginMeta {
+            hermes_agent::plugins::PluginMeta {
+                name: "lifecycle-recorder".to_string(),
+                version: "0.1.0".to_string(),
+                description: "Lifecycle recorder".to_string(),
+                author: None,
+            }
+        }
+
+        async fn initialize(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        async fn shutdown(&self) -> Result<(), AgentError> {
+            Ok(())
+        }
+
+        fn register(&self, ctx: &mut PluginContext) {
+            let finalize_seen = self.seen.clone();
+            ctx.on(
+                HookType::OnSessionFinalize,
+                Arc::new(move |value| {
+                    let session_id = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    finalize_seen
+                        .lock()
+                        .unwrap()
+                        .push(("on_session_finalize".to_string(), session_id));
+                    HookResult::Ok
+                }),
+            );
+            let reset_seen = self.seen.clone();
+            ctx.on(
+                HookType::OnSessionReset,
+                Arc::new(move |value| {
+                    let session_id = value
+                        .get("session_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    reset_seen
+                        .lock()
+                        .unwrap()
+                        .push(("on_session_reset".to_string(), session_id));
+                    HookResult::Ok
+                }),
+            );
+        }
+    }
+
+    fn attach_lifecycle_recorder(app: &mut App, seen: Arc<StdMutex<Vec<(String, String)>>>) {
+        let mut plugin_manager = PluginManager::new();
+        plugin_manager.register(Arc::new(LifecycleHookPlugin { seen }));
+        let agent = AgentLoop::new(
+            app.agent.config.clone(),
+            app.agent.tool_registry.clone(),
+            app.agent.llm_provider.clone(),
+        )
+        .with_plugins(Arc::new(StdMutex::new(plugin_manager)));
+        app.agent = Arc::new(agent);
+    }
+
+    #[test]
+    fn app_new_session_invokes_session_lifecycle_hooks() {
+        let mut app = build_minimal_test_app();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        attach_lifecycle_recorder(&mut app, seen.clone());
+        let old_session_id = app.session_id.clone();
+
+        app.new_session();
+
+        let events = seen.lock().unwrap().clone();
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[0],
+            ("on_session_finalize".to_string(), old_session_id)
+        );
+        assert_eq!(events[1].0, "on_session_reset");
+        assert_eq!(events[1].1, app.session_id);
+        assert_ne!(events[0].1, events[1].1);
+    }
+
+    #[test]
+    fn app_reset_session_invokes_session_lifecycle_hooks() {
+        let mut app = build_minimal_test_app();
+        let seen = Arc::new(StdMutex::new(Vec::new()));
+        attach_lifecycle_recorder(&mut app, seen.clone());
+        let session_id = app.session_id.clone();
+
+        app.reset_session();
+
+        let events = seen.lock().unwrap().clone();
+        assert_eq!(
+            events,
+            vec![
+                ("on_session_finalize".to_string(), session_id.clone()),
+                ("on_session_reset".to_string(), session_id)
+            ]
+        );
+        assert_eq!(app.session_id, "test-session");
     }
 
     #[test]

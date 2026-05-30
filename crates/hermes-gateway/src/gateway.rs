@@ -25,7 +25,7 @@ use crate::commands::{handle_command, GatewayCommandResult};
 use crate::dm::{DmDecision, DmManager};
 use crate::hooks::{HookEvent, HookRegistry};
 use crate::platforms::helpers::extract_inline_images;
-use crate::session::SessionManager;
+use crate::session::{Session, SessionManager};
 use crate::stream::{StreamConfig, StreamManager};
 
 // ---------------------------------------------------------------------------
@@ -555,6 +555,51 @@ impl Gateway {
         }
     }
 
+    fn session_lifecycle_context(
+        session_key: &str,
+        session: &Session,
+        reason: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "platform": session.platform,
+            "chat_id": session.chat_id,
+            "user_id": session.user_id,
+            "session_key": session_key,
+            "session_id": session.id,
+            "reason": reason,
+        })
+    }
+
+    async fn emit_session_finalize(&self, session_key: &str, session: &Session, reason: &str) {
+        self.emit_hook_event(
+            "on_session_finalize",
+            Self::session_lifecycle_context(session_key, session, reason),
+        )
+        .await;
+    }
+
+    async fn emit_session_reset_lifecycle(
+        &self,
+        session_key: &str,
+        session: &Session,
+        reason: &str,
+    ) {
+        self.emit_hook_event(
+            "on_session_reset",
+            Self::session_lifecycle_context(session_key, session, reason),
+        )
+        .await;
+    }
+
+    async fn finalize_active_sessions(&self, reason: &str) -> usize {
+        let sessions = self.session_manager.all_sessions().await;
+        for (session_key, session) in &sessions {
+            self.emit_session_finalize(session_key, session, reason)
+                .await;
+        }
+        sessions.len()
+    }
+
     /// Register a platform adapter under the given name.
     pub async fn register_adapter(
         &self,
@@ -587,6 +632,13 @@ impl Gateway {
 
     /// Stop all platform adapters gracefully.
     pub async fn stop_all(&self) -> Result<(), GatewayError> {
+        let finalized = self.finalize_active_sessions("shutdown").await;
+        if finalized > 0 {
+            info!(
+                finalized,
+                "Finalized active gateway sessions before shutdown"
+            );
+        }
         let adapters = self.adapters.read().await;
         for (name, adapter) in adapters.iter() {
             info!("Stopping platform adapter: {}", name);
@@ -872,29 +924,47 @@ impl Gateway {
                 Ok(true)
             }
             GatewayCommandResult::ResetSession(reply) => {
+                let current_session = self.session_manager.get_session(session_key).await;
                 self.emit_hook_event(
                     "session:end",
                     serde_json::json!({
                         "platform": incoming.platform,
                         "chat_id": incoming.chat_id,
                         "user_id": incoming.user_id,
-                        "session_id": session_key
+                        "session_id": session_key,
+                        "logical_session_id": current_session.as_ref().map(|s| s.id.clone())
                     }),
                 )
                 .await;
-                self.session_manager.reset_session(session_key).await;
+                if let Some(old_session) = current_session.as_ref() {
+                    self.emit_session_finalize(session_key, old_session, "reset")
+                        .await;
+                }
+                let reset_snapshot = self
+                    .session_manager
+                    .reset_session_with_snapshots(session_key)
+                    .await;
                 self.clear_session_boundary_security_state(session_key)
                     .await;
+                let reset_session = reset_snapshot
+                    .as_ref()
+                    .map(|(_, new_session)| new_session)
+                    .or(current_session.as_ref());
                 self.emit_hook_event(
                     "session:reset",
                     serde_json::json!({
                         "platform": incoming.platform,
                         "chat_id": incoming.chat_id,
                         "user_id": incoming.user_id,
-                        "session_id": session_key
+                        "session_id": session_key,
+                        "logical_session_id": reset_session.map(|s| s.id.clone())
                     }),
                 )
                 .await;
+                if let Some(new_session) = reset_session {
+                    self.emit_session_reset_lifecycle(session_key, new_session, "reset")
+                        .await;
+                }
                 self.send_message(&incoming.platform, &incoming.chat_id, &reply, None)
                     .await?;
                 Ok(true)
@@ -2144,11 +2214,22 @@ impl Gateway {
             tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(30)));
         loop {
             ticker.tick().await;
-            let expired = self.session_manager.expire_idle_sessions().await;
+            let expired = self.expire_idle_sessions_once("idle_expiry").await;
             if expired > 0 {
                 tracing::info!(expired, "Expired idle sessions");
             }
         }
+    }
+
+    /// Expire idle sessions once and emit lifecycle finalization hooks for
+    /// each removed session using retained session snapshots.
+    pub async fn expire_idle_sessions_once(&self, reason: &str) -> usize {
+        let expired = self.session_manager.expire_idle_session_snapshots().await;
+        for (session_key, session) in &expired {
+            self.emit_session_finalize(session_key, session, reason)
+                .await;
+        }
+        expired.len()
     }
 
     /// Monitors adapter health and attempts reconnect through stop/start.
@@ -4489,6 +4570,173 @@ mod tests {
             .expect("session:reset payload should exist");
         assert_eq!(end_payload["session_id"], serde_json::json!(session_key));
         assert_eq!(reset_payload["session_id"], serde_json::json!(session_key));
+    }
+
+    #[tokio::test]
+    async fn gateway_emits_plugin_session_finalize_and_reset_for_reset_command() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(TestAdapter {
+            messages: sent.clone(),
+        });
+        let hook_seen = Arc::new(Mutex::new(Vec::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.register_in_process(
+            "on_session_finalize",
+            Arc::new(RecordingHook {
+                seen: hook_seen.clone(),
+            }),
+        );
+        hooks.register_in_process(
+            "on_session_reset",
+            Arc::new(RecordingHook {
+                seen: hook_seen.clone(),
+            }),
+        );
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.set_hook_registry(Arc::new(hooks)).await;
+        gw.register_adapter("test", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async move { Ok("assistant".to_string()) })
+        }))
+        .await;
+        let session_key =
+            gw.session_manager
+                .compose_session_key("test", "chat-plugin-reset", "user1");
+
+        let normal = IncomingMessage {
+            platform: "test".into(),
+            chat_id: "chat-plugin-reset".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            message_id: None,
+            is_dm: true,
+        };
+        assert!(gw.route_message(&normal).await.is_ok());
+        let old_logical_id = gw
+            .session_manager
+            .get_session(&session_key)
+            .await
+            .expect("session should exist")
+            .id;
+
+        let reset = IncomingMessage {
+            platform: "test".into(),
+            chat_id: "chat-plugin-reset".into(),
+            user_id: "user1".into(),
+            text: "/reset".into(),
+            message_id: None,
+            is_dm: true,
+        };
+        assert!(gw.route_message(&reset).await.is_ok());
+
+        let events = hook_seen.lock().unwrap();
+        let names: Vec<String> = events.iter().map(|(name, _)| name.clone()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "on_session_finalize".to_string(),
+                "on_session_reset".to_string()
+            ]
+        );
+        let finalize_payload = &events[0].1;
+        let reset_payload = &events[1].1;
+        assert_eq!(
+            finalize_payload["session_id"],
+            serde_json::json!(old_logical_id)
+        );
+        assert_eq!(
+            finalize_payload["session_key"],
+            serde_json::json!(session_key)
+        );
+        assert_eq!(finalize_payload["reason"], serde_json::json!("reset"));
+        assert_eq!(reset_payload["session_key"], serde_json::json!(session_key));
+        assert_eq!(reset_payload["reason"], serde_json::json!("reset"));
+        assert_ne!(reset_payload["session_id"], finalize_payload["session_id"]);
+    }
+
+    #[tokio::test]
+    async fn gateway_stop_all_finalizes_active_sessions() {
+        let hook_seen = Arc::new(Mutex::new(Vec::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.register_in_process(
+            "on_session_finalize",
+            Arc::new(RecordingHook {
+                seen: hook_seen.clone(),
+            }),
+        );
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let first = session_mgr
+            .get_or_create_session("test", "stop-chat-a", "user1")
+            .await;
+        let second = session_mgr
+            .get_or_create_session("test", "stop-chat-b", "user2")
+            .await;
+        let gw = Gateway::new(
+            session_mgr,
+            DmManager::with_pair_behavior(),
+            GatewayConfig::default(),
+        );
+        gw.set_hook_registry(Arc::new(hooks)).await;
+
+        gw.stop_all().await.expect("stop should succeed");
+
+        let events = hook_seen.lock().unwrap();
+        let session_ids: HashSet<String> = events
+            .iter()
+            .filter(|(name, _)| name == "on_session_finalize")
+            .filter_map(|(_, ctx)| ctx["session_id"].as_str().map(ToOwned::to_owned))
+            .collect();
+        assert_eq!(
+            session_ids,
+            HashSet::from([first.id.clone(), second.id.clone()])
+        );
+        assert!(events
+            .iter()
+            .all(|(_, ctx)| ctx["reason"] == serde_json::json!("shutdown")));
+    }
+
+    #[tokio::test]
+    async fn gateway_idle_expiry_finalizes_removed_sessions() {
+        let hook_seen = Arc::new(Mutex::new(Vec::new()));
+        let mut hooks = HookRegistry::new();
+        hooks.register_in_process(
+            "on_session_finalize",
+            Arc::new(RecordingHook {
+                seen: hook_seen.clone(),
+            }),
+        );
+
+        let session_config = SessionConfig {
+            reset_policy: hermes_config::session::SessionResetPolicy::Idle { timeout_minutes: 0 },
+            ..SessionConfig::default()
+        };
+        let session_mgr = Arc::new(SessionManager::new(session_config));
+        let expired = session_mgr
+            .get_or_create_session("test", "idle-chat", "user1")
+            .await;
+        let session_key = session_mgr.compose_session_key("test", "idle-chat", "user1");
+        let gw = Gateway::new(
+            session_mgr.clone(),
+            DmManager::with_pair_behavior(),
+            GatewayConfig::default(),
+        );
+        gw.set_hook_registry(Arc::new(hooks)).await;
+
+        let expired_count = gw.expire_idle_sessions_once("idle_expiry").await;
+
+        assert_eq!(expired_count, 1);
+        assert!(session_mgr.get_session(&session_key).await.is_none());
+        let events = hook_seen.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "on_session_finalize");
+        assert_eq!(events[0].1["session_id"], serde_json::json!(expired.id));
+        assert_eq!(events[0].1["session_key"], serde_json::json!(session_key));
+        assert_eq!(events[0].1["reason"], serde_json::json!("idle_expiry"));
     }
 
     #[tokio::test]
