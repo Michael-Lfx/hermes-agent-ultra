@@ -59,6 +59,39 @@ fn default_intents() -> u64 {
     (1 << 0) | (1 << 9) | (1 << 15)
 }
 
+/// Optional Discord send metadata carried by higher-level gateway helpers.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordSendMetadata {
+    /// Discord thread channel ID to target instead of the parent channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+impl DiscordSendMetadata {
+    pub fn with_thread_id(thread_id: impl Into<String>) -> Self {
+        Self {
+            thread_id: Some(thread_id.into()),
+        }
+    }
+
+    pub fn target_channel_id<'a>(&'a self, fallback_channel_id: &'a str) -> &'a str {
+        self.thread_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(fallback_channel_id)
+    }
+}
+
+fn target_channel_id_for_metadata<'a>(
+    channel_id: &'a str,
+    metadata: Option<&'a DiscordSendMetadata>,
+) -> &'a str {
+    metadata
+        .map(|m| m.target_channel_id(channel_id))
+        .unwrap_or(channel_id)
+}
+
 // ---------------------------------------------------------------------------
 // Discord Gateway opcodes & payload
 // ---------------------------------------------------------------------------
@@ -644,11 +677,26 @@ impl DiscordAdapter {
         channel_id: &str,
         content: &str,
     ) -> Result<Vec<String>, GatewayError> {
+        self.send_text_with_metadata(channel_id, content, None)
+            .await
+    }
+
+    /// Send a message, honoring Discord thread routing metadata when present.
+    pub async fn send_text_with_metadata(
+        &self,
+        channel_id: &str,
+        content: &str,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<Vec<String>, GatewayError> {
+        let target_channel_id = target_channel_id_for_metadata(channel_id, metadata);
         let chunks = split_message(content, MAX_MESSAGE_LENGTH);
         let mut message_ids = Vec::new();
 
         for chunk in &chunks {
-            let url = format!("{}/channels/{}/messages", DISCORD_API_BASE, channel_id);
+            let url = format!(
+                "{}/channels/{}/messages",
+                DISCORD_API_BASE, target_channel_id
+            );
             let body = serde_json::json!({ "content": chunk });
 
             let resp = self
@@ -727,7 +775,23 @@ impl DiscordAdapter {
         content: Option<&str>,
         embeds: &[DiscordEmbed],
     ) -> Result<String, GatewayError> {
-        let url = format!("{}/channels/{}/messages", DISCORD_API_BASE, channel_id);
+        self.send_embed_with_metadata(channel_id, content, embeds, None)
+            .await
+    }
+
+    /// Send embeds, honoring Discord thread routing metadata when present.
+    pub async fn send_embed_with_metadata(
+        &self,
+        channel_id: &str,
+        content: Option<&str>,
+        embeds: &[DiscordEmbed],
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        let target_channel_id = target_channel_id_for_metadata(channel_id, metadata);
+        let url = format!(
+            "{}/channels/{}/messages",
+            DISCORD_API_BASE, target_channel_id
+        );
 
         let mut body = serde_json::json!({ "embeds": embeds });
         if let Some(text) = content {
@@ -770,7 +834,23 @@ impl DiscordAdapter {
         file_path: &str,
         caption: Option<&str>,
     ) -> Result<String, GatewayError> {
-        let url = format!("{}/channels/{}/messages", DISCORD_API_BASE, channel_id);
+        self.upload_file_with_metadata(channel_id, file_path, caption, None)
+            .await
+    }
+
+    /// Upload a file, honoring Discord thread routing metadata when present.
+    pub async fn upload_file_with_metadata(
+        &self,
+        channel_id: &str,
+        file_path: &str,
+        caption: Option<&str>,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        let target_channel_id = target_channel_id_for_metadata(channel_id, metadata);
+        let url = format!(
+            "{}/channels/{}/messages",
+            DISCORD_API_BASE, target_channel_id
+        );
 
         let file_bytes = tokio::fs::read(file_path).await.map_err(|e| {
             GatewayError::SendFailed(format!("Failed to read file {}: {}", file_path, e))
@@ -813,6 +893,58 @@ impl DiscordAdapter {
         })?;
 
         Ok(msg.id)
+    }
+
+    /// Send a local image file as a Discord attachment.
+    pub async fn send_image_file(
+        &self,
+        channel_id: &str,
+        image_path: &str,
+        caption: Option<&str>,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        self.upload_file_with_metadata(channel_id, image_path, caption, metadata)
+            .await
+    }
+
+    /// Send an image URL as a Discord embed.
+    pub async fn send_image(
+        &self,
+        channel_id: &str,
+        image_url: &str,
+        caption: Option<&str>,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        self.send_image_url_with_metadata(channel_id, image_url, caption, metadata)
+            .await
+    }
+
+    /// Send a voice/audio file as a Discord attachment.
+    pub async fn send_voice(
+        &self,
+        channel_id: &str,
+        audio_path: &str,
+        caption: Option<&str>,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        self.upload_file_with_metadata(channel_id, audio_path, caption, metadata)
+            .await
+    }
+
+    /// Send an image URL as an embed, honoring thread routing metadata.
+    pub async fn send_image_url_with_metadata(
+        &self,
+        channel_id: &str,
+        image_url: &str,
+        caption: Option<&str>,
+        metadata: Option<&DiscordSendMetadata>,
+    ) -> Result<String, GatewayError> {
+        let mut embed = DiscordEmbed::new();
+        embed.image = Some(EmbedMedia {
+            url: image_url.to_string(),
+        });
+        self.send_embed_with_metadata(channel_id, caption, &[embed], metadata)
+            .await
     }
 
     // -----------------------------------------------------------------------
@@ -1453,11 +1585,8 @@ impl PlatformAdapter for DiscordAdapter {
         image_url: &str,
         caption: Option<&str>,
     ) -> Result<(), GatewayError> {
-        let mut embed = DiscordEmbed::new();
-        embed.image = Some(EmbedMedia {
-            url: image_url.to_string(),
-        });
-        self.send_embed(chat_id, caption, &[embed]).await?;
+        self.send_image_url_with_metadata(chat_id, image_url, caption, None)
+            .await?;
         Ok(())
     }
 
@@ -1530,6 +1659,56 @@ mod tests {
 
     // -- existing tests (preserved) -----------------------------------------
 
+    fn test_config() -> DiscordConfig {
+        DiscordConfig {
+            token: "test-token".into(),
+            application_id: None,
+            proxy: AdapterProxyConfig::default(),
+            require_mention: false,
+            intents: default_intents(),
+        }
+    }
+
+    #[test]
+    fn send_metadata_targets_thread_id_when_present() {
+        let metadata = DiscordSendMetadata::with_thread_id(" 987654321 ");
+        assert_eq!(metadata.target_channel_id("123"), "987654321");
+
+        let blank_metadata = DiscordSendMetadata::with_thread_id("   ");
+        assert_eq!(blank_metadata.target_channel_id("123"), "123");
+        assert_eq!(target_channel_id_for_metadata("123", None), "123");
+    }
+
+    #[test]
+    fn media_methods_accept_metadata_contract() {
+        let adapter = DiscordAdapter::new(test_config()).unwrap();
+        let metadata = DiscordSendMetadata::with_thread_id("thread-1");
+
+        let image_file = adapter.send_image_file(
+            "channel-1",
+            "/tmp/missing-image.png",
+            Some("caption"),
+            Some(&metadata),
+        );
+        drop(image_file);
+
+        let image = adapter.send_image(
+            "channel-1",
+            "https://example.com/image.png",
+            Some("caption"),
+            Some(&metadata),
+        );
+        drop(image);
+
+        let voice = adapter.send_voice(
+            "channel-1",
+            "/tmp/missing-audio.ogg",
+            Some("caption"),
+            Some(&metadata),
+        );
+        drop(voice);
+    }
+
     #[test]
     fn split_message_short() {
         let chunks = split_message("hello", 2000);
@@ -1547,14 +1726,7 @@ mod tests {
 
     #[test]
     fn gateway_payload_identify() {
-        let config = DiscordConfig {
-            token: "test-token".into(),
-            application_id: None,
-            proxy: AdapterProxyConfig::default(),
-            require_mention: false,
-            intents: default_intents(),
-        };
-        let adapter = DiscordAdapter::new(config).unwrap();
+        let adapter = DiscordAdapter::new(test_config()).unwrap();
         let payload = adapter.build_identify_payload();
         assert_eq!(payload.op, opcodes::IDENTIFY);
         assert!(payload.d.is_some());
