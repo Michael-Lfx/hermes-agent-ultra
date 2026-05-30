@@ -13,7 +13,11 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use hermes_intelligence::anthropic_adapter::get_anthropic_max_output;
+use hermes_intelligence::anthropic_adapter::{
+    default_anthropic_beta_header_value, forbids_sampling_params, get_anthropic_max_output,
+    is_azure_anthropic_endpoint, is_oauth_token, is_third_party_endpoint, requires_bearer_auth,
+    supports_fast_mode,
+};
 
 use hermes_core::{
     AgentError, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message, MessageRole,
@@ -1019,12 +1023,79 @@ impl AnthropicProvider {
         api_key: &str,
         body: &Value,
     ) -> reqwest::RequestBuilder {
-        client
+        let base_url = self.base_url.as_str();
+        let native_oauth = !is_third_party_endpoint(Some(base_url)) && is_oauth_token(api_key);
+        let bearer_auth = native_oauth || requires_bearer_auth(Some(base_url));
+        let beta_header = default_anthropic_beta_header_value(Some(base_url), native_oauth);
+
+        let mut request = client
             .post(url)
-            .header("x-api-key", api_key)
             .header("anthropic-version", &self.api_version)
             .header("Content-Type", "application/json")
-            .json(body)
+            .header("anthropic-beta", beta_header)
+            .json(body);
+
+        if bearer_auth {
+            request = request.header("Authorization", format!("Bearer {api_key}"));
+        } else {
+            request = request.header("x-api-key", api_key);
+        }
+        if native_oauth {
+            request = request
+                .header("user-agent", "claude-cli/2.1.74 (external, cli)")
+                .header("x-app", "cli");
+        }
+        request
+    }
+
+    fn messages_url(&self) -> String {
+        Self::messages_url_for_base_url(&self.base_url)
+    }
+
+    fn messages_url_for_base_url(base_url: &str) -> String {
+        let trimmed = base_url.trim().trim_end_matches('/');
+        if let Ok(mut url) = reqwest::Url::parse(trimmed) {
+            let mut path = url.path().trim_end_matches('/').to_string();
+            if path.is_empty() {
+                path.push_str("/v1/messages");
+            } else if path.ends_with("/v1") {
+                path.push_str("/messages");
+            } else {
+                path.push_str("/v1/messages");
+            }
+            url.set_path(&path);
+            if is_azure_anthropic_endpoint(Some(trimmed))
+                && !url
+                    .query_pairs()
+                    .any(|(key, _)| key.eq_ignore_ascii_case("api-version"))
+            {
+                url.query_pairs_mut()
+                    .append_pair("api-version", "2025-04-15");
+            }
+            return url.to_string();
+        }
+
+        let mut url = format!("{trimmed}/v1/messages");
+        if is_azure_anthropic_endpoint(Some(trimmed)) && !url.contains("api-version=") {
+            let sep = if url.contains('?') { '&' } else { '?' };
+            url.push(sep);
+            url.push_str("api-version=2025-04-15");
+        }
+        url
+    }
+
+    fn strip_unsupported_anthropic_controls(body: &mut Value, model: &str) {
+        let Some(obj) = body.as_object_mut() else {
+            return;
+        };
+        if forbids_sampling_params(model) {
+            obj.remove("temperature");
+            obj.remove("top_p");
+            obj.remove("top_k");
+        }
+        if obj.get("speed").and_then(Value::as_str) == Some("fast") && !supports_fast_mode(model) {
+            obj.remove("speed");
+        }
     }
 
     async fn send_with_dead_connection_recovery(
@@ -1333,8 +1404,9 @@ impl LlmProvider for AnthropicProvider {
             body["tools"] = serde_json::json!(Self::convert_tools(tools));
         }
         GenericProvider::merge_extra_body_fields(&mut body, extra_body);
+        Self::strip_unsupported_anthropic_controls(&mut body, effective_model);
 
-        let url = format!("{}/v1/messages", self.base_url.trim_end_matches('/'));
+        let url = self.messages_url();
         let resp = self
             .send_with_dead_connection_recovery(&url, &api_key, &body)
             .await?;
@@ -1404,8 +1476,9 @@ impl LlmProvider for AnthropicProvider {
                 body["tools"] = serde_json::json!(AnthropicProvider::convert_tools(&tools));
             }
             GenericProvider::merge_extra_body_fields(&mut body, extra_body.as_ref());
+            AnthropicProvider::strip_unsupported_anthropic_controls(&mut body, effective_model);
 
-            let url = format!("{}/v1/messages", provider.base_url.trim_end_matches('/'));
+            let url = provider.messages_url();
 
             let resp = match provider.send_with_dead_connection_recovery(&url, &api_key, &body).await {
                 Ok(r) => r,
@@ -2665,6 +2738,133 @@ mod tests {
             AnthropicProvider::convert_messages(&messages, Some("https://api.anthropic.com"));
         let content = msgs[0]["content"].as_array().unwrap();
         assert_eq!(content[0]["type"], "tool_use");
+    }
+
+    #[test]
+    fn test_anthropic_messages_url_adds_azure_api_version_query() {
+        let url = AnthropicProvider::messages_url_for_base_url(
+            "https://my-resource.openai.azure.com/anthropic",
+        );
+        assert_eq!(
+            url,
+            "https://my-resource.openai.azure.com/anthropic/v1/messages?api-version=2025-04-15"
+        );
+
+        let existing = AnthropicProvider::messages_url_for_base_url(
+            "https://my-resource.openai.azure.com/anthropic?api-version=2024-01-01",
+        );
+        assert_eq!(
+            existing,
+            "https://my-resource.openai.azure.com/anthropic/v1/messages?api-version=2024-01-01"
+        );
+    }
+
+    #[test]
+    fn test_anthropic_request_uses_bearer_auth_and_azure_betas_for_foundry() {
+        let provider = AnthropicProvider::new("azure-foundry-secret")
+            .with_base_url("https://my-resource.openai.azure.com/anthropic");
+        let url = provider.messages_url();
+        let request = provider
+            .build_request(
+                &Client::new(),
+                &url,
+                "azure-foundry-secret",
+                &serde_json::json!({}),
+            )
+            .build()
+            .expect("request");
+        let headers = request.headers();
+        assert_eq!(
+            headers.get("Authorization").and_then(|h| h.to_str().ok()),
+            Some("Bearer azure-foundry-secret")
+        );
+        assert!(headers.get("x-api-key").is_none());
+        let betas = headers
+            .get("anthropic-beta")
+            .and_then(|h| h.to_str().ok())
+            .expect("anthropic-beta");
+        assert!(betas.contains("context-1m-2025-08-07"));
+        assert!(betas.contains("fine-grained-tool-streaming-2025-05-14"));
+    }
+
+    #[test]
+    fn test_anthropic_request_uses_api_key_for_native_api_key() {
+        let provider = AnthropicProvider::new("sk-ant-api03-secret");
+        let request = provider
+            .build_request(
+                &Client::new(),
+                "https://api.anthropic.com/v1/messages",
+                "sk-ant-api03-secret",
+                &serde_json::json!({}),
+            )
+            .build()
+            .expect("request");
+        let headers = request.headers();
+        assert_eq!(
+            headers.get("x-api-key").and_then(|h| h.to_str().ok()),
+            Some("sk-ant-api03-secret")
+        );
+        assert!(headers.get("Authorization").is_none());
+        let betas = headers
+            .get("anthropic-beta")
+            .and_then(|h| h.to_str().ok())
+            .expect("anthropic-beta");
+        assert!(betas.contains("interleaved-thinking-2025-05-14"));
+        assert!(!betas.contains("oauth-2025-04-20"));
+        assert!(!betas.contains("context-1m-2025-08-07"));
+    }
+
+    #[test]
+    fn test_anthropic_request_uses_bearer_and_oauth_betas_for_native_oauth() {
+        let provider = AnthropicProvider::new("sk-ant-oat01-secret");
+        let request = provider
+            .build_request(
+                &Client::new(),
+                "https://api.anthropic.com/v1/messages",
+                "sk-ant-oat01-secret",
+                &serde_json::json!({}),
+            )
+            .build()
+            .expect("request");
+        let headers = request.headers();
+        assert_eq!(
+            headers.get("Authorization").and_then(|h| h.to_str().ok()),
+            Some("Bearer sk-ant-oat01-secret")
+        );
+        assert!(headers.get("x-api-key").is_none());
+        let betas = headers
+            .get("anthropic-beta")
+            .and_then(|h| h.to_str().ok())
+            .expect("anthropic-beta");
+        assert!(betas.contains("oauth-2025-04-20"));
+        assert!(betas.contains("claude-code-20250219"));
+    }
+
+    #[test]
+    fn test_anthropic_strips_sampling_and_unsupported_fast_controls() {
+        let mut body = serde_json::json!({
+            "model": "claude-opus-4-8-fast",
+            "messages": [],
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 20,
+            "speed": "fast"
+        });
+        AnthropicProvider::strip_unsupported_anthropic_controls(&mut body, "claude-opus-4-8-fast");
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+        assert!(body.get("top_k").is_none());
+        assert!(body.get("speed").is_none());
+
+        let mut supported = serde_json::json!({
+            "model": "claude-opus-4-6",
+            "messages": [],
+            "temperature": 0.7,
+            "speed": "fast"
+        });
+        AnthropicProvider::strip_unsupported_anthropic_controls(&mut supported, "claude-opus-4-6");
+        assert_eq!(supported["temperature"], serde_json::json!(0.7));
+        assert_eq!(supported["speed"], serde_json::json!("fast"));
     }
 
     #[test]
