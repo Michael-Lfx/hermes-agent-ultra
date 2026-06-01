@@ -2,7 +2,7 @@
 //!
 //! Mirrors Python package layout:
 //! - `backend`    abstract backend types
-//! - `cua_backend` macOS cua-driver MCP backend
+//! - `cua_backend` cua-driver MCP backend (macOS + Windows when installed)
 //! - `schema`     tool schema builder
 //! - `tool`       dispatch + safety + fallback backend
 

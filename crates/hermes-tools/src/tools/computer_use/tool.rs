@@ -117,15 +117,19 @@ pub struct ComputerUseHandler {
 
 impl ComputerUseHandler {
     pub fn with_default_backend() -> Self {
-        let backend: Arc<dyn ComputerUseBackend> = if cfg!(target_os = "macos")
-            && cua_driver_binary_available()
-        {
+        let backend: Arc<dyn ComputerUseBackend> = if prefer_cua_driver_backend() {
+            tracing::info!("computer_use backend: cua-driver");
             Arc::new(CuaDriverBackend::new())
         } else {
+            tracing::info!("computer_use backend: fallback capture-only");
             Arc::new(FallbackCaptureBackend)
         };
         Self { backend }
     }
+}
+
+fn prefer_cua_driver_backend() -> bool {
+    cua_driver_binary_available()
 }
 
 #[async_trait]
@@ -303,11 +307,11 @@ pub fn check_computer_use_requirements() -> bool {
     if cua_driver_binary_available() {
         return true;
     }
+    if cfg!(target_os = "windows") {
+        return false;
+    }
     if cfg!(target_os = "macos") {
         return command_exists("screencapture");
-    }
-    if cfg!(target_os = "windows") {
-        return command_exists("powershell") || command_exists("pwsh");
     }
     if cfg!(target_os = "linux") {
         return command_exists("grim")
@@ -531,21 +535,12 @@ async fn capture_to_file_output(capture: &CaptureResult) -> Result<String, ToolE
     )
 }
 
+const WINDOWS_CUA_DRIVER_HINT: &str = "Windows computer_use requires cua-driver on PATH; \
+    install via `hermes tools` (Computer Use) or `hermes computer-use install`";
+
 async fn capture_desktop_to_path(path: &Path) -> Result<(), ToolError> {
     if cfg!(target_os = "windows") {
-        let escaped = path.to_string_lossy().replace('\'', "''");
-        let script = format!(
-            "Add-Type -AssemblyName System.Drawing; \
-             Add-Type -AssemblyName System.Windows.Forms; \
-             $b=[System.Windows.Forms.SystemInformation]::VirtualScreen; \
-             $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; \
-             $g=[System.Drawing.Graphics]::FromImage($bmp); \
-             $g.CopyFromScreen($b.Left,$b.Top,0,0,$bmp.Size); \
-             $bmp.Save('{escaped}',[System.Drawing.Imaging.ImageFormat]::Png); \
-             $g.Dispose(); $bmp.Dispose();"
-        );
-        run_capture_command("powershell", &["-NoProfile", "-Command", &script]).await?;
-        return Ok(());
+        return Err(ToolError::ExecutionFailed(WINDOWS_CUA_DRIVER_HINT.to_string()));
     }
     if cfg!(target_os = "macos") {
         run_capture_command("screencapture", &["-x", &path.to_string_lossy()]).await?;
@@ -573,16 +568,46 @@ async fn capture_desktop_to_path(path: &Path) -> Result<(), ToolError> {
 }
 
 async fn run_capture_command(program: &str, args: &[&str]) -> Result<(), ToolError> {
-    let status = Command::new(program)
+    let output = Command::new(program)
         .args(args)
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("spawn {program}: {e}")))?;
-    if status.success() {
+    if output.status.success() {
         Ok(())
     } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("unknown error");
         Err(ToolError::ExecutionFailed(format!(
-            "{program} exited with status {status}"
+            "{program} capture failed (status {}): {detail}",
+            output.status
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backend_selection_not_macos_gated() {
+        let src = include_str!("tool.rs");
+        assert!(
+            !src.contains("cfg!(target_os = \"macos\")\n            && cua_driver_binary_available()"),
+            "cua-driver backend must not be macOS-only"
+        );
+    }
+
+    #[test]
+    fn prefer_cua_driver_matches_binary_availability() {
+        assert_eq!(
+            prefer_cua_driver_backend(),
+            cua_driver_binary_available()
+        );
     }
 }
