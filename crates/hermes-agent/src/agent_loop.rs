@@ -6981,6 +6981,7 @@ impl AgentLoop {
                     parent_budget_remaining_usd,
                     &mut tool_errors,
                     Some(&mut checkpoint_mgr),
+                    latest_user_content(ctx.get_messages()).map(str::to_string),
                 )
                 .await;
             if !deferred_web_budget_results.is_empty() {
@@ -8460,6 +8461,7 @@ impl AgentLoop {
                         .map(|limit| (limit - session_cost_usd).max(0.0)),
                     &mut tool_errors,
                     Some(&mut checkpoint_mgr),
+                    latest_user_content(ctx.get_messages()).map(str::to_string),
                 )
                 .await;
             if !deferred_web_budget_results.is_empty() {
@@ -9334,6 +9336,7 @@ impl AgentLoop {
         parent_budget_remaining_usd: Option<f64>,
         tool_errors: &mut Vec<hermes_core::ToolErrorRecord>,
         mut checkpoint_mgr: Option<&mut hermes_tools::CheckpointManager>,
+        current_user_task: Option<String>,
     ) -> Vec<ToolResult> {
         let mut join_set = JoinSet::new();
         let tool_concurrency = if hermes_tools::should_parallelize_tool_batch(tool_calls) {
@@ -9346,6 +9349,7 @@ impl AgentLoop {
         let current_delegate_depth = self.delegate_depth;
         let orchestrator = self.sub_agent_orchestrator.clone();
         let async_tool_dispatch = self.async_tool_dispatch.clone();
+        let active_task_id = self.current_task_id();
         let mut dedupe_search_seen: HashMap<String, String> = HashMap::new();
         let mut dedupe_search_dups: Vec<(String, String)> = Vec::new();
 
@@ -9480,6 +9484,8 @@ impl AgentLoop {
             let max_delegate_depth = max_delegate_depth;
             let current_delegate_depth = current_delegate_depth;
             let parent_budget_remaining_usd = parent_budget_remaining_usd;
+            let active_task_id = active_task_id.clone();
+            let current_user_task = current_user_task.clone();
 
             join_set.spawn(async move {
                 let started = Instant::now();
@@ -9496,6 +9502,12 @@ impl AgentLoop {
                             return ToolResult::err(&tool_call_id, error_msg);
                         }
                     };
+                    inject_runtime_tool_params(
+                        &tool_name,
+                        &mut params,
+                        active_task_id.as_deref(),
+                        current_user_task.as_deref(),
+                    );
                     if tool_name == "delegate_task" {
                         if current_delegate_depth >= max_delegate_depth {
                             return ToolResult::err(
@@ -9536,6 +9548,12 @@ impl AgentLoop {
                                     return ToolResult::err(&tool_call_id, error_msg);
                                 }
                             };
+                            inject_runtime_tool_params(
+                                &tool_name,
+                                &mut params,
+                                active_task_id.as_deref(),
+                                current_user_task.as_deref(),
+                            );
                             if tool_name == "delegate_task" {
                                 if current_delegate_depth >= max_delegate_depth {
                                     return ToolResult::err(
@@ -9905,6 +9923,31 @@ fn latest_user_content(messages: &[Message]) -> Option<&str> {
         .rev()
         .find(|m| matches!(m.role, hermes_core::MessageRole::User))
         .and_then(|m| m.content.as_deref())
+}
+
+fn inject_runtime_tool_params(
+    tool_name: &str,
+    params: &mut Value,
+    task_id: Option<&str>,
+    user_task: Option<&str>,
+) {
+    if !params.is_object() {
+        *params = serde_json::json!({});
+    }
+    let Some(obj) = params.as_object_mut() else {
+        return;
+    };
+
+    if let Some(task_id) = task_id.filter(|v| !v.trim().is_empty()) {
+        obj.entry("task_id".to_string())
+            .or_insert_with(|| Value::String(task_id.to_string()));
+    }
+    if tool_name.starts_with("browser_") {
+        if let Some(user_task) = user_task.filter(|v| !v.trim().is_empty()) {
+            obj.entry("user_task".to_string())
+                .or_insert_with(|| Value::String(user_task.to_string()));
+        }
+    }
 }
 
 fn extract_session_objective(messages: &[Message]) -> Option<String> {

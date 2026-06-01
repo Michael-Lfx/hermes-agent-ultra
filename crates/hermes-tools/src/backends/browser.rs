@@ -231,29 +231,29 @@ impl BrowserBackend for CdpBrowserBackend {
         Ok(json!({"status": "snapshot", "cdp": result}).to_string())
     }
 
-    async fn click(&self, selector: &str) -> Result<String, ToolError> {
+    async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
         // Use Runtime.evaluate to find and click the element
         let js = format!(
             "document.querySelector('{}')?.click(); 'clicked'",
-            selector.replace('\'', "\\'")
+            ref_id.replace('\'', "\\'")
         );
         let result = self
             .cdp_command("Runtime.evaluate", json!({"expression": js}))
             .await?;
-        Ok(json!({"status": "clicked", "selector": selector, "cdp": result}).to_string())
+        Ok(json!({"status": "clicked", "ref": ref_id, "cdp": result}).to_string())
     }
 
-    async fn r#type(&self, selector: &str, text: &str) -> Result<String, ToolError> {
+    async fn r#type(&self, ref_id: &str, text: &str) -> Result<String, ToolError> {
         let js = format!(
             "let el = document.querySelector('{}'); if(el) {{ el.value = '{}'; el.dispatchEvent(new Event('input')); 'typed' }} else {{ 'not found' }}",
-            selector.replace('\'', "\\'"),
+            ref_id.replace('\'', "\\'"),
             text.replace('\'', "\\'")
         );
         let result = self
             .cdp_command("Runtime.evaluate", json!({"expression": js}))
             .await?;
         Ok(
-            json!({"status": "typed", "selector": selector, "text": text, "cdp": result})
+            json!({"status": "typed", "ref": ref_id, "text": text, "cdp": result})
                 .to_string(),
         )
     }
@@ -365,11 +365,11 @@ impl BrowserBackend for CamoFoxBrowserBackend {
     async fn snapshot(&self) -> Result<String, ToolError> {
         self.inner.snapshot().await
     }
-    async fn click(&self, selector: &str) -> Result<String, ToolError> {
-        self.inner.click(selector).await
+    async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
+        self.inner.click(ref_id).await
     }
-    async fn r#type(&self, selector: &str, text: &str) -> Result<String, ToolError> {
-        self.inner.r#type(selector, text).await
+    async fn r#type(&self, ref_id: &str, text: &str) -> Result<String, ToolError> {
+        self.inner.r#type(ref_id, text).await
     }
     async fn scroll(&self, direction: &str, amount: Option<u32>) -> Result<String, ToolError> {
         self.inner.scroll(direction, amount).await

@@ -19,8 +19,8 @@ use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
 pub trait BrowserBackend: Send + Sync {
     async fn navigate(&self, url: &str) -> Result<String, ToolError>;
     async fn snapshot(&self) -> Result<String, ToolError>;
-    async fn click(&self, selector: &str) -> Result<String, ToolError>;
-    async fn r#type(&self, selector: &str, text: &str) -> Result<String, ToolError>;
+    async fn click(&self, ref_id: &str) -> Result<String, ToolError>;
+    async fn r#type(&self, ref_id: &str, text: &str) -> Result<String, ToolError>;
     async fn scroll(&self, direction: &str, amount: Option<u32>) -> Result<String, ToolError>;
     async fn go_back(&self) -> Result<String, ToolError>;
     async fn press(&self, key: &str) -> Result<String, ToolError>;
@@ -116,26 +116,34 @@ impl BrowserClickHandler {
 #[async_trait]
 impl ToolHandler for BrowserClickHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let selector = params
-            .get("selector")
+        let ref_id = params
+            .get("ref")
+            .or_else(|| params.get("selector"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("Missing 'selector' parameter".into()))?;
-        self.backend.click(selector).await
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'ref' parameter".into()))?;
+        self.backend.click(ref_id).await
     }
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
         props.insert(
+            "ref".into(),
+            json!({
+                "type": "string",
+                "description": "Element ref from browser_snapshot, e.g. @e5"
+            }),
+        );
+        props.insert(
             "selector".into(),
             json!({
                 "type": "string",
-                "description": "CSS selector or accessibility label to click"
+                "description": "Deprecated compatibility alias for ref"
             }),
         );
         tool_schema(
             "browser_click",
             "Click an element on the page.",
-            JsonSchema::object(props, vec!["selector".into()]),
+            JsonSchema::object(props, vec!["ref".into()]),
         )
     }
 }
@@ -157,24 +165,32 @@ impl BrowserTypeHandler {
 #[async_trait]
 impl ToolHandler for BrowserTypeHandler {
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let selector = params
-            .get("selector")
+        let ref_id = params
+            .get("ref")
+            .or_else(|| params.get("selector"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ToolError::InvalidParams("Missing 'selector' parameter".into()))?;
+            .ok_or_else(|| ToolError::InvalidParams("Missing 'ref' parameter".into()))?;
         let text = params
             .get("text")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'text' parameter".into()))?;
-        self.backend.r#type(selector, text).await
+        self.backend.r#type(ref_id, text).await
     }
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
         props.insert(
+            "ref".into(),
+            json!({
+                "type": "string",
+                "description": "Element ref from browser_snapshot, e.g. @e5"
+            }),
+        );
+        props.insert(
             "selector".into(),
             json!({
                 "type": "string",
-                "description": "CSS selector or accessibility label of the input field"
+                "description": "Deprecated compatibility alias for ref"
             }),
         );
         props.insert(
@@ -187,7 +203,7 @@ impl ToolHandler for BrowserTypeHandler {
         tool_schema(
             "browser_type",
             "Type text into an element on the page.",
-            JsonSchema::object(props, vec!["selector".into(), "text".into()]),
+            JsonSchema::object(props, vec!["ref".into(), "text".into()]),
         )
     }
 }
@@ -448,11 +464,11 @@ mod tests {
         async fn snapshot(&self) -> Result<String, ToolError> {
             Ok("Page snapshot".into())
         }
-        async fn click(&self, sel: &str) -> Result<String, ToolError> {
-            Ok(format!("Clicked {}", sel))
+        async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
+            Ok(format!("Clicked {}", ref_id))
         }
-        async fn r#type(&self, sel: &str, text: &str) -> Result<String, ToolError> {
-            Ok(format!("Typed '{}' into {}", text, sel))
+        async fn r#type(&self, ref_id: &str, text: &str) -> Result<String, ToolError> {
+            Ok(format!("Typed '{}' into {}", text, ref_id))
         }
         async fn scroll(&self, dir: &str, _amt: Option<u32>) -> Result<String, ToolError> {
             Ok(format!("Scrolled {}", dir))
@@ -491,8 +507,8 @@ mod tests {
     #[tokio::test]
     async fn test_browser_click() {
         let handler = BrowserClickHandler::new(backend());
-        let result = handler.execute(json!({"selector": "#btn"})).await.unwrap();
-        assert!(result.contains("#btn"));
+        let result = handler.execute(json!({"ref": "@e5"})).await.unwrap();
+        assert!(result.contains("@e5"));
     }
 
     #[tokio::test]
