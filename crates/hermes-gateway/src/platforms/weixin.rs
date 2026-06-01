@@ -61,6 +61,9 @@ const TYPING_START: u8 = 1;
 const TYPING_STOP: u8 = 2;
 const TYPING_TICKET_TTL: Duration = Duration::from_secs(600);
 
+/// Refresh interval for iLink typing while the agent is still processing (PicoClaw parity).
+pub const WEIXIN_TYPING_REFRESH_SECS: u64 = 5;
+
 const WEIXIN_CDN_ALLOWLIST: &[&str] = &[
     "novac2c.cdn.weixin.qq.com",
     "ilinkai.weixin.qq.com",
@@ -1933,6 +1936,16 @@ impl PlatformAdapter for WeChatAdapter {
             Ok(()) => {}
             Err(e) => {
                 debug!(chat_id, error = %e, "weixin: trigger_typing failed");
+            }
+        }
+        Ok(())
+    }
+
+    async fn stop_typing(&self, chat_id: &str) -> Result<(), GatewayError> {
+        match WeChatAdapter::send_typing_signal(&self.inner, chat_id, TYPING_STOP).await {
+            Ok(()) => {}
+            Err(e) => {
+                debug!(chat_id, error = %e, "weixin: stop_typing failed");
             }
         }
         Ok(())

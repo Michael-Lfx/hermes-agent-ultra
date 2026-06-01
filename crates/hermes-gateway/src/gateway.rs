@@ -56,6 +56,33 @@ fn streaming_feedback_delay_ms() -> u64 {
         .unwrap_or(10_000)
 }
 
+/// Weixin iLink typing refresh interval when the `weixin` feature is disabled at compile time.
+const WEIXIN_TYPING_REFRESH_SECS_FALLBACK: u64 = 5;
+
+/// Cancels a platform typing keepalive started by [`Gateway::spawn_route_typing`].
+struct RouteTypingGuard {
+    cancel: Option<Arc<AtomicBool>>,
+    join: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RouteTypingGuard {
+    fn none() -> Self {
+        Self {
+            cancel: None,
+            join: None,
+        }
+    }
+
+    async fn finish(self) {
+        if let Some(cancel) = self.cancel {
+            cancel.store(true, Ordering::Release);
+        }
+        if let Some(join) = self.join {
+            let _ = tokio::time::timeout(Duration::from_secs(3), join).await;
+        }
+    }
+}
+
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 use hermes_core::types::{Message, MessageRole};
@@ -761,6 +788,57 @@ impl Gateway {
         Ok(())
     }
 
+    /// Start platform typing indicators for the duration of a route (best-effort).
+    ///
+    /// Discord: single `trigger_typing`. Weixin: START immediately, refresh every ~5s,
+    /// then STOP when [`RouteTypingGuard::finish`] is called.
+    fn spawn_route_typing(
+        platform: &str,
+        adapter: Arc<dyn PlatformAdapter>,
+        chat_id: String,
+    ) -> RouteTypingGuard {
+        if platform.eq_ignore_ascii_case("discord") {
+            tokio::spawn(async move {
+                let _ = adapter.trigger_typing(&chat_id).await;
+            });
+            return RouteTypingGuard::none();
+        }
+
+        if !platform.eq_ignore_ascii_case("weixin") {
+            return RouteTypingGuard::none();
+        }
+
+        #[cfg(feature = "weixin")]
+        let refresh_secs = crate::platforms::weixin::WEIXIN_TYPING_REFRESH_SECS;
+        #[cfg(not(feature = "weixin"))]
+        let refresh_secs = WEIXIN_TYPING_REFRESH_SECS_FALLBACK;
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_flag = cancelled.clone();
+        let join = tokio::spawn(async move {
+            loop {
+                let _ = adapter.trigger_typing(&chat_id).await;
+                tokio::select! {
+                    () = async {
+                        while !cancel_flag.load(Ordering::Acquire) {
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                    } => break,
+                    () = tokio::time::sleep(Duration::from_secs(refresh_secs)) => {}
+                }
+                if cancel_flag.load(Ordering::Acquire) {
+                    break;
+                }
+            }
+            let _ = adapter.stop_typing(&chat_id).await;
+        });
+
+        RouteTypingGuard {
+            cancel: Some(cancelled),
+            join: Some(join),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Message routing
     // -----------------------------------------------------------------------
@@ -994,14 +1072,15 @@ impl Gateway {
             }
         }
 
-        if incoming.platform.eq_ignore_ascii_case("discord") {
-            if let Some(adapter) = self.get_adapter("discord").await {
-                let chat_id = incoming.chat_id.clone();
-                tokio::spawn(async move {
-                    let _ = adapter.trigger_typing(&chat_id).await;
-                });
-            }
-        }
+        let typing_guard = if let Some(adapter) = self.get_adapter(&incoming.platform).await {
+            Self::spawn_route_typing(
+                &incoming.platform,
+                adapter,
+                incoming.chat_id.clone(),
+            )
+        } else {
+            RouteTypingGuard::none()
+        };
 
         let reaction_adapter = if self.should_apply_reaction_lifecycle(incoming).await {
             self.get_adapter(&incoming.platform).await
@@ -1100,6 +1179,7 @@ impl Gateway {
             .insert(session_key.clone(), abort_handle);
         let routed = Abortable::new(route_future, abort_reg).await;
         self.active_routes.write().await.remove(&session_key);
+        typing_guard.finish().await;
         let processing_result = match routed {
             Ok(result) => result,
             Err(_) => {
@@ -3139,6 +3219,7 @@ mod tests {
         messages: Arc<Mutex<Vec<(String, String)>>>,
         reactions: Arc<Mutex<Vec<String>>>,
         typing: Arc<Mutex<Vec<String>>>,
+        typing_stops: Arc<Mutex<Vec<String>>>,
         platform: &'static str,
     }
 
@@ -3301,6 +3382,14 @@ mod tests {
 
         async fn trigger_typing(&self, chat_id: &str) -> Result<(), GatewayError> {
             self.typing.lock().unwrap().push(chat_id.to_string());
+            Ok(())
+        }
+
+        async fn stop_typing(&self, chat_id: &str) -> Result<(), GatewayError> {
+            self.typing_stops
+                .lock()
+                .unwrap()
+                .push(chat_id.to_string());
             Ok(())
         }
 
@@ -4372,6 +4461,7 @@ mod tests {
             messages: sent.clone(),
             reactions: reactions.clone(),
             typing: Arc::new(Mutex::new(Vec::new())),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "slack",
         });
 
@@ -4420,6 +4510,7 @@ mod tests {
             messages: sent.clone(),
             reactions: reactions.clone(),
             typing: Arc::new(Mutex::new(Vec::new())),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "slack",
         });
 
@@ -4468,6 +4559,7 @@ mod tests {
             messages: sent.clone(),
             reactions: reactions.clone(),
             typing: Arc::new(Mutex::new(Vec::new())),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "slack",
         });
 
@@ -4507,6 +4599,7 @@ mod tests {
             messages: sent.clone(),
             reactions: reactions.clone(),
             typing: typing.clone(),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "discord",
         });
 
@@ -4555,6 +4648,7 @@ mod tests {
             messages: sent.clone(),
             reactions: reactions.clone(),
             typing: Arc::new(Mutex::new(Vec::new())),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "discord",
         });
 
@@ -4602,6 +4696,7 @@ mod tests {
             messages: Arc::new(Mutex::new(Vec::new())),
             reactions: reactions.clone(),
             typing: Arc::new(Mutex::new(Vec::new())),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "discord",
         });
 
@@ -4659,6 +4754,7 @@ mod tests {
             messages: Arc::new(Mutex::new(Vec::new())),
             reactions: Arc::new(Mutex::new(Vec::new())),
             typing: typing.clone(),
+            typing_stops: Arc::new(Mutex::new(Vec::new())),
             platform: "discord",
         });
 
@@ -4689,6 +4785,51 @@ mod tests {
         assert!(gw.route_message(&incoming).await.is_ok());
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(typing.lock().unwrap().as_slice(), &["dm-typing"]);
+    }
+
+    #[tokio::test]
+    async fn gateway_weixin_spawns_typing_on_route() {
+        let typing = Arc::new(Mutex::new(Vec::new()));
+        let typing_stops = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(ReactionTestAdapter {
+            messages: Arc::new(Mutex::new(Vec::new())),
+            reactions: Arc::new(Mutex::new(Vec::new())),
+            typing: typing.clone(),
+            typing_stops: typing_stops.clone(),
+            platform: "weixin",
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let gw = Gateway::new(session_mgr, dm_manager, GatewayConfig::default());
+        gw.register_adapter("weixin", adapter).await;
+        gw.set_message_handler(Arc::new(|_messages| {
+            Box::pin(async { Ok("done".to_string()) })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "weixin".into(),
+            chat_id: "wx-user-1".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: Some("msg-wx".into()),
+            is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+            ..Default::default()
+        };
+        assert!(gw.route_message(&incoming).await.is_ok());
+        assert!(!typing.lock().unwrap().is_empty());
+        assert_eq!(typing_stops.lock().unwrap().as_slice(), &["wx-user-1"]);
+        assert!(
+            typing.lock().unwrap().iter().all(|id| id == "wx-user-1"),
+            "typing refresh should target the same chat_id"
+        );
     }
 
     #[tokio::test]

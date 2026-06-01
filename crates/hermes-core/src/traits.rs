@@ -187,6 +187,11 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(())
     }
 
+    /// Clear a typing indicator in the chat (best-effort).
+    async fn stop_typing(&self, _chat_id: &str) -> Result<(), GatewayError> {
+        Ok(())
+    }
+
     /// Reply to a deferred slash/command interaction (Discord follow-up).
     async fn respond_interaction(
         &self,
