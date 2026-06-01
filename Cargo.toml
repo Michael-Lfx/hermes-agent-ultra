@@ -84,6 +84,7 @@ cron = "0.16"
 # Utils
 regex = "1"
 async-trait = "0.1"
+liteparse = { version = "2", default-features = false }
 uuid = { version = "1", features = ["v4", "serde"] }
 base64 = "0.22"
 bytes = "1"

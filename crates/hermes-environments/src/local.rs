@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use liteparse::{LiteParse, LiteParseConfig};
 use serde_json::{json, Value};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::ChildStdin;
@@ -19,7 +20,7 @@ use hermes_core::{AgentError, CommandOutput, TerminalBackend};
 /// Extensions that must not be read as UTF-8 text (images, archives, binaries).
 const BINARY_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "heic", "heif", "avif",
-    "pdf", "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "exe", "dll", "so", "dylib", "bin",
+    "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "exe", "dll", "so", "dylib", "bin",
     "wasm", "mp3", "mp4", "wav", "ogg", "webm", "mov", "avi", "mkv", "flac", "aac", "woff",
     "woff2", "ttf", "otf", "eot", "pyc", "class", "o", "a", "db", "sqlite", "sqlite3",
 ];
@@ -47,6 +48,31 @@ fn extension_lower(path: &std::path::Path) -> Option<String> {
 
 fn is_blocked_binary_extension(ext: &str) -> bool {
     BINARY_EXTENSIONS.contains(&ext)
+}
+
+async fn parse_pdf_with_liteparse(path: &std::path::Path) -> Result<String, AgentError> {
+    let parser = LiteParse::new(LiteParseConfig::default());
+    let path_str = path.to_string_lossy();
+    let result = parser.parse(path_str.as_ref()).await.map_err(|e| {
+        AgentError::Io(format!(
+            "LiteParse failed for '{}': {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(result.text)
+}
+
+fn paginate_content_lines(content: &str, offset: Option<u64>, limit: Option<u64>) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let start = offset.unwrap_or(0) as usize;
+    let start = start.min(lines.len());
+    let end = if let Some(lim) = limit {
+        (start + lim as usize).min(lines.len())
+    } else {
+        lines.len()
+    };
+    lines[start..end].join("\n")
 }
 
 fn sample_looks_binary(bytes: &[u8]) -> bool {
@@ -926,6 +952,10 @@ impl TerminalBackend for LocalBackend {
         limit: Option<u64>,
     ) -> Result<String, AgentError> {
         let resolved = resolve_path(path)?;
+        if extension_lower(&resolved).as_deref() == Some("pdf") {
+            let content = parse_pdf_with_liteparse(&resolved).await?;
+            return Ok(paginate_content_lines(&content, offset, limit));
+        }
         if let Some(ext) = extension_lower(&resolved) {
             if is_blocked_binary_extension(&ext) {
                 return Err(binary_read_error(path, &ext));
@@ -942,22 +972,7 @@ impl TerminalBackend for LocalBackend {
             let ext = extension_lower(&resolved).unwrap_or_else(|| "unknown".into());
             binary_read_error(path, &ext)
         })?;
-
-        let lines: Vec<&str> = content.lines().collect();
-
-        // Apply offset (0-indexed line number to start from)
-        let start = offset.unwrap_or(0) as usize;
-        let start = start.min(lines.len());
-
-        // Apply limit (max number of lines to return)
-        let end = if let Some(lim) = limit {
-            (start + lim as usize).min(lines.len())
-        } else {
-            lines.len()
-        };
-
-        let selected_lines = &lines[start..end];
-        Ok(selected_lines.join("\n"))
+        Ok(paginate_content_lines(&content, offset, limit))
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<(), AgentError> {
@@ -1238,7 +1253,7 @@ mod tests {
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
             let original = std::env::var_os(key);
-            std::env::set_var(key, value);
+            unsafe { std::env::set_var(key, value) };
             Self { key, original }
         }
     }
@@ -1246,8 +1261,8 @@ mod tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             match &self.original {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
             }
         }
     }
@@ -1531,6 +1546,25 @@ mod tests {
             .to_string();
         assert!(err.contains("Cannot read binary file"));
         assert!(err.contains("vision_analyze"));
+    }
+
+    #[test]
+    fn test_pdf_extension_not_blocked_by_binary_guard() {
+        assert!(!is_blocked_binary_extension("pdf"));
+    }
+
+    #[tokio::test]
+    async fn test_read_file_pdf_surfaces_liteparse_error() {
+        let td = tempdir().unwrap();
+        let pdf = td.path().join("test.pdf");
+        std::fs::write(&pdf, b"not a valid pdf").unwrap();
+        let backend = LocalBackend::default();
+        let err = backend
+            .read_file(pdf.to_str().unwrap(), None, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("LiteParse failed for"));
     }
 
     #[tokio::test]
