@@ -13,10 +13,12 @@ use tracing::{debug, warn};
 use hermes_core::ToolError;
 
 pub mod calendar;
+pub mod chat_history;
 pub mod docs;
 pub mod task;
 
 pub use calendar::FeishuCalendarHandler;
+pub use chat_history::FeishuChatHistoryHandler;
 pub use docs::FeishuDocsHandler;
 pub use task::FeishuTaskHandler;
 
