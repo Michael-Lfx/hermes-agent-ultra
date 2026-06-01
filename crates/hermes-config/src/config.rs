@@ -700,6 +700,38 @@ pub struct TerminalConfig {
     /// Working directory override for command execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workdir: Option<String>,
+
+    /// Docker container id/name to reuse instead of creating a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_container_id: Option<String>,
+
+    /// Docker image used when the Docker backend creates a container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_image: Option<String>,
+
+    /// Mount the current host directory into Docker at `/workspace`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub docker_mount_cwd_to_workspace: bool,
+
+    /// Runtime name for Vercel-backed terminal execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vercel_runtime: Option<String>,
+
+    /// SSH backend host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host: Option<String>,
+
+    /// SSH backend port.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+
+    /// SSH backend username.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_user: Option<String>,
+
+    /// SSH backend private-key path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_key_path: Option<String>,
 }
 
 impl Default for TerminalConfig {
@@ -709,8 +741,20 @@ impl Default for TerminalConfig {
             timeout: default_terminal_timeout(),
             max_output_size: default_max_output_size(),
             workdir: None,
+            docker_container_id: None,
+            docker_image: None,
+            docker_mount_cwd_to_workspace: false,
+            vercel_runtime: None,
+            ssh_host: None,
+            ssh_port: None,
+            ssh_user: None,
+            ssh_key_path: None,
         }
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_terminal_timeout() -> u64 {

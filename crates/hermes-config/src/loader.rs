@@ -1,6 +1,8 @@
 //! Configuration loading from YAML, JSON, and environment variables.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Re-export ConfigError for convenience
 pub use hermes_core::ConfigError;
@@ -27,6 +29,74 @@ fn json_to_config_error(e: serde_json::Error) -> ConfigError {
 /// Helper function to convert std::io::Error to ConfigError (avoids orphan rule).
 fn io_to_config_error(e: std::io::Error) -> ConfigError {
     ConfigError::ParseError(e.to_string())
+}
+
+static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn target_parent(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+fn atomic_temp_path(path: &Path) -> Result<PathBuf, ConfigError> {
+    let parent = target_parent(path);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            ConfigError::ParseError(format!("invalid config path: {}", path.display()))
+        })?;
+    let nonce = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    Ok(parent.join(format!(".{file_name}.tmp.{}.{}", std::process::id(), nonce)))
+}
+
+/// Atomically write bytes to a path by writing a sibling temp file then renaming.
+pub fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), ConfigError> {
+    let parent = target_parent(path);
+    std::fs::create_dir_all(parent).map_err(io_to_config_error)?;
+    let tmp_path = atomic_temp_path(path)?;
+
+    let result = (|| -> Result<(), ConfigError> {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        let mut file = options.open(&tmp_path).map_err(io_to_config_error)?;
+        file.write_all(bytes).map_err(io_to_config_error)?;
+        file.sync_all().map_err(io_to_config_error)?;
+        drop(file);
+        std::fs::rename(&tmp_path, path).map_err(io_to_config_error)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+/// Crash-safe JSON write compatible with upstream `utils.atomic_json_write`.
+pub fn atomic_json_write(path: &Path, value: &serde_json::Value) -> Result<(), ConfigError> {
+    let bytes = serde_json::to_vec(value).map_err(json_to_config_error)?;
+    atomic_write_bytes(path, &bytes)
+}
+
+/// Crash-safe pretty JSON write for user-facing state files.
+pub fn atomic_json_write_pretty(path: &Path, value: &serde_json::Value) -> Result<(), ConfigError> {
+    let bytes = serde_json::to_vec_pretty(value).map_err(json_to_config_error)?;
+    atomic_write_bytes(path, &bytes)
+}
+
+/// Crash-safe YAML write with optional trailing content, matching Python setup helpers.
+pub fn atomic_yaml_write(
+    path: &Path,
+    value: &serde_yaml::Value,
+    extra_content: Option<&str>,
+) -> Result<(), ConfigError> {
+    let mut yaml = serde_yaml::to_string(value).map_err(yaml_to_config_error)?;
+    if let Some(extra) = extra_content {
+        yaml.push_str(extra);
+    }
+    atomic_write_bytes(path, yaml.as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +157,7 @@ fn sanitize_env_file_if_needed(path: &Path) {
     };
     let sanitized = sanitize_env_lines(&original);
     if sanitized != original {
-        let _ = std::fs::write(path, sanitized);
+        let _ = atomic_write_bytes(path, sanitized.as_bytes());
     }
 }
 
@@ -255,9 +325,20 @@ pub fn load_config(home_dir: Option<&str>) -> Result<GatewayConfig, ConfigError>
 
 /// Load a GatewayConfig from a YAML file.
 pub fn load_from_yaml(path: &Path) -> Result<GatewayConfig, ConfigError> {
+    load_from_yaml_inner(path, true)
+}
+
+fn load_from_yaml_preserving_env_refs(path: &Path) -> Result<GatewayConfig, ConfigError> {
+    load_from_yaml_inner(path, false)
+}
+
+fn load_from_yaml_inner(path: &Path, expand_env_refs: bool) -> Result<GatewayConfig, ConfigError> {
     let contents = std::fs::read_to_string(path).map_err(io_to_config_error)?;
     let mut root: serde_yaml::Value =
         serde_yaml::from_str(&contents).map_err(yaml_to_config_error)?;
+    if expand_env_refs {
+        expand_env_vars_in_yaml(&mut root);
+    }
     if let serde_yaml::Value::Mapping(ref mut m) = root {
         crate::python_yaml_compat::normalize_config_yaml_root(m);
     }
@@ -265,6 +346,60 @@ pub fn load_from_yaml(path: &Path) -> Result<GatewayConfig, ConfigError> {
     mark_platform_enabled_explicit(&mut root, "ntfy");
     let config: GatewayConfig = serde_yaml::from_value(root).map_err(yaml_to_config_error)?;
     Ok(config)
+}
+
+fn expand_env_vars_in_yaml(value: &mut serde_yaml::Value) {
+    match value {
+        serde_yaml::Value::String(s) => {
+            *s = expand_env_refs_in_str(s);
+        }
+        serde_yaml::Value::Sequence(items) => {
+            for item in items {
+                expand_env_vars_in_yaml(item);
+            }
+        }
+        serde_yaml::Value::Mapping(map) => {
+            for value in map.values_mut() {
+                expand_env_vars_in_yaml(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn expand_env_refs_in_str(input: &str) -> String {
+    let mut output = String::new();
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        output.push_str(&rest[..start]);
+        let after_open = &rest[start + 2..];
+        let Some(end) = after_open.find('}') else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let name = &after_open[..end];
+        if !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
+            match std::env::var(name) {
+                Ok(value) => output.push_str(&value),
+                Err(_) => {
+                    output.push_str("${");
+                    output.push_str(name);
+                    output.push('}');
+                }
+            }
+        } else {
+            output.push_str("${");
+            output.push_str(name);
+            output.push('}');
+        }
+        rest = &after_open[end + 1..];
+    }
+    output.push_str(rest);
+    output
 }
 
 fn mark_platform_enabled_explicit(root: &mut serde_yaml::Value, platform: &str) {
@@ -298,7 +433,7 @@ fn mark_platform_enabled_explicit(root: &mut serde_yaml::Value, platform: &str) 
 /// Load `config.yaml` from disk if it exists; otherwise return defaults (no env merge).
 pub fn load_user_config_file(path: &Path) -> Result<GatewayConfig, ConfigError> {
     if path.exists() {
-        let mut cfg = load_from_yaml(path)?;
+        let mut cfg = load_from_yaml_preserving_env_refs(path)?;
         normalize_provider_secrets(&mut cfg);
         Ok(cfg)
     } else {
@@ -815,8 +950,276 @@ pub fn save_config_yaml(path: &Path, config: &GatewayConfig) -> Result<(), Confi
     let mut to_save = config.clone();
     to_save.home_dir = None;
     let yaml = serde_yaml::to_string(&to_save).map_err(yaml_to_config_error)?;
-    std::fs::write(path, yaml).map_err(io_to_config_error)?;
+    atomic_write_bytes(path, yaml.as_bytes())?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSetResult {
+    pub config_path: Option<PathBuf>,
+    pub env_path: Option<PathBuf>,
+    pub env_key: Option<String>,
+    pub config_key: Option<String>,
+}
+
+impl ConfigSetResult {
+    pub fn wrote_config(&self) -> bool {
+        self.config_path.is_some()
+    }
+
+    pub fn wrote_env(&self) -> bool {
+        self.env_path.is_some()
+    }
+}
+
+const EXPLICIT_ENV_CONFIG_KEYS: &[&str] = &[
+    "OPENROUTER_API_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "WANDB_API_KEY",
+    "TINKER_API_KEY",
+    "HONCHO_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "BROWSERBASE_API_KEY",
+    "FAL_KEY",
+    "SUDO_PASSWORD",
+    "GITHUB_TOKEN",
+    "TELEGRAM_BOT_TOKEN",
+    "DISCORD_BOT_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_APP_TOKEN",
+];
+
+/// Python-compatible `hermes config set` persistence.
+///
+/// Secret-like all-caps keys are written to `$HERMES_HOME/.env`; normal dotted
+/// keys are patched into `config.yaml` as raw YAML so list indices and future
+/// upstream keys survive round-trips instead of being dropped by the typed
+/// `GatewayConfig` serializer.
+pub fn set_user_config_value(
+    home_dir: &Path,
+    key: &str,
+    value: &str,
+) -> Result<ConfigSetResult, ConfigError> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(ConfigError::ValidationError(
+            "config key must not be empty".to_string(),
+        ));
+    }
+
+    let config_path = home_dir.join("config.yaml");
+    let env_path = home_dir.join(".env");
+    let bridge_env_key = config_env_bridge_key(key);
+    let env_key = config_key_routes_to_env(key).or_else(|| bridge_env_key.clone());
+    let writes_config = bridge_env_key.is_some() || env_key.is_none();
+
+    let mut result = ConfigSetResult {
+        config_path: None,
+        env_path: None,
+        env_key: None,
+        config_key: None,
+    };
+
+    if writes_config {
+        let mut root = load_user_config_yaml_value(&config_path)?;
+        set_yaml_path(&mut root, &split_config_key(key), scalar_yaml_value(value))?;
+        validate_user_config_value(&root)?;
+        atomic_yaml_write(&config_path, &root, None)?;
+        result.config_path = Some(config_path);
+        result.config_key = Some(key.to_string());
+    }
+
+    if let Some(env_key) = env_key {
+        save_env_key_value(&env_path, &env_key, value)?;
+        // SAFETY: config writes run on the foreground CLI path.
+        unsafe { std::env::set_var(&env_key, value) };
+        result.env_path = Some(env_path);
+        result.env_key = Some(env_key);
+    }
+
+    Ok(result)
+}
+
+fn canonical_env_key(key: &str) -> String {
+    key.trim().replace(['.', '-'], "_").to_ascii_uppercase()
+}
+
+fn config_key_routes_to_env(key: &str) -> Option<String> {
+    if key.contains('.') {
+        return None;
+    }
+    let canonical = canonical_env_key(key);
+    if EXPLICIT_ENV_CONFIG_KEYS.contains(&canonical.as_str())
+        || canonical.ends_with("_API_KEY")
+        || canonical.ends_with("_TOKEN")
+        || canonical.starts_with("TERMINAL_SSH_")
+    {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+fn config_env_bridge_key(key: &str) -> Option<String> {
+    match key.trim().replace('-', "_").to_ascii_lowercase().as_str() {
+        "terminal.docker_mount_cwd_to_workspace" => {
+            Some("TERMINAL_DOCKER_MOUNT_CWD_TO_WORKSPACE".to_string())
+        }
+        "terminal.vercel_runtime" => Some("TERMINAL_VERCEL_RUNTIME".to_string()),
+        _ => None,
+    }
+}
+
+fn split_config_key(key: &str) -> Vec<String> {
+    key.split('.')
+        .filter(|part| !part.is_empty())
+        .enumerate()
+        .map(|(index, part)| {
+            if index == 0 && part == "llm" {
+                "llm_providers".to_string()
+            } else {
+                part.to_string()
+            }
+        })
+        .collect()
+}
+
+fn scalar_yaml_value(value: &str) -> serde_yaml::Value {
+    if value.is_empty() {
+        return serde_yaml::Value::String(String::new());
+    }
+    let trimmed = value.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" => return serde_yaml::Value::Bool(true),
+        "false" | "no" | "off" => return serde_yaml::Value::Bool(false),
+        _ => {}
+    }
+    if let Ok(n) = trimmed.parse::<i64>() {
+        return serde_yaml::Value::Number(n.into());
+    }
+    serde_yaml::Value::String(value.to_string())
+}
+
+fn load_user_config_yaml_value(path: &Path) -> Result<serde_yaml::Value, ConfigError> {
+    if !path.exists() {
+        return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    }
+    let contents = std::fs::read_to_string(path).map_err(io_to_config_error)?;
+    if contents.trim().is_empty() {
+        return Ok(serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    }
+    serde_yaml::from_str(&contents).map_err(yaml_to_config_error)
+}
+
+fn validate_user_config_value(root: &serde_yaml::Value) -> Result<(), ConfigError> {
+    let mut normalized = root.clone();
+    if let serde_yaml::Value::Mapping(ref mut m) = normalized {
+        crate::python_yaml_compat::normalize_config_yaml_root(m);
+    }
+    mark_platform_enabled_explicit(&mut normalized, "slack");
+    mark_platform_enabled_explicit(&mut normalized, "ntfy");
+    let mut cfg: GatewayConfig =
+        serde_yaml::from_value(normalized).map_err(yaml_to_config_error)?;
+    normalize_provider_secrets(&mut cfg);
+    validate_config(&cfg)
+}
+
+fn set_yaml_path(
+    current: &mut serde_yaml::Value,
+    parts: &[String],
+    new_value: serde_yaml::Value,
+) -> Result<(), ConfigError> {
+    if parts.is_empty() {
+        *current = new_value;
+        return Ok(());
+    }
+
+    let head = parts[0].as_str();
+    let tail = &parts[1..];
+    if let Ok(index) = head.parse::<usize>() {
+        ensure_sequence(current);
+        let serde_yaml::Value::Sequence(seq) = current else {
+            unreachable!("ensure_sequence always leaves a sequence")
+        };
+        while seq.len() <= index {
+            seq.push(default_container_for(tail));
+        }
+        if tail.is_empty() {
+            seq[index] = new_value;
+        } else {
+            set_yaml_path(&mut seq[index], tail, new_value)?;
+        }
+        return Ok(());
+    }
+
+    ensure_mapping(current);
+    let serde_yaml::Value::Mapping(map) = current else {
+        unreachable!("ensure_mapping always leaves a mapping")
+    };
+    let key = serde_yaml::Value::String(head.to_string());
+    if tail.is_empty() {
+        map.insert(key, new_value);
+    } else {
+        let entry = map
+            .entry(key)
+            .or_insert_with(|| default_container_for(tail));
+        set_yaml_path(entry, tail, new_value)?;
+    }
+    Ok(())
+}
+
+fn ensure_mapping(value: &mut serde_yaml::Value) {
+    if !matches!(value, serde_yaml::Value::Mapping(_)) {
+        *value = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+}
+
+fn ensure_sequence(value: &mut serde_yaml::Value) {
+    if !matches!(value, serde_yaml::Value::Sequence(_)) {
+        *value = serde_yaml::Value::Sequence(Vec::new());
+    }
+}
+
+fn default_container_for(tail: &[String]) -> serde_yaml::Value {
+    if tail
+        .first()
+        .is_some_and(|part| part.parse::<usize>().is_ok())
+    {
+        serde_yaml::Value::Sequence(Vec::new())
+    } else {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    }
+}
+
+fn save_env_key_value(path: &Path, key: &str, value: &str) -> Result<(), ConfigError> {
+    let original = std::fs::read_to_string(path).unwrap_or_default();
+    let sanitized_value = value.replace('\n', "\\n");
+    let mut lines = Vec::new();
+    let mut replaced = false;
+
+    for line in original.lines() {
+        let line_key = line
+            .split_once('=')
+            .map(|(k, _)| k.trim())
+            .filter(|k| !k.is_empty());
+        if line_key == Some(key) {
+            if !replaced {
+                lines.push(format!("{key}={sanitized_value}"));
+                replaced = true;
+            }
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if !replaced {
+        lines.push(format!("{key}={sanitized_value}"));
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    atomic_write_bytes(path, out.as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -1162,6 +1565,202 @@ mod tests {
         // Simulate env var (we can't easily set env vars in tests, so test the logic directly)
         config.model = Some("env-model".into());
         assert_eq!(config.model.as_deref(), Some("env-model"));
+    }
+
+    #[test]
+    fn atomic_json_write_roundtrips_and_cleans_temp() {
+        use serde_json::json;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.json");
+        atomic_json_write(&path, &json!({"key": "value", "nested": {"a": 1}})).unwrap();
+
+        let loaded: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded, json!({"key": "value", "nested": {"a": 1}}));
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .contains(".tmp.")));
+    }
+
+    #[test]
+    fn atomic_yaml_write_appends_extra_content() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("data.yaml");
+        let value: serde_yaml::Value = serde_yaml::from_str("key: value\n").unwrap();
+        atomic_yaml_write(&path, &value, Some("\n# comment\n")).unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("key: value"));
+        assert!(text.contains("# comment"));
+    }
+
+    #[test]
+    fn load_from_yaml_expands_env_refs_but_user_config_load_preserves_templates() {
+        use tempfile::tempdir;
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            r#"
+llm_providers:
+  openai:
+    api_key: ${TEST_OPENAI_KEY}
+    base_url: https://${TEST_OPENAI_HOST}/v1
+"#,
+        )
+        .unwrap();
+
+        // SAFETY: test process serializes env mutation via ENV_LOCK.
+        unsafe {
+            std::env::set_var("TEST_OPENAI_KEY", "sk-test");
+            std::env::set_var("TEST_OPENAI_HOST", "api.example.test");
+        }
+
+        let runtime = load_from_yaml(&path).unwrap();
+        let openai = runtime.llm_providers.get("openai").unwrap();
+        assert_eq!(openai.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(
+            openai.base_url.as_deref(),
+            Some("https://api.example.test/v1")
+        );
+
+        let editable = load_user_config_file(&path).unwrap();
+        let editable_openai = editable.llm_providers.get("openai").unwrap();
+        assert_eq!(
+            editable_openai.api_key.as_deref(),
+            Some("${TEST_OPENAI_KEY}")
+        );
+        assert_eq!(
+            editable_openai.base_url.as_deref(),
+            Some("https://${TEST_OPENAI_HOST}/v1")
+        );
+
+        // SAFETY: test process serializes env mutation via ENV_LOCK.
+        unsafe {
+            std::env::remove_var("TEST_OPENAI_KEY");
+            std::env::remove_var("TEST_OPENAI_HOST");
+        }
+    }
+
+    #[test]
+    fn load_from_yaml_keeps_unresolved_env_refs_verbatim() {
+        use tempfile::tempdir;
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            r#"
+llm_providers:
+  openai:
+    api_key: ${MISSING_OPENAI_KEY_FOR_TEST}
+"#,
+        )
+        .unwrap();
+
+        // SAFETY: test process serializes env mutation via ENV_LOCK.
+        unsafe { std::env::remove_var("MISSING_OPENAI_KEY_FOR_TEST") };
+        let runtime = load_from_yaml(&path).unwrap();
+        assert_eq!(
+            runtime
+                .llm_providers
+                .get("openai")
+                .and_then(|provider| provider.api_key.as_deref()),
+            Some("${MISSING_OPENAI_KEY_FOR_TEST}")
+        );
+    }
+
+    #[test]
+    fn set_user_config_value_routes_secret_keys_to_env() {
+        use tempfile::tempdir;
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let result = set_user_config_value(dir.path(), "openai_api_key", "sk-test").unwrap();
+
+        assert!(result.wrote_env());
+        assert!(!result.wrote_config());
+        assert_eq!(result.env_key.as_deref(), Some("OPENAI_API_KEY"));
+        assert!(std::fs::read_to_string(dir.path().join(".env"))
+            .unwrap()
+            .contains("OPENAI_API_KEY=sk-test"));
+        assert!(!dir.path().join("config.yaml").exists());
+
+        // SAFETY: test process serializes env mutation via ENV_LOCK.
+        unsafe { std::env::remove_var("OPENAI_API_KEY") };
+    }
+
+    #[test]
+    fn set_user_config_value_bridges_terminal_env_keys_and_config() {
+        use tempfile::tempdir;
+
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempdir().unwrap();
+        let result =
+            set_user_config_value(dir.path(), "terminal.vercel_runtime", "python3.13").unwrap();
+
+        assert!(result.wrote_config());
+        assert!(result.wrote_env());
+        assert_eq!(result.env_key.as_deref(), Some("TERMINAL_VERCEL_RUNTIME"));
+        let config_text = std::fs::read_to_string(dir.path().join("config.yaml")).unwrap();
+        let env_text = std::fs::read_to_string(dir.path().join(".env")).unwrap();
+        assert!(config_text.contains("vercel_runtime: python3.13"));
+        assert!(env_text.contains("TERMINAL_VERCEL_RUNTIME=python3.13"));
+
+        // SAFETY: test process serializes env mutation via ENV_LOCK.
+        unsafe { std::env::remove_var("TERMINAL_VERCEL_RUNTIME") };
+    }
+
+    #[test]
+    fn set_user_config_value_preserves_list_siblings_for_indexed_paths() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            r#"
+custom_providers:
+- name: provider-a
+  api_key: old-a
+  base_url: https://a.example.com
+- name: provider-b
+  api_key: old-b
+  base_url: https://b.example.com
+"#,
+        )
+        .unwrap();
+
+        set_user_config_value(dir.path(), "custom_providers.0.api_key", "new-a").unwrap();
+
+        let reloaded: serde_yaml::Value =
+            serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let providers = reloaded
+            .get("custom_providers")
+            .and_then(|v| v.as_sequence())
+            .unwrap();
+        assert_eq!(providers.len(), 2);
+        assert_eq!(
+            providers[0].get("api_key").and_then(|v| v.as_str()),
+            Some("new-a")
+        );
+        assert_eq!(
+            providers[0].get("base_url").and_then(|v| v.as_str()),
+            Some("https://a.example.com")
+        );
+        assert_eq!(
+            providers[1].get("api_key").and_then(|v| v.as_str()),
+            Some("old-b")
+        );
     }
 
     #[test]

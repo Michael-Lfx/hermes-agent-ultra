@@ -1,5 +1,7 @@
 //! Docker terminal backend – executes commands inside Docker containers.
 
+use std::sync::Mutex;
+
 use async_trait::async_trait;
 use tokio::process::Command as TokioCommand;
 
@@ -8,9 +10,11 @@ use hermes_core::{AgentError, CommandOutput, TerminalBackend};
 /// A [`TerminalBackend`] that runs commands inside a Docker container.
 pub struct DockerBackend {
     /// Active container ID (or name).
-    container_id: Option<String>,
+    container_id: Mutex<Option<String>>,
     /// Docker image to use if creating a new container.
     image: Option<String>,
+    /// Mount the host cwd at /workspace when creating a container.
+    mount_cwd_to_workspace: bool,
     /// Default timeout in seconds.
     default_timeout: u64,
     /// Maximum output size in bytes.
@@ -27,12 +31,14 @@ impl DockerBackend {
     pub fn new(
         container_id: Option<String>,
         image: Option<String>,
+        mount_cwd_to_workspace: bool,
         default_timeout: u64,
         max_output_size: usize,
     ) -> Self {
         Self {
-            container_id,
+            container_id: Mutex::new(container_id),
             image: image.or_else(|| Some("ubuntu:22.04".to_string())),
+            mount_cwd_to_workspace,
             default_timeout,
             max_output_size,
         }
@@ -40,9 +46,14 @@ impl DockerBackend {
 
     /// Ensure we have a running container. If `container_id` is None,
     /// create one from the configured image.
-    async fn ensure_container(&mut self) -> Result<String, AgentError> {
-        if let Some(ref id) = self.container_id {
-            return Ok(id.clone());
+    async fn ensure_container(&self) -> Result<String, AgentError> {
+        if let Some(id) = self
+            .container_id
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
+            return Ok(id);
         }
 
         let image = self
@@ -52,8 +63,22 @@ impl DockerBackend {
 
         tracing::info!("Creating Docker container from image: {}", image);
 
+        let mut args = vec!["run".to_string(), "-d".to_string(), "--tty".to_string()];
+        if self.mount_cwd_to_workspace {
+            if let Ok(cwd) = std::env::current_dir() {
+                args.push("-v".to_string());
+                args.push(format!("{}:/workspace", cwd.display()));
+                args.push("-w".to_string());
+                args.push("/workspace".to_string());
+            }
+        }
+        args.push(image.clone());
+        args.push("tail".to_string());
+        args.push("-f".to_string());
+        args.push("/dev/null".to_string());
+
         let output = TokioCommand::new("docker")
-            .args(["run", "-d", "--tty", image, "tail", "-f", "/dev/null"])
+            .args(&args)
             .output()
             .await
             .map_err(|e| AgentError::Io(format!("Failed to create Docker container: {}", e)))?;
@@ -68,15 +93,8 @@ impl DockerBackend {
 
         let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
         tracing::info!("Created container: {}", id);
-        self.container_id = Some(id.clone());
+        *self.container_id.lock().unwrap_or_else(|e| e.into_inner()) = Some(id.clone());
         Ok(id)
-    }
-
-    /// Get the container ID, returning an error if not available.
-    fn container_id(&self) -> Result<&str, AgentError> {
-        self.container_id
-            .as_deref()
-            .ok_or_else(|| AgentError::Config("No Docker container ID available".into()))
     }
 
     fn truncate_output(&self, s: String) -> String {
@@ -98,7 +116,7 @@ impl TerminalBackend for DockerBackend {
         background: bool,
         pty: bool,
     ) -> Result<CommandOutput, AgentError> {
-        let container_id = self.container_id()?;
+        let container_id = self.ensure_container().await?;
         let timeout_secs = timeout.unwrap_or(self.default_timeout);
 
         let mut args = vec!["exec".to_string()];
@@ -157,7 +175,7 @@ impl TerminalBackend for DockerBackend {
         offset: Option<u64>,
         limit: Option<u64>,
     ) -> Result<String, AgentError> {
-        let container_id = self.container_id()?;
+        let container_id = self.ensure_container().await?;
 
         // Use docker exec cat to read the file
         let mut cat_cmd = format!("cat {}", shlex_quote(path));
@@ -177,7 +195,7 @@ impl TerminalBackend for DockerBackend {
         }
 
         let output = TokioCommand::new("docker")
-            .args(["exec", container_id, "sh", "-c", &cat_cmd])
+            .args(["exec", container_id.as_str(), "sh", "-c", &cat_cmd])
             .output()
             .await
             .map_err(|e| AgentError::Io(format!("Failed to read file via docker: {}", e)))?;
@@ -194,7 +212,7 @@ impl TerminalBackend for DockerBackend {
     }
 
     async fn write_file(&self, path: &str, content: &str) -> Result<(), AgentError> {
-        let container_id = self.container_id()?;
+        let container_id = self.ensure_container().await?;
 
         // Use docker exec to write the file. We pipe the content through stdin.
         // First ensure the parent directory exists.
@@ -206,7 +224,7 @@ impl TerminalBackend for DockerBackend {
         if !parent_dir.is_empty() {
             let mkdir_cmd = format!("mkdir -p {}", shlex_quote(&parent_dir));
             let mkdir_output = TokioCommand::new("docker")
-                .args(["exec", container_id, "sh", "-c", &mkdir_cmd])
+                .args(["exec", container_id.as_str(), "sh", "-c", &mkdir_cmd])
                 .output()
                 .await
                 .map_err(|e| {
@@ -232,7 +250,7 @@ impl TerminalBackend for DockerBackend {
         );
 
         let output = TokioCommand::new("docker")
-            .args(["exec", container_id, "sh", "-c", &write_cmd])
+            .args(["exec", container_id.as_str(), "sh", "-c", &write_cmd])
             .output()
             .await
             .map_err(|e| AgentError::Io(format!("Failed to write file via docker: {}", e)))?;
@@ -249,10 +267,10 @@ impl TerminalBackend for DockerBackend {
     }
 
     async fn file_exists(&self, path: &str) -> Result<bool, AgentError> {
-        let container_id = self.container_id()?;
+        let container_id = self.ensure_container().await?;
 
         let output = TokioCommand::new("docker")
-            .args(["exec", container_id, "test", "-e", path])
+            .args(["exec", container_id.as_str(), "test", "-e", path])
             .output()
             .await
             .map_err(|e| AgentError::Io(format!("Failed to check file via docker: {}", e)))?;

@@ -185,11 +185,9 @@ fn platform_extra_json_to_env_string(key: &str, value: &Value) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock;
     use hermes_config::{GatewayConfig, PlatformConfig};
     use std::collections::HashMap;
-    use std::sync::Mutex;
-
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvGuard {
         pairs: Vec<(String, Option<std::ffi::OsString>)>,
@@ -218,7 +216,7 @@ mod tests {
 
     #[test]
     fn hydrate_env_sets_platform_and_top_level_vars() {
-        let _lock = ENV_TEST_LOCK.lock().expect("env test lock");
+        let _lock = test_env_lock::lock();
         let _guard = EnvGuard::capture(&[
             "HERMES_MODEL",
             "HERMES_MAX_TURNS",
@@ -312,7 +310,7 @@ mod tests {
 
     #[test]
     fn hydrate_env_never_overwrites_existing_values() {
-        let _lock = ENV_TEST_LOCK.lock().expect("env test lock");
+        let _lock = test_env_lock::lock();
         let _guard = EnvGuard::capture(&[
             "HERMES_MODEL",
             "DISCORD_ALLOWED_USERS",
