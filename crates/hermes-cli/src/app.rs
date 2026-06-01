@@ -4495,6 +4495,7 @@ mod tests {
 
     #[test]
     fn test_sync_runtime_model_env_sets_model_and_provider_values() {
+        let _guard = env_test_lock();
         let mut cfg = GatewayConfig::default();
         cfg.llm_providers
             .insert("anthropic".to_string(), LlmProviderConfig::default());
@@ -4505,6 +4506,10 @@ mod tests {
             "HERMES_INFERENCE_PROVIDER",
             "HERMES_TUI_PROVIDER",
         ];
+        let previous: Vec<(&str, Option<String>)> = keys
+            .iter()
+            .map(|key| (*key, std::env::var(key).ok()))
+            .collect();
         for key in keys {
             std::env::remove_var(key);
         }
@@ -4529,8 +4534,11 @@ mod tests {
             Some("anthropic")
         );
 
-        for key in keys {
-            std::env::remove_var(key);
+        for (key, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
         }
     }
 

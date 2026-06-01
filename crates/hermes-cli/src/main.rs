@@ -49,8 +49,8 @@ use hermes_cli::terminal_backend::build_terminal_backend;
 use hermes_cli::tool_preview::{build_tool_preview_from_value, tool_emoji};
 use hermes_cli::App;
 use hermes_config::{
-    apply_user_config_patch, gateway_pid_path_in, hermes_home, load_config, load_user_config_file,
-    save_config_yaml, state_dir, user_config_field_display, validate_config, ConfigError,
+    gateway_pid_path_in, hermes_home, load_config, load_user_config_file, save_config_yaml,
+    set_user_config_value, state_dir, user_config_field_display, validate_config, ConfigError,
     GatewayConfig, PlatformConfig, UnauthorizedDmBehavior,
 };
 use hermes_core::AgentError;
@@ -2051,14 +2051,27 @@ async fn run_config(
                 .as_ref()
                 .map(PathBuf::from)
                 .unwrap_or_else(hermes_home);
-            let cfg_path = base.join("config.yaml");
-            let mut disk =
-                load_user_config_file(&cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
-            apply_user_config_patch(&mut disk, &key, &value)
+            let outcome = set_user_config_value(&base, &key, &value)
                 .map_err(|e| AgentError::Config(e.to_string()))?;
-            validate_config(&disk).map_err(|e| AgentError::Config(e.to_string()))?;
-            save_config_yaml(&cfg_path, &disk).map_err(|e| AgentError::Config(e.to_string()))?;
-            println!("Saved {} = {} -> {}", key, value, cfg_path.display());
+            match (outcome.config_path, outcome.env_path, outcome.env_key) {
+                (Some(cfg_path), Some(env_path), Some(env_key)) => {
+                    println!(
+                        "Saved {} = {} -> {} and {} -> {}",
+                        key,
+                        value,
+                        cfg_path.display(),
+                        env_key,
+                        env_path.display()
+                    );
+                }
+                (Some(cfg_path), _, _) => {
+                    println!("Saved {} = {} -> {}", key, value, cfg_path.display());
+                }
+                (_, Some(env_path), Some(env_key)) => {
+                    println!("Saved {} -> {}", env_key, env_path.display());
+                }
+                _ => {}
+            }
         }
         Some("show") => {
             let json = serde_json::to_string_pretty(&config)

@@ -752,6 +752,41 @@
       "ticket": 25
     },
     {
+      "path": "tests/hermes_cli/test_atomic_json_write.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream crash-safe JSON write intent is covered by Rust hermes-config atomic_json_write/atomic_json_write_pretty helpers using sibling temp files, fsync-before-rename, cleanup on failure, parent directory creation, and roundtrip/no-temp-file tests.",
+      "owner": "sheawinkler",
+      "ticket": 302
+    },
+    {
+      "path": "tests/hermes_cli/test_atomic_yaml_write.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream crash-safe YAML write intent is covered by Rust hermes-config atomic_yaml_write and save_config_yaml using sibling temp files, fsync-before-rename, cleanup on failure, parent directory creation, optional trailing content, and focused YAML write tests.",
+      "owner": "sheawinkler",
+      "ticket": 302
+    },
+    {
+      "path": "tests/hermes_cli/test_config_env_expansion.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream config ${ENV_VAR} expansion is covered by Rust load_from_yaml/load_config recursive value-only expansion for strings, nested mappings, lists, multiple placeholders, and unresolved placeholders while load_user_config_file preserves templates for edit paths.",
+      "owner": "sheawinkler",
+      "ticket": 302
+    },
+    {
+      "path": "tests/hermes_cli/test_env_loader.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream dotenv loader precedence and sanitization intent is covered by Rust load_dotenv/load_dotenv_file tests for user-env precedence, project fallback, sanitized concatenated assignments before loading, and atomic sanitized-file rewrite.",
+      "owner": "sheawinkler",
+      "ticket": 302
+    },
+    {
+      "path": "tests/hermes_cli/test_set_config_value.py",
+      "classification": "intentional_divergence",
+      "rationale": "Upstream set_config_value routing intent is covered by Rust set_user_config_value and CLI e2e tests for secret-like keys to .env, uppercase normalization, env-bridged terminal keys, raw YAML config writes, falsy scalar handling, llm.* canonicalization to llm_providers, and list-index updates that preserve sibling entries.",
+      "owner": "sheawinkler",
+      "ticket": 302
+    },
+    {
       "path": "tests/hermes_cli/test_bedrock_model_picker.py",
       "classification": "intentional_divergence",
       "rationale": "Upstream Bedrock model-picker intent is covered by Rust provider canonicalization, region-aware curated fallback, best-effort signed live Bedrock catalog discovery, AWS credential-signal gating, and setup/model catalog tests; the Python test file remains reference-only.",
