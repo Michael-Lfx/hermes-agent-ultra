@@ -740,8 +740,8 @@ async fn run(cli: Cli) {
             .await
         }
         CliCommand::Whatsapp { action } => hermes_cli::commands::handle_cli_whatsapp(action).await,
-        CliCommand::Pairing { action, device_id } => {
-            hermes_cli::commands::handle_cli_pairing(action, device_id).await
+        CliCommand::Pairing { action, device_id, args } => {
+            hermes_cli::commands::handle_cli_pairing(action, device_id, args).await
         }
         CliCommand::Claw { action } => hermes_cli::commands::handle_cli_claw(action).await,
         CliCommand::Acp { action } => hermes_cli::commands::handle_cli_acp(action).await,
@@ -4430,6 +4430,10 @@ async fn run_api_server_inbound_loop(
             interaction_id: None,
             interaction_token: None,
             role_ids: vec![],
+            parent_channel_id: None,
+            channel_prompt: None,
+            channel_skills: vec![],
+            channel_topic: None,
         };
         if let Err(err) = gateway.route_message(&incoming).await {
             tracing::warn!("Failed to route api_server message: {}", err);
@@ -4453,6 +4457,10 @@ async fn run_webhook_inbound_loop(gateway: Arc<Gateway>, mut rx: mpsc::Receiver<
             interaction_id: None,
             interaction_token: None,
             role_ids: vec![],
+            parent_channel_id: None,
+            channel_prompt: None,
+            channel_skills: vec![],
+            channel_topic: None,
         };
         if let Err(err) = gateway.route_message(&incoming).await {
             tracing::warn!("Failed to route webhook message: {}", err);
@@ -4727,6 +4735,7 @@ async fn register_gateway_adapters(
                     verification_token: extra_string(platform_cfg, "verification_token"),
                     encrypt_key: extra_string(platform_cfg, "encrypt_key"),
                     proxy: Default::default(),
+                    domain: extra_string(platform_cfg, "domain"),
                 };
                 match FeishuAdapter::new(feishu_cfg) {
                     Ok(adapter) => gateway.register_adapter("feishu", Arc::new(adapter)).await,
@@ -5056,6 +5065,10 @@ async fn run_telegram_poll_loop(gateway: Arc<Gateway>, adapter: Arc<TelegramAdap
                         interaction_id: None,
                         interaction_token: None,
                         role_ids: vec![],
+                        parent_channel_id: None,
+                        channel_prompt: None,
+                        channel_skills: vec![],
+                        channel_topic: None,
                     };
 
                     if let Err(err) = gateway.route_message(&incoming).await {
