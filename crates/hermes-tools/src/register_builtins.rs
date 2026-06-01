@@ -671,8 +671,19 @@ fn register_builtin_tools_impl(
         reg(
             registry,
             "feishu",
-            Arc::new(crate::tools::feishu::FeishuTaskHandler::new(feishu)),
+            Arc::new(crate::tools::feishu::FeishuTaskHandler::new(
+                feishu.clone(),
+            )),
             "✅",
+            feishu_deps.clone(),
+        );
+        reg(
+            registry,
+            "feishu",
+            Arc::new(crate::tools::feishu::FeishuChatHistoryHandler::new(
+                feishu,
+            )),
+            "💬",
             feishu_deps,
         );
     } else {
