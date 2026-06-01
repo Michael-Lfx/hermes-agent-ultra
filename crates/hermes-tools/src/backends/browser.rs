@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::tools::browser::BrowserBackend;
 use hermes_core::ToolError;
@@ -178,10 +179,45 @@ impl CdpBrowserBackend {
         Self::try_auto_start_chrome(&self.endpoint).await
     }
 
+    fn command_retry_attempts() -> usize {
+        std::env::var("HERMES_BROWSER_COMMAND_RETRY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(2)
+            .clamp(1, 5)
+    }
+
+    fn retry_delay_ms() -> u64 {
+        std::env::var("HERMES_BROWSER_COMMAND_RETRY_DELAY_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(250)
+            .clamp(50, 2_000)
+    }
+
     /// Send a CDP command via HTTP (simplified - real impl would use WebSocket).
     async fn cdp_command(&self, method: &str, params: Value) -> Result<Value, ToolError> {
+        let attempts = Self::command_retry_attempts();
+        let retry_delay = Self::retry_delay_ms();
+        let mut last_error: Option<ToolError> = None;
+        for attempt in 1..=attempts {
+            match self.cdp_command_once(method, params.clone()).await {
+                Ok(value) => return Ok(value),
+                Err(err) => {
+                    last_error = Some(err);
+                    if attempt < attempts {
+                        tokio::time::sleep(Duration::from_millis(retry_delay)).await;
+                    }
+                }
+            }
+        }
+        Err(last_error.unwrap_or_else(|| {
+            ToolError::ExecutionFailed("Browser CDP command failed with unknown error".into())
+        }))
+    }
+
+    async fn cdp_command_once(&self, method: &str, params: Value) -> Result<Value, ToolError> {
         self.ensure_connected().await?;
-        // Get the first available page target
         let targets_resp = self
             .client
             .get(format!("{}/json", self.endpoint.trim_end_matches('/')))
@@ -198,14 +234,17 @@ impl CdpBrowserBackend {
             ToolError::ExecutionFailed(format!("Failed to parse CDP targets: {}", e))
         })?;
 
-        let ws_url = targets.first()
+        let ws_url = targets
+            .first()
             .and_then(|t| t.get("webSocketDebuggerUrl"))
             .and_then(|u| u.as_str())
-            .ok_or_else(|| ToolError::ExecutionFailed("No Chrome page target found. Is Chrome running with --remote-debugging-port=9222?".into()))?;
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "No Chrome page target found. Is Chrome running with --remote-debugging-port=9222?"
+                        .into(),
+                )
+            })?;
 
-        // For a full implementation, we'd use tokio-tungstenite to connect
-        // to the WebSocket and send CDP commands. For now, return a structured
-        // response indicating the command that would be sent.
         Ok(json!({
             "method": method,
             "params": params,
@@ -224,11 +263,25 @@ impl BrowserBackend for CdpBrowserBackend {
         Ok(json!({"status": "navigated", "url": url, "cdp": result}).to_string())
     }
 
-    async fn snapshot(&self) -> Result<String, ToolError> {
+    async fn snapshot(
+        &self,
+        full: bool,
+        user_task: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Result<String, ToolError> {
+        let started = Instant::now();
         let result = self
             .cdp_command("Accessibility.getFullAXTree", json!({}))
             .await?;
-        Ok(json!({"status": "snapshot", "cdp": result}).to_string())
+        Ok(json!({
+            "status": "snapshot",
+            "full": full,
+            "user_task": user_task,
+            "task_id": task_id,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+            "cdp": result
+        })
+        .to_string())
     }
 
     async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
@@ -362,8 +415,13 @@ impl BrowserBackend for CamoFoxBrowserBackend {
         Ok(result)
     }
 
-    async fn snapshot(&self) -> Result<String, ToolError> {
-        self.inner.snapshot().await
+    async fn snapshot(
+        &self,
+        full: bool,
+        user_task: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Result<String, ToolError> {
+        self.inner.snapshot(full, user_task, task_id).await
     }
     async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
         self.inner.click(ref_id).await

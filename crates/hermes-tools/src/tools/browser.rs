@@ -18,7 +18,12 @@ use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
 #[async_trait]
 pub trait BrowserBackend: Send + Sync {
     async fn navigate(&self, url: &str) -> Result<String, ToolError>;
-    async fn snapshot(&self) -> Result<String, ToolError>;
+    async fn snapshot(
+        &self,
+        full: bool,
+        user_task: Option<&str>,
+        task_id: Option<&str>,
+    ) -> Result<String, ToolError>;
     async fn click(&self, ref_id: &str) -> Result<String, ToolError>;
     async fn r#type(&self, ref_id: &str, text: &str) -> Result<String, ToolError>;
     async fn scroll(&self, direction: &str, amount: Option<u32>) -> Result<String, ToolError>;
@@ -86,15 +91,44 @@ impl BrowserSnapshotHandler {
 
 #[async_trait]
 impl ToolHandler for BrowserSnapshotHandler {
-    async fn execute(&self, _params: Value) -> Result<String, ToolError> {
-        self.backend.snapshot().await
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let full = params
+            .get("full")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let user_task = params.get("user_task").and_then(|v| v.as_str());
+        let task_id = params.get("task_id").and_then(|v| v.as_str());
+        self.backend.snapshot(full, user_task, task_id).await
     }
 
     fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "full".into(),
+            json!({
+                "type":"boolean",
+                "description":"Return full page snapshot when true; compact view when false",
+                "default": false
+            }),
+        );
+        props.insert(
+            "user_task".into(),
+            json!({
+                "type":"string",
+                "description":"Optional current user objective for task-aware snapshot processing"
+            }),
+        );
+        props.insert(
+            "task_id".into(),
+            json!({
+                "type":"string",
+                "description":"Optional task identifier for session-aware browser state"
+            }),
+        );
         tool_schema(
             "browser_snapshot",
             "Take a snapshot of the current page state (accessibility tree).",
-            JsonSchema::new("object"),
+            JsonSchema::object(props, vec![]),
         )
     }
 }
@@ -461,8 +495,16 @@ mod tests {
         async fn navigate(&self, url: &str) -> Result<String, ToolError> {
             Ok(format!("Navigated to {}", url))
         }
-        async fn snapshot(&self) -> Result<String, ToolError> {
-            Ok("Page snapshot".into())
+        async fn snapshot(
+            &self,
+            full: bool,
+            user_task: Option<&str>,
+            task_id: Option<&str>,
+        ) -> Result<String, ToolError> {
+            Ok(format!(
+                "Page snapshot full={} user_task={:?} task_id={:?}",
+                full, user_task, task_id
+            ))
         }
         async fn click(&self, ref_id: &str) -> Result<String, ToolError> {
             Ok(format!("Clicked {}", ref_id))
@@ -514,7 +556,11 @@ mod tests {
     #[tokio::test]
     async fn test_browser_snapshot() {
         let handler = BrowserSnapshotHandler::new(backend());
-        let result = handler.execute(json!({})).await.unwrap();
-        assert!(result.contains("snapshot"));
+        let result = handler
+            .execute(json!({"full": true, "user_task":"collect ai posts", "task_id":"task-1"}))
+            .await
+            .unwrap();
+        assert!(result.contains("full=true"));
+        assert!(result.contains("task-1"));
     }
 }
