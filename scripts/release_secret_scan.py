@@ -27,6 +27,8 @@ SKIP_PREFIXES = (
     "target/",
     "node_modules/",
     ".sync-reports/",
+    "tests/",
+    "website/",
 )
 
 SKIP_LINE_HINTS = (
@@ -44,6 +46,7 @@ SKIP_LINE_HINTS = (
     "abcdefghijklmnopqrstuvwxyzabcd1234",
     "miiEvg".lower(),
     "1234567890:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "let raw =",
 )
 
 
