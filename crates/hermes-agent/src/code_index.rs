@@ -4,10 +4,10 @@
 //! top-level symbols across common languages (Rust, Python, JS/TS, Go).
 //! It is intentionally deterministic and bounded for prompt safety.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use regex::Regex;
 
@@ -33,8 +33,15 @@ pub struct ReferenceHit {
     pub snippet: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileFingerprint {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
 #[derive(Debug, Clone)]
 struct IndexedFile {
+    fingerprint: FileFingerprint,
     language: String,
     symbols: Vec<SymbolInfo>,
     lines: Vec<String>,
@@ -110,6 +117,8 @@ fn env_u64(key: &str) -> Option<u64> {
 pub struct IndexStats {
     pub files_scanned: usize,
     pub files_indexed: usize,
+    pub files_unchanged: usize,
+    pub files_removed: usize,
     pub symbols_indexed: usize,
 }
 
@@ -153,12 +162,13 @@ impl CodeIndex {
             .map(|last| last.elapsed() >= self.config.refresh_interval)
             .unwrap_or(true);
         if needs_refresh {
-            return self.refresh_full();
+            return self.refresh_incremental();
         }
         IndexStats::default()
     }
 
-    pub fn refresh_full(&mut self) -> IndexStats {
+    /// Full workspace scan; re-indexes only files whose fingerprint changed.
+    pub fn refresh_incremental(&mut self) -> IndexStats {
         if !self.config.enabled {
             return IndexStats::default();
         }
@@ -166,23 +176,49 @@ impl CodeIndex {
         let candidates = collect_source_files(&self.workspace_root, self.config.max_indexed_files);
         stats.files_scanned = candidates.len();
 
-        let mut next_files = HashMap::new();
+        let mut present = HashSet::with_capacity(candidates.len());
         for path in candidates {
-            let abs = if path.is_absolute() {
-                path
-            } else {
-                self.workspace_root.join(path)
-            };
-            if let Some(indexed) = index_file(&abs, self.config.max_file_bytes) {
-                stats.files_indexed += 1;
-                stats.symbols_indexed += indexed.symbols.len();
-                next_files.insert(abs, indexed);
+            let abs = absolutize(&self.workspace_root, &path);
+            present.insert(abs.clone());
+            match file_fingerprint(&abs) {
+                Some(fp) if self
+                    .files
+                    .get(&abs)
+                    .is_some_and(|existing| existing.fingerprint == fp) =>
+                {
+                    stats.files_unchanged += 1;
+                }
+                Some(fp) => {
+                    if let Some(indexed) = index_file_with_fingerprint(
+                        &abs,
+                        fp,
+                        self.config.max_file_bytes,
+                    ) {
+                        stats.files_indexed += 1;
+                        stats.symbols_indexed += indexed.symbols.len();
+                        self.files.insert(abs, indexed);
+                    } else {
+                        self.files.remove(&abs);
+                    }
+                }
+                None => {
+                    self.files.remove(&abs);
+                }
             }
         }
 
-        self.files = next_files;
+        let before = self.files.len();
+        self.files.retain(|path, _| present.contains(path));
+        stats.files_removed = before.saturating_sub(self.files.len());
+
         self.last_refresh = Some(Instant::now());
         stats
+    }
+
+    /// Clears the in-memory index then runs an incremental full scan.
+    pub fn refresh_full(&mut self) -> IndexStats {
+        self.files.clear();
+        self.refresh_incremental()
     }
 
     pub fn refresh_paths<I>(&mut self, paths: I)
@@ -397,9 +433,25 @@ fn language_for_ext(path: &Path) -> &'static str {
     }
 }
 
-fn index_file(path: &Path, max_file_bytes: usize) -> Option<IndexedFile> {
+fn file_fingerprint(path: &Path) -> Option<FileFingerprint> {
     let meta = fs::metadata(path).ok()?;
-    if meta.len() as usize > max_file_bytes {
+    Some(FileFingerprint {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+    })
+}
+
+fn index_file(path: &Path, max_file_bytes: usize) -> Option<IndexedFile> {
+    let fp = file_fingerprint(path)?;
+    index_file_with_fingerprint(path, fp, max_file_bytes)
+}
+
+fn index_file_with_fingerprint(
+    path: &Path,
+    fingerprint: FileFingerprint,
+    max_file_bytes: usize,
+) -> Option<IndexedFile> {
+    if fingerprint.len as usize > max_file_bytes {
         return None;
     }
     let content = fs::read_to_string(path).ok()?;
@@ -407,6 +459,7 @@ fn index_file(path: &Path, max_file_bytes: usize) -> Option<IndexedFile> {
     let symbols = extract_symbols(path, &content);
     let lines = content.lines().map(|l| l.to_string()).collect::<Vec<_>>();
     Some(IndexedFile {
+        fingerprint,
         language,
         symbols,
         lines,
@@ -564,5 +617,57 @@ const VERSION: &str = "1";
         let refs = idx.find_references("run", 10);
         assert!(refs.iter().any(|r| r.line == 1));
         assert!(refs.iter().any(|r| r.line == 2));
+    }
+
+    #[test]
+    fn incremental_refresh_skips_unchanged_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.rs"), "fn alpha() {}\n").unwrap();
+        fs::write(tmp.path().join("b.rs"), "fn beta() {}\n").unwrap();
+        let mut idx = CodeIndex::new(tmp.path(), CodeIndexConfig::default());
+        let first = idx.refresh_full();
+        assert_eq!(first.files_indexed, 2);
+        assert_eq!(first.files_unchanged, 0);
+
+        let second = idx.refresh_incremental();
+        assert_eq!(second.files_indexed, 0);
+        assert_eq!(second.files_unchanged, 2);
+        assert_eq!(second.files_removed, 0);
+    }
+
+    #[test]
+    fn incremental_refresh_reindexes_changed_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a.rs");
+        fs::write(&path, "fn old_name() {}\n").unwrap();
+        let mut idx = CodeIndex::new(tmp.path(), CodeIndexConfig::default());
+        idx.refresh_full();
+        assert!(idx
+            .list_file_symbols(&path, 10)
+            .iter()
+            .any(|s| s.name == "old_name"));
+
+        fs::write(&path, "fn new_name() {}\n").unwrap();
+        let stats = idx.refresh_incremental();
+        assert_eq!(stats.files_indexed, 1);
+        assert!(idx
+            .list_file_symbols(&path, 10)
+            .iter()
+            .any(|s| s.name == "new_name"));
+    }
+
+    #[test]
+    fn incremental_refresh_drops_deleted_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a.rs");
+        fs::write(&path, "fn gone() {}\n").unwrap();
+        let mut idx = CodeIndex::new(tmp.path(), CodeIndexConfig::default());
+        idx.refresh_full();
+        assert!(!idx.list_file_symbols(&path, 10).is_empty());
+
+        fs::remove_file(&path).unwrap();
+        let stats = idx.refresh_incremental();
+        assert_eq!(stats.files_removed, 1);
+        assert!(idx.list_file_symbols(&path, 10).is_empty());
     }
 }
