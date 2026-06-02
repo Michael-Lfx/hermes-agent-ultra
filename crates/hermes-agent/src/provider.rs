@@ -21,6 +21,7 @@ use hermes_core::{
 };
 
 use crate::credential_pool::CredentialPool;
+use crate::provider_serialize_cache::ProviderSerializeCache;
 use crate::rate_limit::RateLimitTracker;
 
 const ACP_MULTIMODAL_PREFIX: &str = "__hermes_acp_parts_json__:";
@@ -153,6 +154,7 @@ pub struct GenericProvider {
     pub rate_limiter: Option<Arc<RateLimitTracker>>,
     /// Optional credential pool for key rotation.
     pub credential_pool: Option<Arc<CredentialPool>>,
+    serialize_cache: Option<Arc<ProviderSerializeCache>>,
 }
 
 impl GenericProvider {
@@ -171,6 +173,7 @@ impl GenericProvider {
             extra_headers: Vec::new(),
             rate_limiter: None,
             credential_pool: None,
+            serialize_cache: None,
         }
     }
 
@@ -202,6 +205,28 @@ impl GenericProvider {
     pub fn with_credential_pool(mut self, pool: Arc<CredentialPool>) -> Self {
         self.credential_pool = Some(pool);
         self
+    }
+
+    /// Share per-turn sanitize/tools JSON cache (LLM retry fast path).
+    pub fn with_serialize_cache(mut self, cache: Arc<ProviderSerializeCache>) -> Self {
+        self.serialize_cache = Some(cache);
+        self
+    }
+
+    fn sanitized_messages_for_request(&self, messages: &[Message], strict: bool) -> Value {
+        if let Some(cache) = &self.serialize_cache {
+            cache.sanitized_openai_messages(messages, strict)
+        } else {
+            Self::sanitize_messages_for_strict_api(messages, strict)
+        }
+    }
+
+    fn formatted_tools_for_request(&self, tools: &[ToolSchema]) -> Value {
+        if let Some(cache) = &self.serialize_cache {
+            cache.formatted_openai_tools(tools)
+        } else {
+            Self::format_tools_for_openai_api(tools)
+        }
     }
 
     /// Get the effective API key, using the credential pool if available.
@@ -352,7 +377,7 @@ impl GenericProvider {
         }
     }
 
-    fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
+    pub(crate) fn sanitize_messages_for_strict_api(messages: &[Message], enabled: bool) -> Value {
         let mut out = Vec::with_capacity(messages.len());
         for msg in messages {
             let mut api_msg = serde_json::to_value(msg).unwrap_or_else(|_| serde_json::json!({}));
@@ -409,7 +434,7 @@ impl GenericProvider {
         Value::Array(out)
     }
 
-    fn format_tools_for_openai_api(tools: &[ToolSchema]) -> Value {
+    pub(crate) fn format_tools_for_openai_api(tools: &[ToolSchema]) -> Value {
         Value::Array(
             tools
                 .iter()
@@ -508,7 +533,7 @@ impl LlmProvider for GenericProvider {
         let effective_model = model.unwrap_or(&self.model);
         let api_key = self.effective_api_key();
         let strict_tool_sanitize = Self::should_sanitize_tool_calls(extra_body);
-        let api_messages = Self::sanitize_messages_for_strict_api(messages, strict_tool_sanitize);
+        let api_messages = self.sanitized_messages_for_request(messages, strict_tool_sanitize);
 
         let mut body = serde_json::json!({
             "model": effective_model,
@@ -522,7 +547,7 @@ impl LlmProvider for GenericProvider {
             body["temperature"] = serde_json::json!(temp);
         }
         if !tools.is_empty() {
-            body["tools"] = Self::format_tools_for_openai_api(tools);
+            body["tools"] = self.formatted_tools_for_request(tools);
         }
         Self::merge_extra_body_fields(&mut body, extra_body);
         self.apply_runtime_hints(&mut body, messages, extra_body);
@@ -574,9 +599,10 @@ impl LlmProvider for GenericProvider {
 
             let effective_model = model.as_deref().unwrap_or(&provider.model);
             let api_key = provider.effective_api_key();
-            let strict_tool_sanitize = GenericProvider::should_sanitize_tool_calls(extra_body.as_ref());
+            let strict_tool_sanitize =
+                GenericProvider::should_sanitize_tool_calls(extra_body.as_ref());
             let api_messages =
-                GenericProvider::sanitize_messages_for_strict_api(&messages, strict_tool_sanitize);
+                provider.sanitized_messages_for_request(&messages, strict_tool_sanitize);
 
             let mut body = serde_json::json!({
                 "model": effective_model,
@@ -591,7 +617,7 @@ impl LlmProvider for GenericProvider {
                 body["temperature"] = serde_json::json!(temp);
             }
             if !tools.is_empty() {
-                body["tools"] = GenericProvider::format_tools_for_openai_api(&tools);
+                body["tools"] = provider.formatted_tools_for_request(&tools);
             }
             GenericProvider::merge_extra_body_fields(&mut body, extra_body.as_ref());
             provider.apply_runtime_hints(&mut body, &messages, extra_body.as_ref());
@@ -724,6 +750,12 @@ impl OpenAiProvider {
     pub fn with_credential_pool(self, pool: Arc<CredentialPool>) -> Self {
         Self {
             inner: self.inner.with_credential_pool(pool),
+        }
+    }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
         }
     }
 }
@@ -1635,6 +1667,13 @@ impl OpenRouterProvider {
         }
     }
 
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
+            ..self
+        }
+    }
+
     /// Build the extra headers including OpenRouter-specific ones.
     fn build_headers(&self) -> Vec<(String, String)> {
         let mut headers = self.inner.extra_headers.clone();
@@ -1842,8 +1881,7 @@ impl LlmProvider for OpenRouterProvider {
         let api_key = provider.effective_api_key();
         let strict_tool_sanitize =
             GenericProvider::should_sanitize_tool_calls(merged_extra.as_ref());
-        let api_messages =
-            GenericProvider::sanitize_messages_for_strict_api(messages, strict_tool_sanitize);
+        let api_messages = provider.sanitized_messages_for_request(messages, strict_tool_sanitize);
 
         let mut body = serde_json::json!({
             "model": effective_model,
@@ -1857,7 +1895,7 @@ impl LlmProvider for OpenRouterProvider {
             body["temperature"] = serde_json::json!(temp);
         }
         if !tools.is_empty() {
-            body["tools"] = GenericProvider::format_tools_for_openai_api(tools);
+            body["tools"] = provider.formatted_tools_for_request(tools);
         }
         GenericProvider::merge_extra_body_fields(&mut body, merged_extra.as_ref());
 

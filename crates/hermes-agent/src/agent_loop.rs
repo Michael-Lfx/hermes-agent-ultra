@@ -2240,6 +2240,8 @@ pub struct AgentLoop {
     shared_session_persistence: std::sync::OnceLock<Arc<SessionPersistence>>,
     /// Per-turn cache of assembled API messages (LLM retry fast path).
     turn_api_messages_cache: Mutex<Option<(crate::api_messages::ApiMessagesCacheKey, Arc<[Message]>)>>,
+    /// Per-turn cache for OpenAI-compat provider message/tool JSON serialization.
+    provider_serialize_cache: Arc<crate::provider_serialize_cache::ProviderSerializeCache>,
 }
 
 /// Async tool execution hook (gateway: `hermes_tools::ToolRegistry::dispatch_async`).
@@ -2679,6 +2681,7 @@ impl AgentLoop {
             context_compressor,
             shared_session_persistence: std::sync::OnceLock::new(),
             turn_api_messages_cache: Mutex::new(None),
+            provider_serialize_cache: Arc::new(crate::provider_serialize_cache::ProviderSerializeCache::new()),
         }
     }
 
@@ -2707,6 +2710,11 @@ impl AgentLoop {
         if let Ok(mut guard) = self.turn_api_messages_cache.lock() {
             *guard = None;
         }
+        self.provider_serialize_cache.invalidate();
+    }
+
+    fn runtime_generic_provider(&self, provider: crate::provider::GenericProvider) -> crate::provider::GenericProvider {
+        provider.with_serialize_cache(Arc::clone(&self.provider_serialize_cache))
     }
 
     fn api_messages_cache_key(&self, ctx: &ContextManager) -> crate::api_messages::ApiMessagesCacheKey {
@@ -2969,6 +2977,7 @@ impl AgentLoop {
             context_compressor,
             shared_session_persistence: std::sync::OnceLock::new(),
             turn_api_messages_cache: Mutex::new(None),
+            provider_serialize_cache: Arc::new(crate::provider_serialize_cache::ProviderSerializeCache::new()),
         }
     }
 
@@ -4595,7 +4604,9 @@ impl AgentLoop {
                     }
                     Arc::new(p)
                 } else {
-                    let mut p = OpenAiProvider::new(&api_key).with_model(model_name);
+                    let mut p = OpenAiProvider::new(&api_key)
+                        .with_model(model_name)
+                        .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                     if let Some(url) = base_url {
                         p = p.with_base_url(url);
                     }
@@ -4616,7 +4627,9 @@ impl AgentLoop {
                 Arc::new(p)
             }
             "openrouter" => {
-                let mut p = OpenRouterProvider::new(&api_key).with_model(model_name);
+                let mut p = OpenRouterProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
@@ -4626,21 +4639,27 @@ impl AgentLoop {
                 Arc::new(p)
             }
             "qwen" | "qwen-oauth" => {
-                let mut p = QwenProvider::new(&api_key).with_model(model_name);
+                let mut p = QwenProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
                 Arc::new(p)
             }
             "kimi" | "moonshot" => {
-                let mut p = KimiProvider::new(&api_key).with_model(model_name);
+                let mut p = KimiProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
                 Arc::new(p)
             }
             "minimax" => {
-                let mut p = MiniMaxProvider::new(&api_key).with_model(model_name);
+                let mut p = MiniMaxProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
@@ -4649,10 +4668,16 @@ impl AgentLoop {
             "stepfun" => {
                 let url =
                     base_url.unwrap_or_else(|| "https://api.stepfun.ai/step_plan/v1".to_string());
-                Arc::new(GenericProvider::new(url, &api_key, model_name))
+                Arc::new(self.runtime_generic_provider(GenericProvider::new(
+                    url,
+                    &api_key,
+                    model_name,
+                )))
             }
             "nous" => {
-                let mut p = NousProvider::new(&api_key).with_model(model_name);
+                let mut p = NousProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
@@ -4663,7 +4688,8 @@ impl AgentLoop {
                     base_url.unwrap_or_else(|| "https://api.github.com/copilot".to_string()),
                     &api_key,
                 )
-                .with_model(model_name);
+                .with_model(model_name)
+                .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 Arc::new(p)
             }
             "bedrock" | "aws-bedrock" => {
@@ -4672,7 +4698,7 @@ impl AgentLoop {
                     .unwrap_or_else(|_| "us-east-1".into());
                 let url = base_url
                     .unwrap_or_else(|| format!("https://bedrock-runtime.{region}.amazonaws.com"));
-                let mut g = GenericProvider::new(url, &api_key, model_name);
+                let mut g = self.runtime_generic_provider(GenericProvider::new(url, &api_key, model_name));
                 if let Some(pool) = credential_pool {
                     g = g.with_credential_pool(pool.clone());
                 }
@@ -4680,7 +4706,7 @@ impl AgentLoop {
             }
             _ => {
                 let url = base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-                let mut g = GenericProvider::new(url, &api_key, model_name);
+                let mut g = self.runtime_generic_provider(GenericProvider::new(url, &api_key, model_name));
                 if let Some(pool) = credential_pool {
                     g = g.with_credential_pool(pool.clone());
                 }

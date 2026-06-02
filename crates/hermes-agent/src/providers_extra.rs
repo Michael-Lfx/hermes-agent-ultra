@@ -6,6 +6,8 @@
 //! - [`NousProvider`]: Nous Research
 //! - [`CopilotProvider`]: GitHub Copilot ACP
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde_json::Value;
@@ -13,6 +15,7 @@ use serde_json::Value;
 use hermes_core::{AgentError, LlmProvider, LlmResponse, Message, StreamChunk, ToolSchema};
 
 use crate::provider::GenericProvider;
+use crate::provider_serialize_cache::ProviderSerializeCache;
 
 fn openrouter_compatible_extra_body(extra_body: Option<&Value>) -> Option<Value> {
     let Some(Value::Object(map)) = extra_body else {
@@ -74,6 +77,12 @@ impl QwenProvider {
     pub fn with_base_url(self, url: impl Into<String>) -> Self {
         Self {
             inner: self.inner.with_base_url(url),
+        }
+    }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
         }
     }
 }
@@ -145,6 +154,12 @@ impl KimiProvider {
             inner: self.inner.with_base_url(url),
         }
     }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
+        }
+    }
 }
 
 #[async_trait]
@@ -212,6 +227,12 @@ impl MiniMaxProvider {
     pub fn with_base_url(self, url: impl Into<String>) -> Self {
         Self {
             inner: self.inner.with_base_url(url),
+        }
+    }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
         }
     }
 }
@@ -285,6 +306,12 @@ impl NousProvider {
     pub fn with_base_url(self, url: impl Into<String>) -> Self {
         Self {
             inner: self.inner.with_base_url(url),
+        }
+    }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
         }
     }
 }
@@ -362,6 +389,12 @@ impl CopilotProvider {
     pub fn with_base_url(self, url: impl Into<String>) -> Self {
         Self {
             inner: self.inner.with_base_url(url),
+        }
+    }
+
+    pub fn with_serialize_cache(self, cache: Arc<ProviderSerializeCache>) -> Self {
+        Self {
+            inner: self.inner.with_serialize_cache(cache),
         }
     }
 }

@@ -42,6 +42,7 @@ mod prompt_builder;
 mod system_prompt;
 pub mod prompt_caching;
 pub mod provider;
+mod provider_serialize_cache;
 pub mod providers_extra;
 pub mod python_alignment;
 pub mod rate_limit;
