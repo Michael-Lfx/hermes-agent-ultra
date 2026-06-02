@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload release artifacts to ModelScope dataset."""
+"""Upload release artifacts to ModelScope model repo."""
 import argparse
 import json
 import os
@@ -40,7 +40,7 @@ def main():
     parser.add_argument(
         "--repo",
         required=True,
-        help="ModelScope dataset repo (e.g. flowy2025/agent)",
+        help="ModelScope model repo (e.g. flowy2025/agent)",
     )
     parser.add_argument(
         "--version",
@@ -91,7 +91,7 @@ def main():
     # Authenticate
     api = HubApi()
     api.login(token)
-    print(f"\nAuthenticated to ModelScope, uploading to dataset: {repo}")
+    print(f"\nAuthenticated to ModelScope, uploading to model repo: {repo}")
 
     # Upload each artifact
     upload_prefix = f"hermes-agent-ultra/{version}"
@@ -103,10 +103,11 @@ def main():
         remote_path = f"{upload_prefix}/{artifact.name}"
         try:
             api.upload_file(
-                repo_id=repo,
-                file_path=str(artifact),
+                path_or_fileobj=str(artifact),
                 path_in_repo=remote_path,
-                repo_type="dataset",
+                repo_id=repo,
+                repo_type="model",
+                commit_message=f"Release {version}: {artifact.name}",
             )
             print(f"  [OK] {artifact.name} -> {remote_path}")
             success_count += 1
@@ -118,10 +119,11 @@ def main():
     remote_latest = "hermes-agent-ultra/latest.json"
     try:
         api.upload_file(
-            repo_id=repo,
-            file_path=str(latest_path),
+            path_or_fileobj=str(latest_path),
             path_in_repo=remote_latest,
-            repo_type="dataset",
+            repo_id=repo,
+            repo_type="model",
+            commit_message=f"Release {version}: update latest.json",
         )
         print(f"  [OK] latest.json -> {remote_latest}")
         success_count += 1
