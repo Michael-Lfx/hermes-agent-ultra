@@ -2476,7 +2476,7 @@ impl App {
     ) -> Result<hermes_core::AgentResult, AgentError> {
         let tool_schemas = include_tools.then(|| self.tool_schemas.clone());
         let task_id = Some(self.session_id.clone());
-        let (history, user_message) = split_messages_for_run_conversation(messages)
+        let (history, user_message) = split_messages_for_run_conversation(&messages)
             .ok_or_else(|| AgentError::Config("no user message in turn".into()))?;
         if stream_enabled && self.config.streaming.enabled {
             let stream_handle = self.stream_handle.clone();

@@ -57,9 +57,9 @@ pub struct PreparedTurn {
 /// `prepare_turn`, so callers must pass history **without** the current turn's user message,
 /// or use this helper on the full session slice.
 pub fn split_messages_for_run_conversation(
-    messages: Vec<Message>,
+    messages: &[Message],
 ) -> Option<(Vec<Message>, String)> {
-    let messages = strip_system_messages_from_history(&messages);
+    let messages = strip_system_messages_from_history(messages);
     let idx = messages
         .iter()
         .rposition(|m| m.role == MessageRole::User)?;
@@ -320,7 +320,7 @@ mod tests {
             Message::assistant("hi"),
             Message::user("new"),
         ];
-        let (hist, user) = split_messages_for_run_conversation(messages).expect("split");
+        let (hist, user) = split_messages_for_run_conversation(&messages).expect("split");
         assert_eq!(user, "new");
         assert_eq!(hist.len(), 2);
         assert!(hist.iter().all(|m| m.role != MessageRole::System));
@@ -333,7 +333,7 @@ mod tests {
             Message::assistant("hi"),
             Message::user("new"),
         ];
-        let (hist, user) = split_messages_for_run_conversation(messages).expect("split");
+        let (hist, user) = split_messages_for_run_conversation(&messages).expect("split");
         assert_eq!(user, "new");
         assert_eq!(hist.len(), 2);
     }

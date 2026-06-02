@@ -5758,7 +5758,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                                 let started = Instant::now();
                                                 let (history, user_message) =
                                                     match hermes_agent::split_messages_for_run_conversation(
-                                                        messages,
+                                                        &messages,
                                                     ) {
                                                         Some(pair) => pair,
                                                         None => {

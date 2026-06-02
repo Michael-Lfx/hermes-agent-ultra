@@ -180,7 +180,7 @@ impl HttpServerState {
                         runtime_tools,
                     );
                     let (history, user_message) =
-                        split_messages_for_run_conversation(messages).ok_or_else(|| {
+                        split_messages_for_run_conversation(&messages).ok_or_else(|| {
                             GatewayError::Platform(
                                 "session has no user message for run_conversation".into(),
                             )
@@ -263,7 +263,7 @@ impl HttpServerState {
                         });
 
                     let (history, user_message) =
-                        split_messages_for_run_conversation(messages).ok_or_else(|| {
+                        split_messages_for_run_conversation(&messages).ok_or_else(|| {
                             GatewayError::Platform(
                                 "session has no user message for run_conversation".into(),
                             )

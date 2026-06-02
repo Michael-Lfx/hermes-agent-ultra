@@ -232,7 +232,7 @@ impl IncomingMessage {
 /// Takes the session messages and returns the agent's response text.
 pub type MessageHandler = Arc<
     dyn Fn(
-            Vec<Message>,
+            Arc<Vec<Message>>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<String, GatewayError>> + Send>,
         > + Send
@@ -269,7 +269,7 @@ pub struct GatewayRuntimeContext {
 /// Context-aware callback type for processing messages through the agent loop.
 pub type MessageHandlerWithContext = Arc<
     dyn Fn(
-            Vec<Message>,
+            Arc<Vec<Message>>,
             GatewayRuntimeContext,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<String, GatewayError>> + Send>,
@@ -281,7 +281,7 @@ pub type MessageHandlerWithContext = Arc<
 /// Takes session messages and a chunk callback, returns the final response.
 pub type StreamingMessageHandler = Arc<
     dyn Fn(
-            Vec<Message>,
+            Arc<Vec<Message>>,
             Arc<dyn Fn(String) + Send + Sync>,
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<String, GatewayError>> + Send>,
@@ -292,7 +292,7 @@ pub type StreamingMessageHandler = Arc<
 /// Context-aware callback type for streaming message processing.
 pub type StreamingMessageHandlerWithContext = Arc<
     dyn Fn(
-            Vec<Message>,
+            Arc<Vec<Message>>,
             GatewayRuntimeContext,
             Arc<dyn Fn(String) + Send + Sync>,
         ) -> std::pin::Pin<
@@ -1198,14 +1198,12 @@ impl Gateway {
             .chars()
             .count();
 
-        // 3. Add the user message to the session
-        self.session_manager
-            .add_message(&session_key, user_message)
+        // 3–4. Append inbound user message and take a shared snapshot for the agent loop.
+        let messages = self
+            .session_manager
+            .append_and_snapshot(&session_key, user_message)
             .await;
         self.bump_input_usage(&session_key, input_chars).await;
-
-        // 4. Get all session messages for the agent loop
-        let messages = self.session_manager.get_messages(&session_key).await;
         let session_transcript_chars: usize = messages
             .iter()
             .map(|m| m.content.as_deref().map(|c| c.chars().count()).unwrap_or(0))
@@ -1671,10 +1669,11 @@ impl Gateway {
                     return Ok(true);
                 }
                 self.session_manager
-                    .replace_messages(session_key, messages.clone())
+                    .replace_messages(session_key, messages)
                     .await;
+                let snapshot = self.session_manager.snapshot_messages(session_key).await;
                 let route_id = Self::route_correlation_id(incoming, session_key);
-                self.route_non_streaming(incoming, messages, session_key, &route_id)
+                self.route_non_streaming(incoming, snapshot, session_key, &route_id)
                     .await?;
                 Ok(true)
             }
@@ -1782,7 +1781,7 @@ impl Gateway {
                 let msg = if let Some(target) = matched {
                     let copied = self
                         .session_manager
-                        .replace_messages(session_key, target.messages.clone())
+                        .replace_messages(session_key, target.messages.as_ref().clone())
                         .await;
                     if copied {
                         self.clear_session_boundary_security_state(session_key)
@@ -1834,7 +1833,7 @@ impl Gateway {
     async fn route_non_streaming(
         &self,
         incoming: &IncomingMessage,
-        messages: Vec<Message>,
+        messages: Arc<Vec<Message>>,
         session_key: &str,
         route_id: &str,
     ) -> Result<(), GatewayError> {
@@ -1974,7 +1973,7 @@ impl Gateway {
     async fn route_streaming(
         &self,
         incoming: &IncomingMessage,
-        messages: Vec<Message>,
+        messages: Arc<Vec<Message>>,
         session_key: &str,
         route_id: &str,
     ) -> Result<(), GatewayError> {
@@ -2495,8 +2494,8 @@ impl Gateway {
 
     fn inject_discord_channel_context(
         incoming: &IncomingMessage,
-        messages: Vec<Message>,
-    ) -> Vec<Message> {
+        messages: Arc<Vec<Message>>,
+    ) -> Arc<Vec<Message>> {
         if incoming.platform != "discord" {
             return messages;
         }
@@ -2520,15 +2519,15 @@ impl Gateway {
         for hint in hints {
             out.push(Message::system(hint));
         }
-        out.extend(messages);
-        out
+        out.extend_from_slice(&messages);
+        Arc::new(out)
     }
 
     async fn inject_runtime_hints(
         &self,
         session_key: &str,
-        messages: Vec<Message>,
-    ) -> Vec<Message> {
+        messages: Arc<Vec<Message>>,
+    ) -> Arc<Vec<Message>> {
         let state = self
             .runtime_state
             .read()
@@ -2559,8 +2558,8 @@ impl Gateway {
             "[gateway_runtime]\n{}",
             hints.join("\n")
         )));
-        out.extend(messages);
-        out
+        out.extend_from_slice(&messages);
+        Arc::new(out)
     }
 
     async fn build_runtime_context(
@@ -2872,7 +2871,7 @@ impl Gateway {
         let task_id_for_task = task_id.clone();
         // Python `GatewayRunner._run_background_task`: only `user_message=prompt` (fresh session).
         // Python `_run_btw_task`: `conversation_history` snapshot + ephemeral user turn (no tools).
-        let original_messages = if isolated_context {
+        let original_messages: Arc<Vec<Message>> = if isolated_context {
             let mut history = self.session_manager.get_messages(session_key).await;
             let btw_user = format!(
                 "[Ephemeral /btw side question. Answer using the conversation \
@@ -2880,11 +2879,11 @@ impl Gateway {
                 trimmed
             );
             history.push(Message::user(btw_user));
-            history
+            Arc::new(history)
         } else {
-            vec![Message::user(trimmed)]
+            Arc::new(vec![Message::user(trimmed)])
         };
-        let legacy_messages = original_messages.clone();
+        let legacy_messages = Arc::clone(&original_messages);
         let runtime_context = self.build_runtime_context(incoming, session_key).await;
         tokio::spawn(async move {
             let result = if let Some(handler) = context_handler {

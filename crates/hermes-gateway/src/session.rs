@@ -24,6 +24,27 @@ pub use hermes_config::session::{
     DailyReset, IdleReset, SessionConfig, SessionResetPolicy as ResetPolicy,
 };
 
+mod arc_message_vec {
+    use std::sync::Arc;
+
+    use hermes_core::types::Message;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(messages: &Arc<Vec<Message>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        messages.as_slice().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Arc<Vec<Message>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Vec::<Message>::deserialize(deserializer).map(Arc::new)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
@@ -43,8 +64,9 @@ pub struct Session {
     /// User identifier on the platform.
     pub user_id: String,
 
-    /// All messages in this session.
-    pub messages: Vec<Message>,
+    /// All messages in this session (shared snapshot for cheap gateway reads).
+    #[serde(with = "arc_message_vec")]
+    pub messages: Arc<Vec<Message>>,
 
     /// When this session was created.
     pub created_at: DateTime<Utc>,
@@ -74,11 +96,33 @@ impl Session {
             platform: platform.into(),
             chat_id: chat_id.into(),
             user_id: user_id.into(),
-            messages: Vec::new(),
+            messages: Arc::new(Vec::new()),
             created_at: now,
             last_active_at: now,
             reset_policy,
             session_type,
+        }
+    }
+
+    /// Append a message in place (copy-on-write when snapshots are shared).
+    pub fn push_message(&mut self, message: Message) {
+        Arc::make_mut(&mut self.messages).push(message);
+    }
+
+    /// Cheap read-only snapshot for agent routing (`Arc` clone only).
+    pub fn message_snapshot(&self) -> Arc<Vec<Message>> {
+        Arc::clone(&self.messages)
+    }
+
+    pub fn set_messages(&mut self, messages: Vec<Message>) {
+        self.messages = Arc::new(messages);
+    }
+
+    pub fn clear_messages(&mut self) {
+        if Arc::strong_count(&self.messages) == 1 {
+            Arc::make_mut(&mut self.messages).clear();
+        } else {
+            self.messages = Arc::new(Vec::new());
         }
     }
 
@@ -405,8 +449,7 @@ impl SessionManager {
         if let Some(session) = sessions.get_mut(&session_key) {
             // Check if reset is needed
             if session.should_reset() {
-                // Reset: clear messages but keep the session alive
-                session.messages.clear();
+                session.clear_messages();
                 session.created_at = Utc::now();
                 session.last_active_at = Utc::now();
             } else {
@@ -421,7 +464,7 @@ impl SessionManager {
         session.id = session_key.clone();
         if let Some(loader) = &self.history_loader {
             let (messages, session_id_override) = loader(&session_key);
-            session.messages = messages;
+            session.set_messages(messages);
             // When a UUID override is returned it means a rotation has been
             // persisted (Python-style): reuse that UUID so agent turns continue
             // to write under the same key across restarts.
@@ -455,7 +498,7 @@ impl SessionManager {
         {
             let mut sessions = self.sessions.write().await;
             if let Some(session) = sessions.get_mut(session_key) {
-                session.messages.clear();
+                session.clear_messages();
                 session.id = new_uuid.clone();
                 session.created_at = Utc::now();
                 session.last_active_at = Utc::now();
@@ -470,25 +513,45 @@ impl SessionManager {
     pub async fn add_message(&self, session_id: &str, message: Message) {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            session.messages.push(message);
+            session.push_message(message);
             session.last_active_at = Utc::now();
         }
     }
 
-    /// Retrieve all messages for a session.
-    pub async fn get_messages(&self, session_id: &str) -> Vec<Message> {
+    /// Append one message and return a shared snapshot (avoids add + full clone).
+    pub async fn append_and_snapshot(
+        &self,
+        session_id: &str,
+        message: Message,
+    ) -> Arc<Vec<Message>> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session) = sessions.get_mut(session_id) {
+            session.push_message(message);
+            session.last_active_at = Utc::now();
+            return session.message_snapshot();
+        }
+        Arc::new(Vec::new())
+    }
+
+    /// Cheap read-only snapshot of session messages.
+    pub async fn snapshot_messages(&self, session_id: &str) -> Arc<Vec<Message>> {
         let sessions = self.sessions.read().await;
         sessions
             .get(session_id)
-            .map(|s| s.messages.clone())
-            .unwrap_or_default()
+            .map(|s| s.message_snapshot())
+            .unwrap_or_else(|| Arc::new(Vec::new()))
+    }
+
+    /// Retrieve all messages for a session (full clone; prefer [`Self::snapshot_messages`]).
+    pub async fn get_messages(&self, session_id: &str) -> Vec<Message> {
+        self.snapshot_messages(session_id).await.as_ref().clone()
     }
 
     /// Replace all messages for a session.
     pub async fn replace_messages(&self, session_id: &str, messages: Vec<Message>) -> bool {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
-            session.messages = messages;
+            session.set_messages(messages);
             session.last_active_at = Utc::now();
             return true;
         }
@@ -499,7 +562,7 @@ impl SessionManager {
     pub async fn pop_last_message(&self, session_id: &str) -> Option<Message> {
         let mut sessions = self.sessions.write().await;
         sessions.get_mut(session_id).and_then(|s| {
-            let popped = s.messages.pop();
+            let popped = Arc::make_mut(&mut s.messages).pop();
             if popped.is_some() {
                 s.last_active_at = Utc::now();
             }
@@ -533,7 +596,7 @@ impl SessionManager {
         let user_sessions = self.get_user_sessions(user_id).await;
         let mut all_messages: Vec<Message> = Vec::new();
         for session in &user_sessions {
-            all_messages.extend(session.messages.clone());
+            all_messages.extend(session.messages.iter().cloned());
         }
         // Sort by created_at to maintain chronological order
         all_messages
@@ -562,7 +625,7 @@ impl SessionManager {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.get_mut(session_id) {
             if session.should_reset() {
-                session.messages.clear();
+                session.clear_messages();
                 session.created_at = Utc::now();
                 session.last_active_at = Utc::now();
                 return true;
@@ -734,6 +797,27 @@ mod tests {
                 Message::assistant("persisted reply"),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn append_and_snapshot_avoids_full_clone_on_read() {
+        let config = SessionConfig::default();
+        let manager = SessionManager::new(config);
+        let session = manager
+            .get_or_create_session("telegram", "chat1", "user1")
+            .await;
+        let sid = format!("{}:{}", session.platform, session.chat_id);
+
+        let snap1 = manager
+            .append_and_snapshot(&sid, Message::user("hello"))
+            .await;
+        assert_eq!(snap1.len(), 1);
+        let snap2 = manager.snapshot_messages(&sid).await;
+        assert!(Arc::ptr_eq(&snap1, &snap2));
+        manager
+            .append_and_snapshot(&sid, Message::assistant("hi"))
+            .await;
+        assert_eq!(manager.snapshot_messages(&sid).await.len(), 2);
     }
 
     #[test]

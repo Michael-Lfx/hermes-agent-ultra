@@ -24226,7 +24226,7 @@ impl hermes_acp::AcpPromptExecutor for CliAcpPromptExecutor {
             provider,
         ));
         let messages = acp_history_to_messages(history, user_text);
-        let (conversation_history, user_message) = split_messages_for_run_conversation(messages)
+        let (conversation_history, user_message) = split_messages_for_run_conversation(&messages)
             .ok_or_else(|| "ACP prompt has no user message for run_conversation".to_string())?;
         let task_id = Some(session.session_id.clone());
         let conv = agent

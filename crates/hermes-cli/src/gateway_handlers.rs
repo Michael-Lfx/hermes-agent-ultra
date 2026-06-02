@@ -53,7 +53,7 @@ pub(crate) struct GatewayHandlerDeps {
 }
 
 pub(crate) async fn gateway_handle_message_non_streaming(
-    messages: Vec<Message>,
+    messages: Arc<Vec<Message>>,
     ctx: GatewayRuntimeContext,
     deps: GatewayHandlerDeps,
 ) -> Result<String, GatewayError> {
@@ -217,7 +217,7 @@ pub(crate) async fn gateway_handle_message_non_streaming(
         runtime_tools.clone(),
     )
     .await;
-    let (history, user_message) = split_messages_for_run_conversation(messages).ok_or_else(|| {
+    let (history, user_message) = split_messages_for_run_conversation(&messages).ok_or_else(|| {
         GatewayError::Platform("session has no user message for run_conversation".into())
     })?;
     let mut history = history;
@@ -243,7 +243,7 @@ pub(crate) async fn gateway_handle_message_non_streaming(
 }
 
 pub(crate) async fn gateway_handle_message_streaming(
-    messages: Vec<Message>,
+    messages: Arc<Vec<Message>>,
     ctx: GatewayRuntimeContext,
     on_chunk: Arc<dyn Fn(String) + Send + Sync>,
     deps: GatewayHandlerDeps,
@@ -445,7 +445,7 @@ pub(crate) async fn gateway_handle_message_streaming(
         }
     });
 
-    let (history, user_message) = split_messages_for_run_conversation(messages).ok_or_else(|| {
+    let (history, user_message) = split_messages_for_run_conversation(&messages).ok_or_else(|| {
         GatewayError::Platform("session has no user message for run_conversation".into())
     })?;
     let mut history = history;

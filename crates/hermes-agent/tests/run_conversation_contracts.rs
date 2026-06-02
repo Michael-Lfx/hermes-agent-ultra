@@ -125,7 +125,7 @@ fn split_and_reasoning_helpers_match_turn_boundary() {
         Message::assistant("hi"),
         Message::user("new"),
     ];
-    let (hist, user) = split_messages_for_run_conversation(messages).expect("split");
+    let (hist, user) = split_messages_for_run_conversation(&messages).expect("split");
     assert_eq!(user, "new");
     assert_eq!(hist.len(), 2);
 
