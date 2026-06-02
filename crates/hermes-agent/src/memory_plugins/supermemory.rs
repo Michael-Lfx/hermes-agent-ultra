@@ -549,6 +549,19 @@ impl MemoryProviderPlugin for SupermemoryMemoryPlugin {
         }
     }
 
+    fn on_session_switch(
+        &self,
+        new_session_id: &str,
+        _parent_session_id: &str,
+        _reset: bool,
+        _reason: &str,
+    ) {
+        let new_id = new_session_id.trim();
+        if !new_id.is_empty() {
+            *self.session_id.lock().unwrap() = new_id.to_string();
+        }
+    }
+
     fn sync_turn(&self, user_content: &str, assistant_content: &str, _session_id: &str) {
         if !*self.active.lock().unwrap() {
             return;

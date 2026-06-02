@@ -201,6 +201,25 @@ impl MemoryProviderPlugin for RetainDbMemoryPlugin {
         r
     }
 
+    fn on_session_switch(
+        &self,
+        new_session_id: &str,
+        _parent_session_id: &str,
+        _reset: bool,
+        _reason: &str,
+    ) {
+        let new_id = new_session_id.trim();
+        if new_id.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.state.lock() {
+            if let Some(st) = guard.as_mut() {
+                st.session_id = new_id.to_string();
+            }
+        }
+        self.prefetch_ctx.lock().unwrap().clear();
+    }
+
     fn sync_turn(&self, user_content: &str, assistant_content: &str, session_id: &str) {
         let st = match self.state.lock().unwrap().clone() {
             Some(s) => s,

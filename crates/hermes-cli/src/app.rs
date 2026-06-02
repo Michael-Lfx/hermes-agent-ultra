@@ -2308,12 +2308,7 @@ impl App {
     pub fn new_session(&mut self) {
         let old_session_id = self.session_id.clone();
         self.session_id = Uuid::new_v4().to_string();
-        self.agent.memory_on_session_switch(
-            &self.session_id,
-            &old_session_id,
-            true,
-            "new_session",
-        );
+        self.notify_memory_session_switch(&self.session_id, &old_session_id, true, "new_session");
         self.messages.clear();
         self.ui_messages.clear();
         self.pending_image_hint = None;
@@ -2321,6 +2316,49 @@ impl App {
         self.input_history.clear();
         self.history_index = 0;
         self.ensure_session_stub_snapshot();
+    }
+
+    /// Sync runtime session id to the agent and notify memory providers.
+    pub fn notify_memory_session_switch(
+        &self,
+        new_session_id: &str,
+        parent_session_id: &str,
+        reset: bool,
+        reason: &str,
+    ) {
+        self.agent
+            .set_runtime_session_id(new_session_id);
+        self.agent.memory_on_session_switch(
+            new_session_id,
+            parent_session_id,
+            reset,
+            reason,
+        );
+    }
+
+    /// Run agent-loop context compression on the current CLI transcript.
+    pub async fn compress_conversation_context(&mut self) -> Result<(usize, usize, bool), AgentError> {
+        let pre_len = self.messages.len();
+        if pre_len <= 2 {
+            return Ok((pre_len, pre_len, false));
+        }
+        let model = self.current_model.clone();
+        let session_id = self.session_id.clone();
+        let (compressed_messages, did_compress) = self
+            .agent
+            .compress_messages(self.messages.clone(), &session_id, &model)
+            .await;
+        let post_len = compressed_messages.len();
+        self.messages = compressed_messages;
+        self.ui_messages
+            .retain(|msg| msg.insert_at <= self.messages.len());
+        if let Some(new_sid) = self.agent.runtime_session_id() {
+            let new_sid = new_sid.trim();
+            if !new_sid.is_empty() && new_sid != self.session_id {
+                self.session_id = new_sid.to_string();
+            }
+        }
+        Ok((pre_len, post_len, did_compress))
     }
 
     /// Reset the current session (clear messages but keep session ID).
@@ -4087,6 +4125,23 @@ mod tests {
                 .map(|arr| arr.len()),
             Some(2)
         );
+    }
+
+    #[tokio::test]
+    async fn compress_conversation_context_rejects_short_transcript() {
+        let _guard = env_test_lock();
+        let mut app = build_minimal_test_app();
+        app.messages = vec![
+            hermes_core::Message::system("sys"),
+            hermes_core::Message::user("hi"),
+        ];
+        let (pre, post, compressed) = app
+            .compress_conversation_context()
+            .await
+            .expect("compress");
+        assert_eq!(pre, 2);
+        assert_eq!(post, 2);
+        assert!(!compressed);
     }
 
     #[test]

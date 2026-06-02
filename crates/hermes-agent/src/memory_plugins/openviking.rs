@@ -223,6 +223,26 @@ impl MemoryProviderPlugin for OpenVikingMemoryPlugin {
         });
     }
 
+    fn on_session_switch(
+        &self,
+        new_session_id: &str,
+        _parent_session_id: &str,
+        _reset: bool,
+        _reason: &str,
+    ) {
+        let new_id = new_session_id.trim();
+        if new_id.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.state.lock() {
+            if let Some(st) = guard.as_mut() {
+                st.session_id = new_id.to_string();
+                st.turn_count = 0;
+            }
+        }
+        self.prefetch.lock().unwrap().clear();
+    }
+
     fn sync_turn(&self, user_content: &str, assistant_content: &str, _session_id: &str) {
         let mut lock = self.state.lock().unwrap();
         let st = match lock.as_mut() {

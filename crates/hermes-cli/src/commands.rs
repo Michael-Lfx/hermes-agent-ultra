@@ -3382,7 +3382,7 @@ pub async fn handle_slash_command(
         }
         "/history" => handle_history_command(app),
         "/recap" => handle_recap_command(app, args),
-        "/context" => handle_context_command(app, args),
+        "/context" => handle_context_command(app, args).await,
         "/title" => handle_session_compat_command(app, canonical_command(cmd), args),
         "/branch" => handle_branch_command(app, args),
         "/timetravel" => handle_timetravel_command(app, args),
@@ -3429,8 +3429,8 @@ pub async fn handle_slash_command(
         "/qos" => handle_qos_command(app, args).await,
         "/image" => handle_image_command(app, args),
         "/config" => handle_config_command(app, args),
-        "/autocompact" => handle_autocompact_command(app, args),
-        "/compress" => handle_compress_command(app, args),
+        "/autocompact" => handle_autocompact_command(app, args).await,
+        "/compress" => handle_compress_command(app, args).await,
         "/clear-queue" => handle_clear_queue_command(app),
         "/usage" => handle_usage_command(app),
         "/insights" => handle_insights_command(app),
@@ -5700,7 +5700,7 @@ fn handle_compress_rules_command(
     Ok(CommandResult::Handled)
 }
 
-fn handle_compress_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+async fn handle_compress_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
     if args
         .first()
         .map(|v| v.eq_ignore_ascii_case("rules"))
@@ -5708,38 +5708,32 @@ fn handle_compress_command(app: &mut App, args: &[&str]) -> Result<CommandResult
     {
         return handle_compress_rules_command(app, &args[1..]);
     }
-    let msg_count = app.messages.len();
-    if msg_count <= 2 {
+    let (pre_len, post_len, did_compress) = app.compress_conversation_context().await?;
+    if pre_len <= 2 {
         emit_command_output(
             app,
-            format!("Context too small to compress ({} messages).", msg_count),
+            format!("Context too small to compress ({} messages).", pre_len),
         );
         return Ok(CommandResult::Handled);
     }
-
-    let keep = std::cmp::max(2, msg_count / 3);
-    let removed = msg_count - keep;
-    let summary_text = format!(
-        "[Compressed: {} earlier messages summarized. {} messages retained.]",
-        removed, keep,
-    );
-
-    let split_at = app.messages.len() - keep;
-    let retained = app.messages.split_off(split_at);
-    app.messages.clear();
-    app.messages
-        .push(hermes_core::Message::system(summary_text));
-    app.messages.extend(retained);
-
-    emit_command_output(
-        app,
-        format!(
-            "Compressed context: removed {} messages, kept {}. Total now: {}.",
-            removed,
-            keep,
-            app.messages.len(),
-        ),
-    );
+    if did_compress {
+        emit_command_output(
+            app,
+            format!(
+                "Compressed context: {} messages -> {} (session_id={}).",
+                pre_len, post_len, app.session_id
+            ),
+        );
+    } else {
+        emit_command_output(
+            app,
+            format!(
+                "Compression skipped or no-op ({} messages unchanged). \
+                 Context may be below threshold or another path holds the compression lock.",
+                pre_len
+            ),
+        );
+    }
     Ok(CommandResult::Handled)
 }
 
@@ -5777,7 +5771,7 @@ fn compaction_governance_mode() -> CompactionGovernanceMode {
         .unwrap_or(CompactionGovernanceMode::Advisory)
 }
 
-fn handle_autocompact_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+async fn handle_autocompact_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
     let action = args
         .first()
         .map(|s| s.trim().to_ascii_lowercase())
@@ -5798,7 +5792,7 @@ fn handle_autocompact_command(app: &mut App, args: &[&str]) -> Result<CommandRes
             );
             Ok(CommandResult::Handled)
         }
-        "now" | "run" => handle_compress_command(app, &[]),
+        "now" | "run" => handle_compress_command(app, &[]).await,
         "governance" | "govern" => {
             let Some(next) = args.get(1).copied() else {
                 emit_command_output(
@@ -8672,6 +8666,7 @@ fn load_session_from_path(
         return Ok(CommandResult::Handled);
     };
 
+    let old_session_id = app.session_id.clone();
     app.messages.clear();
     app.ui_messages.clear();
     for msg in messages {
@@ -8686,6 +8681,11 @@ fn load_session_from_path(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            if restored_id != old_session_id {
+                app.notify_memory_session_switch(restored_id, &old_session_id, false, "resume");
+            } else {
+                app.agent.set_runtime_session_id(restored_id);
+            }
             app.session_id = restored_id.to_string();
         }
     }
@@ -11519,7 +11519,7 @@ fn handle_recap_command(app: &mut App, args: &[&str]) -> Result<CommandResult, A
     Ok(CommandResult::Handled)
 }
 
-fn handle_context_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+async fn handle_context_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
     let action = args
         .first()
         .copied()
@@ -11591,7 +11591,7 @@ fn handle_context_command(app: &mut App, args: &[&str]) -> Result<CommandResult,
             emit_command_output(app, out.trim_end());
         }
         "compress" | "compact" => {
-            return handle_compress_command(app, &[]);
+            return handle_compress_command(app, &[]).await;
         }
         _ => {
             emit_command_output(

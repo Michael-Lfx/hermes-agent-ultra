@@ -3562,6 +3562,42 @@ impl AgentLoop {
         mm.on_session_switch(new_session_id, parent_session_id, reset, reason);
     }
 
+    /// Update the active runtime session id (CLI `/new`, `/resume`, manual `/compress`).
+    pub fn set_runtime_session_id(&self, session_id: &str) {
+        let sid = session_id.trim();
+        if sid.is_empty() {
+            return;
+        }
+        if let Ok(mut cfg) = self.config_runtime.write() {
+            cfg.session_id = Some(sid.to_string());
+        }
+    }
+
+    /// Current runtime session id from agent config.
+    pub fn runtime_session_id(&self) -> Option<String> {
+        self.config().session_id.clone()
+    }
+
+    /// Run Python-parity compression on a standalone message list (CLI `/compress`).
+    pub async fn compress_messages(
+        &self,
+        messages: Vec<Message>,
+        session_id: &str,
+        model: &str,
+    ) -> (Vec<Message>, bool) {
+        self.set_runtime_session_id(session_id);
+        if let Ok(mut cfg) = self.config_runtime.write() {
+            let m = model.trim();
+            if !m.is_empty() {
+                cfg.model = m.to_string();
+            }
+        }
+        let mut ctx = ContextManager::for_model(model);
+        ctx.replace_messages(messages);
+        let compressed = self.compress_context(&mut ctx).await;
+        (ctx.get_messages().to_vec(), compressed)
+    }
+
     fn memory_on_session_end(&self, messages: &[Message]) {
         self.interest_on_session_end(messages);
         if self.config().skip_memory {
@@ -12110,6 +12146,109 @@ mod tests {
             &mut content,
         );
         assert_eq!(content.as_deref(), Some("after"));
+    }
+
+    #[test]
+    fn set_runtime_session_id_updates_config() {
+        use futures::stream::BoxStream;
+
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermes_core::LlmResponse, AgentError> {
+                Ok(hermes_core::LlmResponse {
+                    message: Message::assistant("dummy"),
+                    usage: None,
+                    model: "dummy".into(),
+                    finish_reason: Some("stop".into()),
+                })
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let agent = AgentLoop::new(
+            AgentConfig::default(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+        agent.set_runtime_session_id("session-abc");
+        assert_eq!(
+            agent.runtime_session_id().as_deref(),
+            Some("session-abc")
+        );
+    }
+
+    #[tokio::test]
+    async fn compress_messages_short_transcript_is_noop() {
+        use futures::stream::BoxStream;
+
+        struct DummyProvider;
+        #[async_trait::async_trait]
+        impl LlmProvider for DummyProvider {
+            async fn chat_completion(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> Result<hermes_core::LlmResponse, AgentError> {
+                Ok(hermes_core::LlmResponse {
+                    message: Message::assistant("dummy"),
+                    usage: None,
+                    model: "dummy".into(),
+                    finish_reason: Some("stop".into()),
+                })
+            }
+
+            fn chat_completion_stream(
+                &self,
+                _messages: &[Message],
+                _tools: &[ToolSchema],
+                _max_tokens: Option<u32>,
+                _temperature: Option<f64>,
+                _model: Option<&str>,
+                _extra_body: Option<&serde_json::Value>,
+            ) -> BoxStream<'static, Result<StreamChunk, AgentError>> {
+                futures::stream::empty().boxed()
+            }
+        }
+
+        let agent = AgentLoop::new(
+            AgentConfig::default(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(DummyProvider),
+        );
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("hi"),
+            Message::assistant("hello"),
+        ];
+        let (out, compressed) = agent
+            .compress_messages(messages.clone(), "sid-1", "gpt-4o")
+            .await;
+        assert!(!compressed);
+        assert_eq!(out.len(), messages.len());
     }
 
     #[tokio::test]
