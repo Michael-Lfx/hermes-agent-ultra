@@ -1,4 +1,4 @@
-//! Per-turn cache for OpenAI-compat LLM request serialization (message sanitize + tools JSON).
+//! Per-turn cache for LLM request serialization (OpenAI-compat sanitize + Anthropic convert).
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use hermes_core::{Message, MessageRole, ToolCall, ToolSchema};
 use serde_json::Value;
 
-use crate::provider::GenericProvider;
+use crate::provider::{AnthropicProvider, GenericProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MessagesCacheKey {
@@ -17,16 +17,27 @@ struct MessagesCacheKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AnthropicMessagesCacheKey {
+    pub count: usize,
+    pub content_hash: u64,
+    pub base_url_hash: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ToolsCacheKey {
     count: usize,
     schema_hash: u64,
 }
 
-/// Turn-scoped cache shared across runtime-built [`GenericProvider`] instances.
+type AnthropicConverted = (Option<Value>, Vec<Value>);
+
+/// Turn-scoped cache shared across runtime-built provider instances.
 #[derive(Debug)]
 pub(crate) struct ProviderSerializeCache {
     messages: Mutex<Option<(MessagesCacheKey, Arc<Value>)>>,
     tools: Mutex<Option<(ToolsCacheKey, Arc<Value>)>>,
+    anthropic_messages: Mutex<Option<(AnthropicMessagesCacheKey, Arc<AnthropicConverted>)>>,
+    anthropic_tools: Mutex<Option<(ToolsCacheKey, Arc<Value>)>>,
 }
 
 impl ProviderSerializeCache {
@@ -34,6 +45,8 @@ impl ProviderSerializeCache {
         Self {
             messages: Mutex::new(None),
             tools: Mutex::new(None),
+            anthropic_messages: Mutex::new(None),
+            anthropic_tools: Mutex::new(None),
         }
     }
 
@@ -42,6 +55,12 @@ impl ProviderSerializeCache {
             *guard = None;
         }
         if let Ok(mut guard) = self.tools.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.anthropic_messages.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.anthropic_tools.lock() {
             *guard = None;
         }
     }
@@ -82,6 +101,67 @@ impl ProviderSerializeCache {
         }
         GenericProvider::format_tools_for_openai_api(tools)
     }
+
+    pub fn converted_anthropic_messages(
+        &self,
+        messages: &[Message],
+        base_url: &str,
+    ) -> (Option<Value>, Vec<Value>) {
+        let key = anthropic_messages_cache_key(messages, base_url);
+        if let Ok(mut guard) = self.anthropic_messages.lock() {
+            if let Some((cached_key, arc)) = guard.as_ref() {
+                if *cached_key == key {
+                    let (system, msgs) = arc.as_ref();
+                    return (system.clone(), msgs.clone());
+                }
+            }
+            let converted = AnthropicProvider::convert_messages(messages, Some(base_url));
+            let arc = Arc::new(converted);
+            let out = arc.as_ref().clone();
+            *guard = Some((key, arc));
+            return out;
+        }
+        AnthropicProvider::convert_messages(messages, Some(base_url))
+    }
+
+    pub fn formatted_anthropic_tools(&self, tools: &[ToolSchema]) -> Value {
+        if tools.is_empty() {
+            return Value::Array(vec![]);
+        }
+        let key = tools_cache_key_for_tools(tools);
+        if let Ok(mut guard) = self.anthropic_tools.lock() {
+            if let Some((cached_key, arc)) = guard.as_ref() {
+                if *cached_key == key {
+                    return arc.as_ref().clone();
+                }
+            }
+            let value = Value::Array(AnthropicProvider::convert_tools(tools));
+            let arc = Arc::new(value);
+            let out = arc.as_ref().clone();
+            *guard = Some((key, arc));
+            return out;
+        }
+        Value::Array(AnthropicProvider::convert_tools(tools))
+    }
+}
+
+pub(crate) fn anthropic_messages_cache_key(messages: &[Message], base_url: &str) -> AnthropicMessagesCacheKey {
+    let content = messages_cache_key(messages, false);
+    AnthropicMessagesCacheKey {
+        count: content.count,
+        content_hash: content.content_hash,
+        base_url_hash: hash_str(base_url),
+    }
+}
+
+pub(crate) fn tools_cache_key_for_tools(tools: &[ToolSchema]) -> ToolsCacheKey {
+    tools_cache_key(tools)
+}
+
+pub(crate) fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 fn messages_cache_key(messages: &[Message], strict: bool) -> MessagesCacheKey {
@@ -111,6 +191,14 @@ fn hash_message(msg: &Message, hasher: &mut DefaultHasher) {
     }
     if let Some(reasoning) = &msg.reasoning_content {
         reasoning.hash(hasher);
+    }
+    if let Some(cc) = &msg.cache_control {
+        cc.ttl.hash(hasher);
+        let cache_type = match cc.cache_type {
+            hermes_core::CacheType::Ephemeral => 0u8,
+            hermes_core::CacheType::Persistent => 1,
+        };
+        cache_type.hash(hasher);
     }
     if let Some(calls) = &msg.tool_calls {
         calls.len().hash(hasher);
@@ -180,6 +268,18 @@ mod tests {
         ];
         let a = cache.sanitized_openai_messages(&messages, true);
         let b = cache.sanitized_openai_messages(&messages, true);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn anthropic_cache_returns_identical_converted_messages() {
+        let cache = ProviderSerializeCache::new();
+        let messages = vec![
+            Message::system("sys"),
+            Message::user("hello"),
+        ];
+        let a = cache.converted_anthropic_messages(&messages, "https://api.anthropic.com");
+        let b = cache.converted_anthropic_messages(&messages, "https://api.anthropic.com");
         assert_eq!(a, b);
     }
 

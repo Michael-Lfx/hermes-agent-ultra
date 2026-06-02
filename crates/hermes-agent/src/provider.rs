@@ -825,6 +825,7 @@ pub struct AnthropicProvider {
     pub rate_limiter: Option<Arc<RateLimitTracker>>,
     /// Optional credential pool.
     pub credential_pool: Option<Arc<CredentialPool>>,
+    serialize_cache: Option<Arc<ProviderSerializeCache>>,
 }
 
 impl AnthropicProvider {
@@ -839,6 +840,31 @@ impl AnthropicProvider {
             api_version: "2023-06-01".to_string(),
             rate_limiter: None,
             credential_pool: None,
+            serialize_cache: None,
+        }
+    }
+
+    pub fn with_serialize_cache(mut self, cache: Arc<ProviderSerializeCache>) -> Self {
+        self.serialize_cache = Some(cache);
+        self
+    }
+
+    fn converted_messages_for_request(&self, messages: &[Message]) -> (Option<Value>, Vec<Value>) {
+        if let Some(cache) = &self.serialize_cache {
+            cache.converted_anthropic_messages(messages, &self.base_url)
+        } else {
+            Self::convert_messages(messages, Some(self.base_url.as_str()))
+        }
+    }
+
+    fn formatted_tools_for_request(&self, tools: &[ToolSchema]) -> Value {
+        if tools.is_empty() {
+            return Value::Array(vec![]);
+        }
+        if let Some(cache) = &self.serialize_cache {
+            cache.formatted_anthropic_tools(tools)
+        } else {
+            Value::Array(Self::convert_tools(tools))
         }
     }
 
@@ -1024,7 +1050,7 @@ impl AnthropicProvider {
     }
 
     /// Convert internal messages to Anthropic format, extracting system message.
-    fn convert_messages(
+    pub(crate) fn convert_messages(
         messages: &[Message],
         base_url: Option<&str>,
     ) -> (Option<Value>, Vec<Value>) {
@@ -1155,7 +1181,7 @@ impl AnthropicProvider {
     }
 
     /// Convert tool schemas to Anthropic tool format.
-    fn convert_tools(tools: &[ToolSchema]) -> Vec<Value> {
+    pub(crate) fn convert_tools(tools: &[ToolSchema]) -> Vec<Value> {
         tools
             .iter()
             .map(|t| {
@@ -1288,8 +1314,7 @@ impl LlmProvider for AnthropicProvider {
 
         let effective_model = model.unwrap_or(&self.model);
         let api_key = self.effective_api_key();
-        let (system, anthropic_messages) =
-            Self::convert_messages(messages, Some(self.base_url.as_str()));
+        let (system, anthropic_messages) = self.converted_messages_for_request(messages);
         let resolved_max_tokens = Self::resolve_messages_max_tokens(max_tokens, effective_model);
 
         let mut body = serde_json::json!({
@@ -1305,7 +1330,7 @@ impl LlmProvider for AnthropicProvider {
             body["temperature"] = serde_json::json!(temp);
         }
         if !tools.is_empty() {
-            body["tools"] = serde_json::json!(Self::convert_tools(tools));
+            body["tools"] = self.formatted_tools_for_request(tools);
         }
         GenericProvider::merge_extra_body_fields(&mut body, extra_body);
 
@@ -1355,10 +1380,7 @@ impl LlmProvider for AnthropicProvider {
 
             let effective_model = model.as_deref().unwrap_or(&provider.model);
             let api_key = provider.effective_api_key();
-            let (system, anthropic_messages) = AnthropicProvider::convert_messages(
-                &messages,
-                Some(provider.base_url.as_str()),
-            );
+            let (system, anthropic_messages) = provider.converted_messages_for_request(&messages);
             let resolved_max_tokens =
                 AnthropicProvider::resolve_messages_max_tokens(max_tokens, effective_model);
 
@@ -1376,7 +1398,7 @@ impl LlmProvider for AnthropicProvider {
                 body["temperature"] = serde_json::json!(temp);
             }
             if !tools.is_empty() {
-                body["tools"] = serde_json::json!(AnthropicProvider::convert_tools(&tools));
+                body["tools"] = provider.formatted_tools_for_request(&tools);
             }
             GenericProvider::merge_extra_body_fields(&mut body, extra_body.as_ref());
 

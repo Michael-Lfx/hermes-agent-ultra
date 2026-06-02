@@ -4617,7 +4617,9 @@ impl AgentLoop {
                 }
             }
             "anthropic" => {
-                let mut p = AnthropicProvider::new(&api_key).with_model(model_name);
+                let mut p = AnthropicProvider::new(&api_key)
+                    .with_model(model_name)
+                    .with_serialize_cache(Arc::clone(&self.provider_serialize_cache));
                 if let Some(url) = base_url {
                     p = p.with_base_url(url);
                 }
@@ -4727,26 +4729,6 @@ impl AgentLoop {
         } else {
             rt.credential_pool.as_ref()
         }
-    }
-
-    fn messages_for_api_call(&self, ctx: &mut ContextManager) -> Vec<Message> {
-        self.build_turn_api_messages(ctx).to_vec()
-    }
-
-    fn candidate_messages_for_api_call(&self, ctx: &mut ContextManager) -> Vec<Message> {
-        self.build_turn_api_messages(ctx).to_vec()
-    }
-
-    fn apply_prompt_cache_markers(&self, messages: &mut Vec<Message>) {
-        let cfg = self.config();
-        if messages.is_empty() || !cfg.use_prompt_caching {
-            return;
-        }
-        crate::prompt_caching::apply_anthropic_cache_control_in_place(
-            messages,
-            cfg.cache_ttl.as_str(),
-            cfg.use_native_cache_layout,
-        );
     }
 
     /// Recompute prompt-cache policy from current route (Python `_anthropic_prompt_cache_policy`).
