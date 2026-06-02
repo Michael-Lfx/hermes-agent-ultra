@@ -7,9 +7,9 @@ use hermes_core::ToolSchema;
 use crate::agent_loop::AgentLoop;
 use crate::context::{SystemPromptBuilder, load_builtin_memory_snapshot, load_soul_md, resolve_personality};
 use crate::prompt_builder::{
-    COMPUTER_USE_GUIDANCE, KANBAN_GUIDANCE, MEMORY_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE,
-    SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE, TASK_COMPLETION_GUIDANCE, TOOL_USE_ENFORCEMENT_GUIDANCE,
-    GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
+    COMPUTER_USE_GUIDANCE, CRONJOB_GUIDANCE, KANBAN_GUIDANCE, MEMORY_GUIDANCE,
+    OPENAI_MODEL_EXECUTION_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    TASK_COMPLETION_GUIDANCE, TOOL_USE_ENFORCEMENT_GUIDANCE, GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
 };
 
 pub static PLATFORM_HINTS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -441,6 +441,9 @@ impl AgentLoop {
         }
         if tool_names.contains("session_search") {
             tool_guidance.push(SESSION_SEARCH_GUIDANCE);
+        }
+        if tool_names.contains("cronjob") {
+            tool_guidance.push(CRONJOB_GUIDANCE);
         }
         if tool_names.contains("skill_manage") {
             tool_guidance.push(SKILLS_GUIDANCE);

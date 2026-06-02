@@ -45,6 +45,18 @@ pub const SESSION_SEARCH_GUIDANCE: &str = "When the user references something fr
 relevant cross-session context exists, use session_search to recall it before \
 asking them to repeat themselves.";
 
+pub const CRONJOB_GUIDANCE: &str = "# Cron reminders — user-visible time wording\n\
+When you create or update a reminder with the cronjob tool, the tool response includes \
+`next_run` (RFC3339 UTC) and `next_run_display` (Hermes wall-clock). When telling the \
+user when the reminder will fire, you MUST quote the clock and calendar from \
+`next_run_display`. You may translate into the user's language, but do not change the \
+date or time.\n\
+Do NOT infer trigger time from Conversation started, session age, your guess of 'now', \
+or phrases like tomorrow / 明天 / the day after / 后天 / later / 稍后 unless that exact \
+wording matches `next_run_display`. If you have not read `next_run_display` from the \
+latest cronjob tool result in this turn, do not state a trigger time — call cronjob \
+(action='list') or re-read the create/update result first.";
+
 pub const SKILLS_GUIDANCE: &str = "After completing a complex task (5+ tool calls), fixing a tricky error, \
 or discovering a non-trivial workflow, save the approach as a \
 skill with skill_manage so you can reuse it next time.\n\

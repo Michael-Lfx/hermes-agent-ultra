@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 
 use hermes_core::ToolError;
@@ -202,6 +203,17 @@ fn apply_repeat_for_oneshot(job: &mut CronJob) {
     }
 }
 
+/// RFC3339 UTC + Hermes wall-clock label for agent-facing confirmation text.
+fn next_run_response_fields(next_run: Option<DateTime<Utc>>) -> (Value, Value) {
+    match next_run {
+        Some(dt) => (
+            json!(dt.to_rfc3339()),
+            json!(hermes_core::format_wall_datetime(dt)),
+        ),
+        None => (Value::Null, Value::Null),
+    }
+}
+
 #[async_trait]
 impl CronjobBackend for ScheduledCronjobBackend {
     async fn create(
@@ -293,6 +305,14 @@ impl CronjobBackend for ScheduledCronjobBackend {
             .await
             .map_err(cron_err_to_tool)?;
 
+        let (next_run, next_run_display) = self
+            .scheduler
+            .get_job(&id)
+            .await
+            .and_then(|j| j.next_run)
+            .map(|dt| next_run_response_fields(Some(dt)))
+            .unwrap_or_else(|| next_run_response_fields(None));
+
         Ok(json!({
             "action": "created",
             "id": id,
@@ -311,6 +331,8 @@ impl CronjobBackend for ScheduledCronjobBackend {
             "enabled_toolsets": enabled_toolsets,
             "workdir": workdir,
             "profile": profile,
+            "next_run": next_run,
+            "next_run_display": next_run_display,
         })
         .to_string())
     }
@@ -539,6 +561,43 @@ mod tests {
             parse_context_from_update(Some(&json!(["a"]))).expect("set"),
             Some(Some(vec!["a".to_string()]))
         );
+    }
+
+    #[tokio::test]
+    async fn create_response_includes_next_run_display() {
+        let backend = make_backend();
+        let created = backend
+            .create(
+                Some("walk-reminder"),
+                "3m",
+                "Remind user to walk",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("create");
+        let created_v: serde_json::Value = serde_json::from_str(&created).expect("json");
+        assert_eq!(created_v.get("action").and_then(|v| v.as_str()), Some("created"));
+        let next_run = created_v
+            .get("next_run")
+            .and_then(|v| v.as_str())
+            .expect("next_run");
+        assert!(DateTime::parse_from_rfc3339(next_run).is_ok());
+        let display = created_v
+            .get("next_run_display")
+            .and_then(|v| v.as_str())
+            .expect("next_run_display");
+        assert!(display.contains(" at "));
     }
 
     #[tokio::test]
