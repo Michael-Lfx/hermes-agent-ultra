@@ -106,7 +106,7 @@ fn mask_secret_value(secret: &str) -> String {
 /// All supported slash commands and their descriptions.
 pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/new", "Start a new session"),
-    ("/reset", "Reset the current session (clear messages)"),
+    ("/reset", "Start a new session (alias of /new; fresh session ID + history)"),
     (
         "/clear",
         "Clear screen/session state and start a fresh session",
@@ -3310,6 +3310,7 @@ pub fn help_for(cmd: &str) -> Option<&'static str> {
 fn canonical_command(cmd: &str) -> &str {
     match cmd {
         "/clear" => "/new",
+        "/reset" => "/new",
         "/compact" => "/compress",
         "/skill" => "/skills",
         "/curator" => "/skills",
@@ -3363,12 +3364,12 @@ pub async fn handle_slash_command(
     match canonical_command(cmd) {
         "/new" => {
             app.new_session();
-            emit_command_output(app, format!("[New session started: {}]", app.session_id));
-            Ok(CommandResult::Handled)
-        }
-        "/reset" => {
-            app.reset_session();
-            emit_command_output(app, "[Session reset]");
+            let msg = if cmd.eq_ignore_ascii_case("/reset") {
+                format!("[Session reset: {}]", app.session_id)
+            } else {
+                format!("[New session started: {}]", app.session_id)
+            };
+            emit_command_output(app, msg);
             Ok(CommandResult::Handled)
         }
         "/retry" => {
@@ -25069,6 +25070,29 @@ mod tests {
     #[test]
     fn test_goal_alias_maps_to_objective() {
         assert_eq!(canonical_command("/goal"), "/objective");
+    }
+
+    #[test]
+    fn test_reset_alias_maps_to_new() {
+        assert_eq!(canonical_command("/reset"), "/new");
+    }
+
+    #[tokio::test]
+    async fn slash_reset_rotates_session_id_like_new() {
+        let _guard = env_test_lock();
+        let tmp = tempdir().expect("tempdir");
+        let _home_guard = TempHomeGuard::new(tmp.path());
+        let mut app = build_test_app_with_stream(tmp.path()).await;
+        app.messages = vec![hermes_core::Message::user("prior turn")];
+        let old_session_id = app.session_id.clone();
+
+        let result = handle_slash_command(&mut app, "/reset", &[])
+            .await
+            .expect("reset handled");
+        assert_eq!(result, CommandResult::Handled);
+        assert_ne!(app.session_id, old_session_id);
+        assert!(app.messages.is_empty());
+        assert!(latest_ui_assistant_text(&app).contains("Session reset"));
     }
 
     #[tokio::test]

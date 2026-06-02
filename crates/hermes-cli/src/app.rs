@@ -2361,14 +2361,10 @@ impl App {
         Ok((pre_len, post_len, did_compress))
     }
 
-    /// Reset the current session (clear messages but keep session ID).
+    /// Reset the current session — Python parity: same as [`Self::new_session`]
+    /// (`/reset` is an alias of `/new`; rotates session id + memory switch).
     pub fn reset_session(&mut self) {
-        self.messages.clear();
-        self.ui_messages.clear();
-        self.pending_image_hint = None;
-        self.session_objective = None;
-        self.input_history.clear();
-        self.history_index = 0;
+        self.new_session();
     }
 
     /// Set or clear a durable session objective.
