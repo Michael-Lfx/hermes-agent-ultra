@@ -6,6 +6,7 @@
 
 pub mod agent_browser;
 pub mod browser;
+pub mod browser_auth;
 pub mod browser_snapshot_util;
 pub mod clarify;
 pub mod code_execution;

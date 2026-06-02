@@ -12,8 +12,7 @@ use std::os::windows::process::CommandExt;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::Command;
-use uuid::Uuid;
-
+use super::browser_auth::BrowserAuthContext;
 use super::browser_snapshot_util::process_snapshot_text;
 use crate::tools::browser::BrowserBackend;
 use hermes_core::ToolError;
@@ -122,11 +121,16 @@ impl AgentBrowserBackend {
     }
 
     fn session_name_for(&self, task_id: &str) -> String {
+        let ctx = BrowserAuthContext::for_scope(task_id);
         let mut guard = self.sessions.lock().expect("browser sessions lock");
         guard
             .entry(task_id.to_string())
-            .or_insert_with(|| format!("h_{}", &Uuid::new_v4().simple().to_string()[..10]))
+            .or_insert_with(|| ctx.session_name.clone())
             .clone()
+    }
+
+    fn auth_context_for(&self, task_id: &str) -> BrowserAuthContext {
+        BrowserAuthContext::for_scope(task_id)
     }
 
     fn socket_dir(&self, session_name: &str) -> PathBuf {
@@ -141,6 +145,7 @@ impl AgentBrowserBackend {
         timeout_secs: u64,
     ) -> Result<Value, ToolError> {
         let session_name = self.session_name_for(task_id);
+        let auth = self.auth_context_for(task_id);
         let socket_dir = self.socket_dir(&session_name);
         std::fs::create_dir_all(&socket_dir).map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to create browser socket dir: {e}"))
@@ -161,8 +166,9 @@ impl AgentBrowserBackend {
             .arg("--json")
             .arg(command)
             .args(args)
-            .env("AGENT_BROWSER_SOCKET_DIR", &socket_dir)
-            .stdout(Stdio::piped())
+            .env("AGENT_BROWSER_SOCKET_DIR", &socket_dir);
+        auth.apply_to_command(&mut cmd);
+        cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
         #[cfg(windows)]
@@ -229,6 +235,7 @@ impl BrowserBackend for AgentBrowserBackend {
             "task_id": task,
             "elapsed_ms": started.elapsed().as_millis() as u64,
             "backend": "agent-browser",
+            "auth": self.auth_context_for(&task).metadata(),
             "data": result.get("data").cloned().unwrap_or(result),
         })
         .to_string())

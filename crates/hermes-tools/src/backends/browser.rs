@@ -13,6 +13,8 @@ use std::time::Instant;
 use crate::tools::browser::BrowserBackend;
 use hermes_core::ToolError;
 
+use super::browser_auth::{cdp_user_data_dir, ensure_profile_dir};
+
 /// Browser backend using Chrome DevTools Protocol.
 /// Connects to Chrome via WebSocket for automation.
 pub struct CdpBrowserBackend {
@@ -143,8 +145,10 @@ impl CdpBrowserBackend {
             ));
         }
         let port = Self::debug_port_from_endpoint(endpoint);
-        let user_data = std::env::temp_dir().join(format!("hermes-chrome-debug-{port}"));
-        let _ = std::fs::create_dir_all(&user_data);
+        let user_data = cdp_user_data_dir(port);
+        ensure_profile_dir(&user_data).map_err(|e| {
+            ToolError::ExecutionFailed(format!("Failed to create Chrome user-data dir: {e}"))
+        })?;
         let chrome = Self::default_chrome_paths()
             .into_iter()
             .find(|p| p.exists())
