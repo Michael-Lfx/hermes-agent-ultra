@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use regex::Regex;
 use serde_json::Value;
 
-use hermes_core::{Message, MessageRole, ToolResult};
+use hermes_core::{LlmResponse, Message, MessageRole, ToolCall, ToolResult};
 
 /// Strip persisted/ephemeral system prompts from gateway history before `run_conversation`.
 ///
@@ -108,6 +108,57 @@ Finish the answer directly.]"
 pub fn continuation_prompt_for_response(response: &hermes_core::LlmResponse) -> String {
     let is_partial = response.response_id.as_deref() == Some(PARTIAL_STREAM_STUB_ID);
     get_continuation_prompt(is_partial, response.dropped_tool_names.as_deref())
+}
+
+/// User-visible warning when a stream dies mid tool-call (Python `chat_completion_helpers`).
+pub fn format_partial_stream_tool_call_warning(dropped_tools: &[String]) -> String {
+    let mut name_str = dropped_tools
+        .iter()
+        .take(3)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if dropped_tools.len() > 3 {
+        name_str.push_str(&format!(", +{} more", dropped_tools.len() - 3));
+    }
+    format!(
+        "\n\n⚠ Stream stalled mid tool-call ({name_str}); the action was not executed. \
+Ask me to retry if you want to continue."
+    )
+}
+
+pub fn partial_stream_tool_calls_in_flight(tool_calls: &[ToolCall]) -> bool {
+    tool_calls.iter().any(|tc| {
+        !tc.id.is_empty()
+            || !tc.function.name.is_empty()
+            || !tc.function.arguments.trim().is_empty()
+    })
+}
+
+pub fn partial_stream_dropped_tool_names(tool_calls: &[ToolCall]) -> Vec<String> {
+    tool_calls
+        .iter()
+        .filter(|tc| !tc.function.name.is_empty())
+        .map(|tc| tc.function.name.clone())
+        .collect()
+}
+
+/// Build a partial-stream stub so the agent loop can continue after network failure.
+///
+/// Python `interruptible_streaming_api_call` partial stub (`chat_completion_helpers.py`).
+pub fn build_partial_stream_stub_response(
+    model: impl Into<String>,
+    content: impl Into<String>,
+    dropped_tool_names: Option<Vec<String>>,
+) -> LlmResponse {
+    LlmResponse {
+        message: Message::assistant(content),
+        usage: None,
+        model: model.into(),
+        finish_reason: Some("length".to_string()),
+        response_id: Some(PARTIAL_STREAM_STUB_ID.to_string()),
+        dropped_tool_names,
+    }
 }
 
 /// Detect the narrow backend family affected by Ollama/GLM stop misreports.
@@ -500,5 +551,42 @@ mod tests {
             "openai",
             Some("http://127.0.0.1:11434/v1"),
         ));
+    }
+
+    #[test]
+    fn partial_stream_stub_response_matches_python_contract() {
+        let resp = build_partial_stream_stub_response(
+            "test/model",
+            "The first half of ",
+            None,
+        );
+        assert_eq!(resp.response_id.as_deref(), Some(PARTIAL_STREAM_STUB_ID));
+        assert_eq!(resp.finish_reason.as_deref(), Some("length"));
+        assert!(resp.message.tool_calls.as_ref().map_or(true, |v| v.is_empty()));
+        assert_eq!(
+            continuation_prompt_for_response(&resp),
+            get_continuation_prompt(true, None)
+        );
+
+        let dropped = build_partial_stream_stub_response(
+            "test/model",
+            "Let me write the audit: ",
+            Some(vec!["write_file".to_string()]),
+        );
+        assert_eq!(
+            dropped.dropped_tool_names.as_deref(),
+            Some(["write_file".to_string()].as_slice())
+        );
+        let prompt = continuation_prompt_for_response(&dropped);
+        assert!(prompt.contains("too large"));
+        assert!(prompt.contains("write_file"));
+    }
+
+    #[test]
+    fn partial_stream_tool_call_warning_matches_python() {
+        let warn = format_partial_stream_tool_call_warning(&["write_file".to_string()]);
+        assert!(warn.contains("Stream stalled mid tool-call"));
+        assert!(warn.contains("write_file"));
+        assert!(warn.contains("not executed"));
     }
 }

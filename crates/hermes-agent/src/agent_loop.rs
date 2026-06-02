@@ -53,7 +53,9 @@ use crate::providers_extra::{
 };
 use crate::prompt_builder::TOOL_USE_ENFORCEMENT_MODELS;
 use crate::python_alignment::{
-    CODEX_CONTINUE_USER_MESSAGE, budget_pressure_text, continuation_prompt_for_response,
+    build_partial_stream_stub_response, continuation_prompt_for_response,
+    format_partial_stream_tool_call_warning, partial_stream_dropped_tool_names,
+    partial_stream_tool_calls_in_flight, CODEX_CONTINUE_USER_MESSAGE, budget_pressure_text,
     inject_budget_pressure_into_last_tool_result, looks_like_codex_intermediate_ack,
     sanitize_surrogates, should_treat_stop_as_truncated, strip_budget_warnings_from_messages,
     strip_think_blocks_for_ack,
@@ -5938,6 +5940,54 @@ impl AgentLoop {
         }
     }
 
+    fn partial_stream_stub_outcome(
+        recovered_text: &str,
+        tool_calls: &[ToolCall],
+        last_usage: Option<UsageStats>,
+        model: &str,
+        on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
+        err: &AgentError,
+    ) -> StreamCollectOutcome {
+        let dropped = partial_stream_dropped_tool_names(tool_calls);
+        let mut content = recovered_text.to_string();
+        if !dropped.is_empty() {
+            let warn = format_partial_stream_tool_call_warning(&dropped);
+            on_chunk(StreamChunk {
+                delta: Some(hermes_core::StreamDelta {
+                    content: Some(warn.clone()),
+                    tool_calls: None,
+                    extra: None,
+                }),
+                finish_reason: None,
+                usage: None,
+            });
+            content.push_str(&warn);
+            tracing::warn!(
+                dropped_tools = ?dropped,
+                recovered_chars = recovered_text.chars().count(),
+                error = %err,
+                "Partial stream dropped tool call(s); returning length stub for continuation"
+            );
+        } else {
+            tracing::warn!(
+                recovered_chars = recovered_text.chars().count(),
+                error = %err,
+                "Partial stream delivered before error; returning length stub for continuation"
+            );
+        }
+        let mut response = build_partial_stream_stub_response(
+            model,
+            content,
+            if dropped.is_empty() {
+                None
+            } else {
+                Some(dropped)
+            },
+        );
+        response.usage = last_usage;
+        StreamCollectOutcome::Complete(response)
+    }
+
     /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
     async fn collect_stream_llm_response(
         &self,
@@ -5961,6 +6011,8 @@ impl AgentLoop {
             .and_then(|v| v.parse::<u32>().ok())
             .map(|v| v.min(10))
             .unwrap_or(self.config().stream_read_max_retries.min(10));
+
+        let mut recovered_stream_text = String::new();
 
         'stream_attempt: for stream_attempt in 0..=max_stream_retries {
             *api_call_count = api_call_count.saturating_add(1);
@@ -6059,11 +6111,7 @@ impl AgentLoop {
                 let chunk = match chunk_result {
                     Ok(chunk) => chunk,
                     Err(err) => {
-                        let partial_tool_in_flight = tool_calls.iter().any(|tc| {
-                            !tc.id.is_empty()
-                                || !tc.function.name.is_empty()
-                                || !tc.function.arguments.trim().is_empty()
-                        });
+                        let partial_tool_in_flight = partial_stream_tool_calls_in_flight(&tool_calls);
                         let should_retry_for_partial_tool = deltas_were_sent
                             && partial_tool_in_flight
                             && is_transient_stream_error(&err)
@@ -6111,6 +6159,16 @@ impl AgentLoop {
                             }
                             continue 'stream_attempt;
                         }
+                        if deltas_were_sent || !recovered_stream_text.is_empty() {
+                            return Ok(Self::partial_stream_stub_outcome(
+                                &recovered_stream_text,
+                                &tool_calls,
+                                last_usage.clone(),
+                                active_model,
+                                on_chunk,
+                                &err,
+                            ));
+                        }
                         return Err(err);
                     }
                 };
@@ -6124,6 +6182,7 @@ impl AgentLoop {
                             text.clone()
                         };
                         content.push_str(&scrubbed);
+                        recovered_stream_text.push_str(&scrubbed);
                         if let Some(ref cb) = self.callbacks.on_stream_delta {
                             cb(&scrubbed);
                         }
@@ -13407,7 +13466,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_mid_tool_call_exhausted_retries_returns_error() {
+    async fn stream_mid_tool_call_exhausted_retries_returns_partial_stub() {
         let provider = Arc::new(StreamRetryProvider::new(
             StreamRetryScenario::AlwaysFailMidToolCall,
         ));
@@ -13440,22 +13499,42 @@ mod tests {
                 &mut api_call_count,
                 None,
             )
-            .await;
+            .await
+            .expect("partial stub should recover instead of hard error");
 
-        let err = match out {
-            Err(err) => err,
-            Ok(_) => panic!("should fail after retries"),
+        let StreamCollectOutcome::Complete(resp) = out else {
+            panic!("expected complete partial-stream stub");
         };
-        assert!(err.to_string().contains("Stream read error"));
+        assert_eq!(
+            resp.response_id.as_deref(),
+            Some(hermes_core::PARTIAL_STREAM_STUB_ID)
+        );
+        assert_eq!(resp.finish_reason.as_deref(), Some("length"));
+        assert!(resp
+            .message
+            .tool_calls
+            .as_ref()
+            .map_or(true, |calls| calls.is_empty()));
+        assert_eq!(
+            resp.dropped_tool_names.as_deref(),
+            Some(["write_file".to_string()].as_slice())
+        );
+        let body = resp.message.content.as_deref().unwrap_or_default();
+        assert!(body.contains("Working..."));
+        assert!(body.contains("Stream stalled mid tool-call"));
+        assert!(body.contains("write_file"));
         assert_eq!(*provider.calls.lock().expect("calls lock"), 2);
         assert!(seen.lock().expect("seen lock").iter().any(|text| {
             text.to_lowercase()
                 .contains("connection dropped mid tool-call; reconnecting")
         }));
+        assert!(seen.lock().expect("seen lock").iter().any(|text| {
+            text.contains("Stream stalled mid tool-call")
+        }));
     }
 
     #[tokio::test]
-    async fn stream_text_only_drop_does_not_retry() {
+    async fn stream_text_only_drop_returns_partial_stub_without_retry() {
         let provider = Arc::new(StreamRetryProvider::new(StreamRetryScenario::TextOnlyDrop));
         let cfg = AgentConfig {
             stream_read_max_retries: 2,
@@ -13486,18 +13565,27 @@ mod tests {
                 &mut api_call_count,
                 None,
             )
-            .await;
+            .await
+            .expect("text-only partial stream should return stub");
 
-        let err = match out {
-            Err(err) => err,
-            Ok(_) => panic!("text-only stream drops should not retry silently"),
+        let StreamCollectOutcome::Complete(resp) = out else {
+            panic!("expected partial-stream stub");
         };
-        assert!(err.to_string().contains("Stream read error"));
+        assert_eq!(
+            resp.response_id.as_deref(),
+            Some(hermes_core::PARTIAL_STREAM_STUB_ID)
+        );
+        assert_eq!(resp.finish_reason.as_deref(), Some("length"));
+        assert_eq!(resp.message.content.as_deref(), Some("Partial text"));
         assert_eq!(*provider.calls.lock().expect("calls lock"), 1);
         assert!(!seen.lock().expect("seen lock").iter().any(|text| {
             text.to_lowercase()
                 .contains("connection dropped mid tool-call; reconnecting")
         }));
+        assert_eq!(
+            crate::python_alignment::continuation_prompt_for_response(&resp),
+            crate::python_alignment::get_continuation_prompt(true, None)
+        );
     }
 
     #[tokio::test]

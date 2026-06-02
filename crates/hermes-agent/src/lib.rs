@@ -144,9 +144,10 @@ pub use subdirectory_hints::{generate_project_hints, SubdirectoryHintTracker};
 
 // Python `run_agent.py` alignment helpers (budget strip/inject, surrogate sanitize)
 pub use python_alignment::{
-    budget_pressure_text, continuation_prompt_for_response, get_continuation_prompt,
-    has_natural_response_ending, inject_budget_pressure_into_last_tool_result,
-    looks_like_codex_intermediate_ack, sanitize_surrogates, should_treat_stop_as_truncated,
+    budget_pressure_text, build_partial_stream_stub_response, continuation_prompt_for_response,
+    format_partial_stream_tool_call_warning, get_continuation_prompt, has_natural_response_ending,
+    inject_budget_pressure_into_last_tool_result, looks_like_codex_intermediate_ack,
+    partial_stream_dropped_tool_names, sanitize_surrogates, should_treat_stop_as_truncated,
     strip_budget_warnings_from_messages, strip_think_blocks_for_ack, CODEX_CONTINUE_USER_MESSAGE,
     PARTIAL_STREAM_STUB_ID,
 };
