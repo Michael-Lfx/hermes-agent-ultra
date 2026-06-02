@@ -2,4 +2,15 @@
 pre-build = ["mkdir -p /tmp && chmod 1777 /tmp"]
 
 [build.env]
-passthrough = ["AWS_LC_SYS_CMAKE_BUILDER", "XDG_CACHE_HOME"]
+passthrough = [
+    "AWS_LC_SYS_CMAKE_BUILDER",
+    # Writable inside the cross container (do not forward host ~/.cache).
+    "XDG_CACHE_HOME=/tmp/cross-cache",
+    # cross also forwards host http(s)_proxy after passthrough; use a LAN-reachable
+    # proxy on the host (not 127.0.0.1) before `cross build`, e.g.:
+    #   export https_proxy=http://192.168.31.90:7890
+    "http_proxy",
+    "https_proxy",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+]
