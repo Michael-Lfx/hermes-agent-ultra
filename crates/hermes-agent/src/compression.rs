@@ -194,6 +194,7 @@ pub struct ContextCompressor {
     last_summary_error: Option<String>,
     last_summary_dropped_count: usize,
     last_summary_fallback_used: bool,
+    ineffective_compression_count: u32,
 }
 
 impl ContextCompressor {
@@ -237,6 +238,7 @@ impl ContextCompressor {
             last_summary_error: None,
             last_summary_dropped_count: 0,
             last_summary_fallback_used: false,
+            ineffective_compression_count: 0,
         }
     }
 
@@ -286,7 +288,34 @@ impl ContextCompressor {
 
     /// Compression trigger predicate.
     pub fn should_compress(&self, current_prompt_tokens: Option<u64>) -> bool {
-        current_prompt_tokens.unwrap_or(self.last_prompt_tokens) >= self.threshold_tokens
+        let tokens = current_prompt_tokens.unwrap_or(self.last_prompt_tokens);
+        if tokens < self.threshold_tokens {
+            return false;
+        }
+        if self.ineffective_compression_count >= 2 {
+            if !self.config.quiet_mode {
+                tracing::warn!(
+                    ineffective_count = self.ineffective_compression_count,
+                    "Compression skipped — last compressions saved <10% each; consider /new or /compress"
+                );
+            }
+            return false;
+        }
+        true
+    }
+
+    fn note_compression_effectiveness(&mut self, display_tokens: u64, new_estimate: u64) {
+        let saved = display_tokens.saturating_sub(new_estimate);
+        let savings_pct = if display_tokens > 0 {
+            (saved as f64 / display_tokens as f64) * 100.0
+        } else {
+            0.0
+        };
+        if savings_pct < 10.0 {
+            self.ineffective_compression_count += 1;
+        } else {
+            self.ineffective_compression_count = 0;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -872,14 +901,22 @@ Write only the summary body. Do not include any preamble or prefix."
         self.compression_count += 1;
         let compressed = self.sanitize_tool_pairs(compressed);
 
+        let new_estimate = estimate_messages_tokens(&compressed);
+        self.note_compression_effectiveness(display_tokens, new_estimate);
+
         if !self.config.quiet_mode {
-            let new_estimate = estimate_messages_tokens(&compressed);
             let saved_estimate = display_tokens.saturating_sub(new_estimate);
+            let savings_pct = if display_tokens > 0 {
+                (saved_estimate as f64 / display_tokens as f64) * 100.0
+            } else {
+                0.0
+            };
             tracing::info!(
-                "Compressed: {} -> {} messages (~{} tokens saved)",
+                "Compressed: {} -> {} messages (~{} tokens saved, {:.0}%)",
                 n_messages,
                 compressed.len(),
-                saved_estimate
+                saved_estimate,
+                savings_pct
             );
             tracing::info!("Compression #{} complete", self.compression_count);
         }
@@ -991,6 +1028,30 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
     chars_to_tokens(total)
 }
 
+/// Rough token estimate for preflight compression (messages + system + tool schemas).
+pub fn estimate_request_tokens_for_compression(
+    messages: &[Message],
+    system_prompt: &str,
+    tool_schemas: &[hermes_core::ToolSchema],
+) -> u64 {
+    let mut total = system_prompt.len();
+    for msg in messages {
+        total += content_len(msg) + 10;
+        if let Some(tcs) = msg.tool_calls.as_ref() {
+            for tc in tcs {
+                total += tc.function.name.len() + tc.function.arguments.len();
+            }
+        }
+    }
+    for schema in tool_schemas {
+        total += schema.name.len() + schema.description.len();
+        if let Ok(json) = serde_json::to_string(&schema.parameters) {
+            total += json.len();
+        }
+    }
+    chars_to_tokens(total)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -998,7 +1059,7 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_core::{FunctionCall, ToolCall};
+    use hermes_core::{FunctionCall, JsonSchema, ToolCall, tool_schema};
     use hermes_intelligence::auxiliary::{AuxiliarySource, ProviderCandidate};
 
     use async_trait::async_trait;
@@ -1271,6 +1332,33 @@ mod tests {
     }
 
     // ---------- threshold + budget ----------
+
+    #[test]
+    fn should_compress_anti_thrashing_after_ineffective_passes() {
+        let cfg = CompressorConfig {
+            context_length: 100_000,
+            threshold_percent: 0.5,
+            ..quiet_config()
+        };
+        let mut compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        compressor.ineffective_compression_count = 2;
+        assert!(!compressor.should_compress(Some(60_000)));
+    }
+
+    #[test]
+    fn estimate_request_tokens_for_compression_includes_tools() {
+        let messages = vec![msg(MessageRole::User, "hi")];
+        let tools = vec![tool_schema(
+            "read_file",
+            "Read a file from disk",
+            JsonSchema::new("object"),
+        )];
+        let without = estimate_messages_tokens(&messages);
+        let with_tools =
+            estimate_request_tokens_for_compression(&messages, "system prompt", &tools);
+        assert!(with_tools > without);
+    }
 
     #[test]
     fn should_compress_respects_threshold() {

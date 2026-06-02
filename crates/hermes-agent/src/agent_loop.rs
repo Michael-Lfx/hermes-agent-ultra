@@ -34,7 +34,10 @@ use crate::api_bridge::CodexProvider;
 use crate::auxiliary_builder::{AuxiliaryBuildParams, build_auxiliary_client};
 use crate::budget;
 use crate::code_index::CodeIndex;
-use crate::compression::{CompressorConfig, ContextCompressor, estimate_messages_tokens};
+use crate::compression::{
+    CompressorConfig, ContextCompressor, estimate_messages_tokens,
+    estimate_request_tokens_for_compression,
+};
 use crate::context::ContextManager;
 use crate::context_files::{load_hermes_context_files, load_workspace_context};
 use crate::context_references::preprocess_context_references_async;
@@ -4602,7 +4605,15 @@ impl AgentLoop {
         if total_chars > char_threshold {
             return true;
         }
-        let estimated = estimate_messages_tokens(ctx.get_messages());
+        let system_prompt = ctx
+            .get_messages()
+            .first()
+            .filter(|m| m.role == MessageRole::System)
+            .and_then(|m| m.content.as_deref())
+            .unwrap_or("");
+        let tool_schemas = self.tool_registry.schemas();
+        let estimated =
+            estimate_request_tokens_for_compression(ctx.get_messages(), system_prompt, &tool_schemas);
         self.context_compressor
             .lock()
             .await
