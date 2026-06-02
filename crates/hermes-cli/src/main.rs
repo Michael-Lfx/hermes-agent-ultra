@@ -585,7 +585,7 @@ async fn run(cli: Cli) {
             snapshot_path,
             bundle,
         } => run_doctor(cli, deep, self_heal, snapshot, snapshot_path, bundle).await,
-        CliCommand::Update { check } => run_update(check).await,
+        CliCommand::Update { check, yes, rollback, force } => run_update(check, yes, rollback, force).await,
         CliCommand::EliteCheck { json, strict } => run_elite_check(cli, json, strict).await,
         CliCommand::VerifyProvenance {
             path,
@@ -11547,10 +11547,25 @@ fn build_doctor_support_bundle(cli: &Cli, snapshot_path: &Path) -> Result<PathBu
 }
 
 /// Handle `hermes update`.
-async fn run_update(_check: bool) -> Result<(), AgentError> {
-    println!("Hermes Agent v{}", env!("CARGO_PKG_VERSION"));
-    println!("{}", hermes_cli::update::check_for_updates().await?);
-    Ok(())
+async fn run_update(check: bool, yes: bool, rollback: bool, force: bool) -> Result<(), AgentError> {
+    // Clean up leftover .old files from previous update
+    hermes_cli::update::replace::cleanup_old();
+
+    if rollback {
+        return hermes_cli::update::replace::rollback();
+    }
+
+    if check {
+        println!("Hermes Agent v{}", env!("CARGO_PKG_VERSION"));
+        println!("{}", hermes_cli::update::check_for_updates().await?);
+        return Ok(());
+    }
+
+    // Perform full OTA update
+    hermes_cli::update::perform_update(hermes_cli::update::UpdateOptions {
+        yes,
+        force,
+    }).await
 }
 
 async fn run_elite_check(_cli: Cli, json: bool, strict: bool) -> Result<(), AgentError> {

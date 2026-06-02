@@ -132,14 +132,29 @@ pub fn parse_doctor(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 }
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "update", about = "update command")]
+#[command(name = "update", about = "Check for updates or perform OTA self-update")]
 struct UpdateArgs {
+    /// Only check for updates without installing
     #[arg(long)]
     check: bool,
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long)]
+    yes: bool,
+    /// Rollback to previous version
+    #[arg(long)]
+    rollback: bool,
+    /// Force update even if already on latest version
+    #[arg(long)]
+    force: bool,
 }
 
 pub fn parse_update(args: &[OsString]) -> Result<CliCommand, clap::Error> {
-    parse_subcommand::<UpdateArgs, _>(args, |a| CliCommand::Update { check: a.check })
+    parse_subcommand::<UpdateArgs, _>(args, |a| CliCommand::Update {
+        check: a.check,
+        yes: a.yes,
+        rollback: a.rollback,
+        force: a.force,
+    })
 }
 
 #[derive(Parser, Debug, Clone)]

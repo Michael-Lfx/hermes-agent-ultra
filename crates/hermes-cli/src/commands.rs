@@ -17289,6 +17289,9 @@ async fn handle_update_command(app: &mut App, args: &[&str]) -> Result<CommandRe
         let _ = writeln!(out, "  mode: check-only");
     }
     let _ = writeln!(out, "{}", report.trim());
+    if !check_only {
+        let _ = writeln!(out, "\nTo perform the update, exit and run: hermes update");
+    }
     emit_command_output(app, out.trim_end());
     Ok(CommandResult::Handled)
 }

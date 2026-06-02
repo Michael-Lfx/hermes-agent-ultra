@@ -39,6 +39,9 @@ pub enum CliCommand {
     },
     Update {
         check: bool,
+        yes: bool,
+        rollback: bool,
+        force: bool,
     },
     EliteCheck {
         json: bool,

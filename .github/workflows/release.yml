@@ -161,6 +161,11 @@ jobs:
               --output-certificate "${artifact}.pem" \
               "${artifact}"
           done
+      - name: Generate checksums
+        run: |
+          cd dist/
+          sha256sum hermes-*.tar.gz hermes-*.zip > checksums.sha256
+          cat checksums.sha256
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -171,6 +176,7 @@ jobs:
             dist/*.zip.sig
             dist/*.tar.gz.pem
             dist/*.zip.pem
+            dist/checksums.sha256
             dist/security/release-sbom.cdx.json
             scripts/install.sh
             Formula/hermes.rb
