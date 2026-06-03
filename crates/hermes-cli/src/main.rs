@@ -698,8 +698,30 @@ async fn run(cli: Cli) {
             target,
             yes,
         } => hermes_cli::commands::handle_cli_memory(action, target, yes).await,
-        CliCommand::Interest { action } => {
-            hermes_cli::commands::handle_cli_interest(action).await
+        CliCommand::Interest {
+            action,
+            mode,
+            llm_on_session_end,
+            rest,
+        } => {
+            hermes_cli::commands::handle_cli_interest(action, mode, llm_on_session_end, rest)
+                .await
+        }
+        CliCommand::Contribute {
+            action,
+            poi_only,
+            skills_only,
+            last_session,
+            outbox_clear,
+        } => {
+            hermes_cli::commands::handle_cli_contribute(
+                action,
+                poi_only,
+                skills_only,
+                last_session,
+                outbox_clear,
+            )
+            .await
         }
         CliCommand::Mcp {
             action,

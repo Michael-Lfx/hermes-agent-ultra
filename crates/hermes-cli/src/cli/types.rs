@@ -183,6 +183,16 @@ pub enum CliCommand {
     },
     Interest {
         action: Option<String>,
+        mode: Option<String>,
+        llm_on_session_end: bool,
+        rest: Vec<String>,
+    },
+    Contribute {
+        action: Option<String>,
+        poi_only: bool,
+        skills_only: bool,
+        last_session: bool,
+        outbox_clear: bool,
     },
     Mcp {
         action: Option<String>,

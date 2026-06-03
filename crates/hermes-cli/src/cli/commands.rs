@@ -629,10 +629,53 @@ pub fn parse_memory(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 #[command(name = "interest", about = "local user interest (POI) topics")]
 struct InterestArgs {
     action: Option<String>,
+    /// Set extract mode when using `enable` (`rules`, `hybrid`, `llm`).
+    #[arg(long, value_name = "MODE")]
+    mode: Option<String>,
+    /// Enable session-end auxiliary LLM extraction when using `enable`.
+    #[arg(long)]
+    llm_on_session_end: bool,
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    rest: Vec<String>,
 }
 
 pub fn parse_interest(args: &[OsString]) -> Result<CliCommand, clap::Error> {
-    parse_subcommand::<InterestArgs, _>(args, |a| CliCommand::Interest { action: a.action })
+    parse_subcommand::<InterestArgs, _>(args, |a| CliCommand::Interest {
+        action: a.action,
+        mode: a.mode,
+        llm_on_session_end: a.llm_on_session_end,
+        rest: a.rest,
+    })
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "contribute",
+    about = "De-identified POI/skills contribution to ops server (opt-in)"
+)]
+struct ContributeArgs {
+    action: Option<String>,
+    #[arg(long, help = "Only toggle POI/interest upload")]
+    poi_only: bool,
+    #[arg(long, help = "Only toggle skills pattern upload")]
+    skills_only: bool,
+    #[arg(long, help = "Preview using last-session style snapshot")]
+    last_session: bool,
+    #[arg(
+        long,
+        help = "With reset: delete all outbox rows instead of requeueing sent/failed"
+    )]
+    outbox_clear: bool,
+}
+
+pub fn parse_contribute(args: &[OsString]) -> Result<CliCommand, clap::Error> {
+    parse_subcommand::<ContributeArgs, _>(args, |a| CliCommand::Contribute {
+        action: a.action,
+        poi_only: a.poi_only,
+        skills_only: a.skills_only,
+        last_session: a.last_session,
+        outbox_clear: a.outbox_clear,
+    })
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -913,6 +956,7 @@ pub fn all_subcommand_commands() -> Vec<clap::Command> {
         PluginsArgs,
         MemoryArgs,
         InterestArgs,
+        ContributeArgs,
         McpArgs,
         MeetingArgs,
         SessionsArgs,
