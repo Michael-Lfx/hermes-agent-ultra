@@ -400,8 +400,8 @@ fn split_markdown_blocks(content: &str) -> Vec<String> {
 
 /// Split content into delivery units for WeChat.
 ///
-/// * Block boundaries (double-newline) are preferred split points.
-/// * Continuation lines (indented) are kept with their parent block.
+/// * Each Markdown block (paragraph / list / table conversion) stays in one unit when it fits.
+/// * Adjacent units are merged up to `max_length` so replies are not one bubble per line.
 /// * Code blocks are never split unless they exceed `max_length`.
 pub fn split_delivery_units(content: &str, max_length: usize) -> Vec<String> {
     if content.is_empty() {
@@ -411,79 +411,29 @@ pub fn split_delivery_units(content: &str, max_length: usize) -> Vec<String> {
     let mut units: Vec<String> = Vec::new();
 
     for block in split_markdown_blocks(content) {
-        // Code blocks go as whole units (split only if truly necessary).
-        if block
-            .lines()
-            .next()
-            .is_some_and(|l| is_fence_line(l.trim()))
-        {
-            if block.chars().count() <= max_length {
-                units.push(block);
-            } else {
-                units.extend(force_split_block(&block, max_length));
-            }
-            continue;
-        }
-
-        let mut current: Vec<String> = Vec::new();
-        for raw_line in block.lines() {
-            let line = raw_line.trim_end();
-            if line.trim().is_empty() {
-                if !current.is_empty() {
-                    let unit = current.join("\n").trim().to_string();
-                    if !unit.is_empty() {
-                        units.push(unit);
-                    }
-                    current.clear();
-                }
-                continue;
-            }
-            // Continuation: indented lines stay with parent
-            let is_continuation =
-                !current.is_empty() && (raw_line.starts_with(' ') || raw_line.starts_with('\t'));
-            if is_continuation {
-                current.push(line.to_string());
-                continue;
-            }
-            if !current.is_empty() {
-                let unit = current.join("\n").trim().to_string();
-                if !unit.is_empty() {
-                    units.push(unit);
-                }
-            }
-            current = vec![line.to_string()];
-        }
-        if !current.is_empty() {
-            let unit = current.join("\n").trim().to_string();
-            if !unit.is_empty() {
-                units.push(unit);
-            }
-        }
-    }
-
-    // Post-process: split any unit that still exceeds max_length.
-    let mut final_units: Vec<String> = Vec::new();
-    for unit in units {
-        if unit.chars().count() <= max_length {
-            final_units.push(unit);
+        if block.chars().count() <= max_length {
+            units.push(block);
         } else {
-            final_units.extend(pack_blocks_to_fit(&unit, max_length));
+            units.extend(force_split_block(&block, max_length));
         }
     }
-    final_units.into_iter().filter(|u| !u.is_empty()).collect()
+
+    coalesce_delivery_units(units, max_length)
+        .into_iter()
+        .filter(|u| !u.is_empty())
+        .collect()
 }
 
-/// Pack blocks into chunks that fit within `max_length`.
-/// Falls back to line-level splitting for oversized individual blocks.
-fn pack_blocks_to_fit(content: &str, max_length: usize) -> Vec<String> {
+/// Merge adjacent delivery units up to `max_length` (double-newline between merged blocks).
+fn coalesce_delivery_units(units: Vec<String>, max_length: usize) -> Vec<String> {
     let mut packed: Vec<String> = Vec::new();
     let mut current = String::new();
 
-    for block in split_markdown_blocks(content) {
+    for unit in units {
         let candidate = if current.is_empty() {
-            block.clone()
+            unit.clone()
         } else {
-            format!("{current}\n\n{block}")
+            format!("{current}\n\n{unit}")
         };
         if candidate.chars().count() <= max_length {
             current = candidate;
@@ -493,10 +443,10 @@ fn pack_blocks_to_fit(content: &str, max_length: usize) -> Vec<String> {
             packed.push(current);
             current = String::new();
         }
-        if block.chars().count() <= max_length {
-            current = block;
+        if unit.chars().count() <= max_length {
+            current = unit;
         } else {
-            packed.extend(force_split_block(&block, max_length));
+            packed.extend(force_split_block(&unit, max_length));
         }
     }
     if !current.is_empty() {
@@ -609,7 +559,9 @@ mod tests {
     fn split_units_basic() {
         let input = "block one\n\nblock two\n\nblock three";
         let units = split_delivery_units(input, 2000);
-        assert_eq!(units.len(), 3);
+        assert_eq!(units.len(), 1);
+        assert!(units[0].contains("block one"));
+        assert!(units[0].contains("block three"));
     }
 
     #[test]
@@ -641,8 +593,68 @@ mod tests {
     fn split_units_continuation_lines_stay_with_parent() {
         let input = "- item one\n  continued\n- item two\n  continued";
         let units = split_delivery_units(input, 2000);
+        assert_eq!(units.len(), 1);
+        assert!(units[0].contains("item one"));
+        assert!(units[0].contains("item two"));
+    }
+
+    #[test]
+    fn split_units_book_list_not_one_bubble_per_line() {
+        let input = "**男频精选**\n- 书名: **部族荣光**\n  作者: 丧狐\n- 书名: **莫若凌霄**\n  作者: 月关\n- 书名: **高手下山**\n  作者: 小殇殇";
+        let units = split_delivery_units(input, 2000);
+        assert_eq!(units.len(), 1);
+        assert!(units[0].contains("部族荣光"));
+        assert!(units[0].contains("莫若凌霄"));
+    }
+
+    #[test]
+    fn split_units_coalesce_stops_at_max_length() {
+        let block_a = "a".repeat(1200);
+        let block_b = "b".repeat(1200);
+        let input = format!("{block_a}\n\n{block_b}");
+        let units = split_delivery_units(&input, 2000);
         assert_eq!(units.len(), 2);
-        assert!(units[0].contains("continued"));
-        assert!(units[1].contains("continued"));
+        for u in &units {
+            assert!(u.chars().count() <= 2000);
+        }
+    }
+
+    /// Regression: fanqie-style agent reply (~800 chars, tables + sections) must not fan out
+    /// into one WeChat bubble per line (see weixin delivery incident 2026-06-03).
+    #[test]
+    fn split_units_fanqie_recommendation_reply_fits_few_bubbles() {
+        let input = r"好的！我抓取到了番茄小说首页今天（6月3日）的推荐内容，给你整理一下 👇
+
+---
+
+## 📚 男频精选
+
+| 书名 | 作者 |
+|------|------|
+| **部族荣光** | 丧狐 |
+| **莫若凌霄** | 月关 |
+| **高手下山，我有九个无敌师父！** | 小殇殇 |
+
+## 📚 女频精选
+
+| 书名 | 作者 |
+|------|------|
+| **萤火之城** | 童童 |
+| **娇养玫瑰** | 美绿哔哔 |
+
+---
+
+有感兴趣的吗？我可以帮你搜搜具体某本书的简介或章节内容～";
+        let formatted = format_message_for_weixin(input);
+        let units = split_delivery_units(&formatted, DEFAULT_MAX_DELIVERY_LENGTH);
+        assert!(
+            units.len() <= 3,
+            "expected <=3 WeChat bubbles, got {}: {:?}",
+            units.len(),
+            units.iter().map(|u| u.chars().count()).collect::<Vec<_>>()
+        );
+        let joined = units.join("\n\n");
+        assert!(joined.contains("部族荣光"));
+        assert!(joined.contains("萤火之城"));
     }
 }

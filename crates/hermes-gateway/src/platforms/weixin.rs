@@ -1270,7 +1270,20 @@ impl WeChatAdapter {
         let ctx = self.inner.context_tokens.lock().await.get(&key).cloned();
         let chunks =
             weixin_format::split_delivery_units(&formatted, weixin_format::DEFAULT_MAX_DELIVERY_LENGTH);
-        for chunk in &chunks {
+        debug!(
+            to_user_id,
+            input_chars = text.chars().count(),
+            formatted_chars = formatted.chars().count(),
+            chunk_count = chunks.len(),
+            "weixin: sending ilink text"
+        );
+        for (idx, chunk) in chunks.iter().enumerate() {
+            debug!(
+                to_user_id,
+                chunk_index = idx,
+                chunk_chars = chunk.chars().count(),
+                "weixin: ilink text chunk"
+            );
             let client_id = format!("hermes-weixin-{}", Uuid::new_v4().simple());
             let mut msg = json!({
                 "from_user_id": "",
