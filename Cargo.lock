@@ -2110,6 +2110,7 @@ dependencies = [
  "hermes-auth",
  "hermes-config",
  "hermes-core",
+ "hermes-insights",
  "hermes-intelligence",
  "hermes-skills",
  "hermes-telemetry",
@@ -2197,6 +2198,7 @@ dependencies = [
  "hermes-cron",
  "hermes-environments",
  "hermes-gateway",
+ "hermes-insights",
  "hermes-intelligence",
  "hermes-mcp",
  "hermes-skills",
@@ -2411,6 +2413,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermes-insights"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hermes-config",
+ "hermes-intelligence",
+ "hermes-skills",
+ "hex",
+ "regex",
+ "reqwest 0.13.3",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "hermes-intelligence"
 version = "0.1.0"
 dependencies = [
@@ -2526,6 +2550,7 @@ dependencies = [
  "futures",
  "hermes-config",
  "hermes-core",
+ "hermes-insights",
  "indexmap",
  "proptest",
  "rand 0.10.1",
