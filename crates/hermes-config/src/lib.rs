@@ -7,6 +7,7 @@
 //! and sensible defaults.
 
 pub mod config;
+pub mod web_research;
 pub mod dep_check;
 pub mod insights;
 pub mod interest;
@@ -32,6 +33,7 @@ pub use config::{
 pub use dep_check::{RuntimeDep, is_available as dep_is_available};
 pub use interest::InterestConfig;
 pub use insights::{InsightsConfig, InsightsContributionConfig};
+pub use web_research::WebResearchConfig;
 pub use voice::{
     DiarizationProvider, MeetingConfig, MeetingTranscriptionMode, SttConfig, SttGroqConfig,
     SttLocalConfig, SttMistralConfig, SttOpenAiConfig, SttXaiConfig, TtsConfig, TtsEdgeConfig,

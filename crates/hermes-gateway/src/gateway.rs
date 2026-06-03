@@ -1993,6 +1993,24 @@ impl Gateway {
         Ok(())
     }
 
+    /// Merge streamed deltas with the handler's final string (WeCom native stream only
+    /// flushes `on_chunk` text; tool rounds and the final answer may exist only in `response`).
+    fn streaming_delivery_text(streamed: &str, handler_response: &str) -> String {
+        let trimmed_response = handler_response.trim();
+        if trimmed_response.is_empty() {
+            return streamed.to_string();
+        }
+        let acc = streamed.trim();
+        if acc.is_empty() || acc == "..." {
+            return handler_response.to_string();
+        }
+        if trimmed_response.chars().count() >= acc.chars().count() {
+            handler_response.to_string()
+        } else {
+            streamed.to_string()
+        }
+    }
+
     /// Streaming message routing: progressively edit messages as tokens arrive.
     async fn route_streaming(
         &self,
@@ -2038,6 +2056,7 @@ impl Gateway {
         let first_visible_chunk_ms = Arc::new(AtomicU64::new(u64::MAX));
         let streaming_finished = Arc::new(AtomicBool::new(false));
         let stream_visible_start = Instant::now();
+        let native_last_flushed = Arc::new(StdMutex::new(String::new()));
 
         let on_chunk: Arc<dyn Fn(String) + Send + Sync> = if native_streaming {
             let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -2050,6 +2069,7 @@ impl Gateway {
             let failed = native_failed.clone();
             let visible_emitted = first_visible_emitted.clone();
             let visible_ms = first_visible_chunk_ms.clone();
+            let last_flushed_state = native_last_flushed.clone();
             native_worker = Some(tokio::spawn(async move {
                 let flush_interval = Duration::from_millis(wecom_native_stream_flush_interval_ms());
                 let mut ticker = tokio::time::interval(flush_interval);
@@ -2110,6 +2130,9 @@ impl Gateway {
                                 return;
                             }
                             last_flushed.clone_from(&accumulated);
+                            if let Ok(mut guard) = last_flushed_state.lock() {
+                                guard.clone_from(&accumulated);
+                            }
                         }
                     }
                 }
@@ -2126,6 +2149,8 @@ impl Gateway {
                     {
                         warn!(error = %err, stream_id = %sid, "native streaming finish failed");
                         failed.store(true, Ordering::Release);
+                    } else if let Ok(mut guard) = last_flushed_state.lock() {
+                        guard.clone_from(&final_content);
                     }
                 }
             }));
@@ -2403,6 +2428,30 @@ impl Gateway {
                     None,
                 )
                 .await?;
+            } else {
+                let streamed = native_last_flushed
+                    .lock()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                let delivery = Self::streaming_delivery_text(&streamed, &fallback_text);
+                if delivery.trim() != streamed.trim()
+                    && delivery.chars().count() > streamed.chars().count()
+                {
+                    info!(
+                        platform = %incoming.platform,
+                        chat_id = %incoming.chat_id,
+                        streamed_chars = streamed.chars().count(),
+                        delivery_chars = delivery.chars().count(),
+                        "native stream missing final handler text; sending supplemental reply"
+                    );
+                    self.send_message(
+                        &incoming.platform,
+                        &incoming.chat_id,
+                        &delivery,
+                        None,
+                    )
+                    .await?;
+                }
             }
         } else if let Some(stream_id) = stream_id {
             if let (Some(edit_lock), Some(finalized)) =
@@ -2417,19 +2466,7 @@ impl Gateway {
                 .finish_stream(&stream_id)
                 .await
                 .unwrap_or_default();
-            let trimmed_response = response.trim();
-            let final_text = if trimmed_response.is_empty() {
-                accumulated
-            } else {
-                let acc = accumulated.trim();
-                if acc.is_empty() || acc == "..." {
-                    response.clone()
-                } else if trimmed_response.chars().count() >= acc.chars().count() {
-                    response.clone()
-                } else {
-                    accumulated
-                }
-            };
+            let final_text = Self::streaming_delivery_text(&accumulated, &response);
             if !final_text.trim().is_empty() {
                 let trimmed = final_text.trim();
                 #[cfg(feature = "discord")]
@@ -5502,6 +5539,59 @@ mod tests {
         assert_eq!(chunks.last().map(|c| c.1), Some(true));
         let bodies: Vec<&str> = chunks.iter().map(|c| c.0.as_str()).collect();
         assert!(bodies.contains(&"你好"));
+    }
+
+    #[tokio::test]
+    async fn gateway_native_streaming_supplements_when_handler_response_longer() {
+        unsafe { std::env::set_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS", "1") };
+
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let chunks = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Arc::new(NativeStreamTestAdapter {
+            messages: sent.clone(),
+            chunks: chunks.clone(),
+        });
+
+        let session_mgr = Arc::new(SessionManager::new(SessionConfig::default()));
+        let mut dm_manager = DmManager::with_pair_behavior();
+        dm_manager.authorize_user("user1");
+        let mut cfg = GatewayConfig::default();
+        cfg.streaming_enabled = true;
+        let gw = Arc::new(Gateway::new(session_mgr, dm_manager, cfg));
+        gw.register_adapter("wecom", adapter).await;
+
+        let full = "好的，我来查一下。\n\n这是完整的长回答。";
+        let full_for_handler = full.to_string();
+        gw.set_streaming_handler(Arc::new(move |_messages, on_chunk| {
+            let full = full_for_handler.clone();
+            Box::pin(async move {
+                on_chunk("好的，我来查一下。".to_string());
+                Ok(full)
+            })
+        }))
+        .await;
+
+        let incoming = IncomingMessage {
+            platform: "wecom".into(),
+            chat_id: "chat1".into(),
+            user_id: "user1".into(),
+            text: "hello".into(),
+            media_urls: vec![],
+            media_types: vec![],
+            message_id: None,
+            is_dm: true,
+            interaction_id: None,
+            interaction_token: None,
+            role_ids: vec![],
+            ..Default::default()
+        };
+        assert!(gw.route_message(&incoming).await.is_ok());
+
+        let sent_msgs = sent.lock().unwrap();
+        assert_eq!(sent_msgs.len(), 1);
+        assert_eq!(sent_msgs[0].1, full);
+
+        unsafe { std::env::remove_var("HERMES_WECOM_STREAM_FLUSH_INTERVAL_MS") };
     }
 
     #[tokio::test]

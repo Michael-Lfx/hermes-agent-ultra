@@ -1,10 +1,11 @@
-//! Per-run web tool budgets: separate pools per tool, billable-only accounting, URL dedup.
+//! Per-run web tool budgets: separate pools per tool, attempted vs billable accounting, URL/query dedup.
 //!
 //! Scope is **one user message** (one `AgentLoop::run` / `run_stream` invocation), not the
 //! whole session thread.
 
 use std::collections::{HashMap, HashSet};
 
+use hermes_config::WebResearchConfig;
 use hermes_core::{Message, MessageRole, ToolCall, ToolResult};
 use serde_json::Value;
 
@@ -36,17 +37,49 @@ impl WebToolBudgetLimits {
             max_consecutive_errors: env_u32("HERMES_WEB_TOOL_BUDGET_MAX_CONSECUTIVE_ERRORS", 2),
         }
     }
+
+    pub fn from_web_research_config(config: &WebResearchConfig) -> Self {
+        Self {
+            browser_max: config.max_browser,
+            extract_max: config.max_extract,
+            search_max: config.max_search,
+            aggregate_max: Some(config.max_total).filter(|v| *v > 0),
+            max_consecutive_errors: config.max_consecutive_errors,
+        }
+    }
+
+    pub fn from_dynamic_pools(
+        search_max: u32,
+        extract_max: u32,
+        browser_max: u32,
+        aggregate_max: Option<u32>,
+        max_consecutive_errors: u32,
+    ) -> Self {
+        Self {
+            search_max,
+            extract_max,
+            browser_max,
+            aggregate_max: aggregate_max.filter(|v| *v > 0),
+            max_consecutive_errors,
+        }
+    }
 }
 
 /// Mutable counters for the current run.
 #[derive(Debug, Clone, Default)]
 pub struct WebToolBudgetState {
+    /// Attempted executions this user message (pre-check / batch simulation).
+    pub attempted_browser: u32,
+    pub attempted_extract: u32,
+    pub attempted_search: u32,
+    /// Billable successes per pool (cost / success accounting).
     pub browser_used: u32,
     pub extract_used: u32,
     pub search_used: u32,
     /// Billable successes across all web tools (for optional aggregate backstop only).
     pub billable_total: u32,
     pub consecutive_error_turns: u32,
+    pub seen_search_queries: HashSet<String>,
 }
 
 impl WebToolBudgetState {
@@ -165,7 +198,8 @@ pub fn cached_extract_urls_from_messages(messages: &[Message]) -> HashSet<String
             };
             for tc in calls {
                 if tc.id == *tid {
-                    if let Some(n) = url_from_tool_arguments(&tc.function.name, &tc.function.arguments)
+                    if let Some(n) =
+                        url_from_tool_arguments(&tc.function.name, &tc.function.arguments)
                     {
                         urls.insert(n);
                     }
@@ -182,6 +216,58 @@ pub fn web_url_dedup_user_notice() -> String {
 }
 
 /// Block `web_extract` / `browser_navigate` when the same URL was already extracted successfully.
+fn normalize_search_query(query: &str) -> String {
+    query.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+fn query_from_tool_arguments(name: &str, arguments: &str) -> Option<String> {
+    if name != "web_search" {
+        return None;
+    }
+    let args: Value = serde_json::from_str(arguments).ok()?;
+    args.get("query")
+        .and_then(|v| v.as_str())
+        .map(normalize_search_query)
+        .filter(|q| !q.is_empty())
+}
+
+/// Block repeat `web_search` queries already attempted successfully this user message.
+pub fn apply_web_query_dedup(
+    _messages: &[Message],
+    state: &mut WebToolBudgetState,
+    tool_calls: &mut Vec<ToolCall>,
+    turn: u32,
+) -> Vec<(String, ToolResult)> {
+    let mut blocked = Vec::new();
+    let mut kept = Vec::with_capacity(tool_calls.len());
+    for tc in tool_calls.drain(..) {
+        if tc.function.name != "web_search" {
+            kept.push(tc);
+            continue;
+        }
+        let Some(query) = query_from_tool_arguments(&tc.function.name, &tc.function.arguments) else {
+            kept.push(tc);
+            continue;
+        };
+        if state.seen_search_queries.contains(&query) {
+            let reason = format!(
+                "Web query dedup on turn {turn}: blocked repeat web_search for query already used ({query})."
+            );
+            tracing::info!(
+                turn = turn,
+                query = %query,
+                scope = "run",
+                "web_tool_budget query dedup block"
+            );
+            blocked.push((tc.function.name.clone(), ToolResult::err(tc.id, reason)));
+            continue;
+        }
+        kept.push(tc);
+    }
+    *tool_calls = kept;
+    blocked
+}
+
 pub fn apply_web_url_dedup(
     messages: &[Message],
     tool_calls: &mut Vec<ToolCall>,
@@ -215,10 +301,7 @@ pub fn apply_web_url_dedup(
                 scope = "run",
                 "web_tool_budget dedup block"
             );
-            blocked.push((
-                tc.function.name.clone(),
-                ToolResult::err(tc.id, reason),
-            ));
+            blocked.push((tc.function.name.clone(), ToolResult::err(tc.id, reason)));
             continue;
         }
         kept.push(tc);
@@ -231,6 +314,15 @@ pub fn apply_web_url_dedup(
 // Budget pre-check
 // ---------------------------------------------------------------------------
 
+/// Whether a blocked web tool should surface a user-visible quota notice.
+pub fn budget_block_should_notify_user(tool_name: &str, limits: &WebToolBudgetLimits) -> bool {
+    match tool_name {
+        // Planner intentionally set browser budget to 0; blocking is expected, not exhaustion.
+        "browser_navigate" if limits.browser_max == 0 => false,
+        _ => true,
+    }
+}
+
 pub fn web_tool_budget_user_notice(tool_name: &str, blocked_by_errors: bool) -> String {
     let scope = "（本则用户消息配额）";
     match tool_name {
@@ -238,10 +330,36 @@ pub fn web_tool_budget_user_notice(tool_name: &str, blocked_by_errors: bool) -> 
         "web_extract" | "browser_navigate" if blocked_by_errors => {
             format!("网页读取多次失败{scope}，将基于已有信息直接回复。")
         }
-        "web_extract" | "browser_navigate" => {
-            format!("网页抓取次数已达上限{scope}，将基于已有信息直接回复。可换 URL 或基于上文 tool 结果回答。")
-        }
+        "web_extract" => format!(
+            "网页抓取次数已达上限{scope}，将基于已有信息直接回复。可换 URL 或基于上文 tool 结果回答。"
+        ),
+        "browser_navigate" => format!(
+            "浏览器打开次数已达上限{scope}，将基于已有信息直接回复。"
+        ),
         _ => format!("工具 {tool_name} 调用受限{scope}，将基于已有信息直接回复。"),
+    }
+}
+
+fn web_budget_stop_instruction() -> &'static str {
+    " Do not retry web_search/web_extract/browser_navigate for this user message; answer now from existing information and mark anything unverified."
+}
+
+fn increment_attempted(state: &mut WebToolBudgetState, tool_name: &str) {
+    match tool_name {
+        "browser_navigate" => {
+            state.attempted_browser = state.attempted_browser.saturating_add(1)
+        }
+        "web_extract" => state.attempted_extract = state.attempted_extract.saturating_add(1),
+        "web_search" => state.attempted_search = state.attempted_search.saturating_add(1),
+        _ => {}
+    }
+}
+
+impl WebToolBudgetState {
+    pub fn attempted_total(&self) -> u32 {
+        self.attempted_browser
+            .saturating_add(self.attempted_extract)
+            .saturating_add(self.attempted_search)
     }
 }
 
@@ -254,6 +372,7 @@ pub fn apply_web_tool_budget(
     let mut blocked_results = Vec::new();
     let blocked_by_errors = state.consecutive_error_turns >= limits.max_consecutive_errors;
     let mut kept = Vec::with_capacity(tool_calls.len());
+    let mut simulated = state.clone();
 
     for tc in tool_calls.drain(..) {
         if !is_budgeted_web_tool(&tc.function.name) {
@@ -262,22 +381,25 @@ pub fn apply_web_tool_budget(
         }
 
         let pool_block = match tc.function.name.as_str() {
-            "browser_navigate" => state.browser_used >= limits.browser_max,
-            "web_extract" => state.extract_used >= limits.extract_max,
-            "web_search" => state.search_used >= limits.search_max,
+            "browser_navigate" => simulated.attempted_browser >= limits.browser_max,
+            "web_extract" => simulated.attempted_extract >= limits.extract_max,
+            "web_search" => simulated.attempted_search >= limits.search_max,
             _ => false,
         };
         let aggregate_block = limits
             .aggregate_max
-            .is_some_and(|max| state.billable_total >= max);
-
+            .is_some_and(|max| simulated.attempted_total() >= max);
         let block = blocked_by_errors || pool_block || aggregate_block;
         if block {
             let (used, limit, pool) = match tc.function.name.as_str() {
-                "browser_navigate" => (state.browser_used, limits.browser_max, "browser"),
-                "web_extract" => (state.extract_used, limits.extract_max, "extract"),
-                "web_search" => (state.search_used, limits.search_max, "search"),
-                _ => (state.billable_total, limits.aggregate_max.unwrap_or(0), "aggregate"),
+                "browser_navigate" => (simulated.attempted_browser, limits.browser_max, "browser"),
+                "web_extract" => (simulated.attempted_extract, limits.extract_max, "extract"),
+                "web_search" => (simulated.attempted_search, limits.search_max, "search"),
+                _ => (
+                    simulated.attempted_total(),
+                    limits.aggregate_max.unwrap_or(0),
+                    "aggregate",
+                ),
             };
             let reason = if blocked_by_errors {
                 format!(
@@ -286,8 +408,9 @@ pub fn apply_web_tool_budget(
                 )
             } else if aggregate_block && !pool_block {
                 format!(
-                    "Web tool aggregate budget exceeded on turn {turn}: blocked '{}' (billable_total={}).",
-                    tc.function.name, state.billable_total
+                    "Web tool aggregate budget exceeded on turn {turn}: blocked '{}' (attempted_total={}).",
+                    tc.function.name,
+                    simulated.attempted_total()
                 )
             } else {
                 format!(
@@ -305,9 +428,13 @@ pub fn apply_web_tool_budget(
                 blocked_by_errors = blocked_by_errors,
                 "web_tool_budget block"
             );
-            blocked_results.push((tc.function.name.clone(), ToolResult::err(tc.id, reason)));
+            blocked_results.push((
+                tc.function.name.clone(),
+                ToolResult::err(tc.id, format!("{reason}{}", web_budget_stop_instruction())),
+            ));
             continue;
         }
+        increment_attempted(&mut simulated, &tc.function.name);
         kept.push(tc);
     }
     *tool_calls = kept;
@@ -386,6 +513,10 @@ pub fn record_web_tool_results(
             continue;
         }
         web_turn_calls = web_turn_calls.saturating_add(1);
+        increment_attempted(state, &tc.function.name);
+        if let Some(query) = query_from_tool_arguments(&tc.function.name, &tc.function.arguments) {
+            state.seen_search_queries.insert(query);
+        }
         let result = results.iter().find(|r| r.tool_call_id == tc.id);
         let billable = result.is_some_and(|r| {
             !r.is_error && is_billable_web_tool_result(&tc.function.name, &r.content)
@@ -440,6 +571,7 @@ mod tests {
             max_consecutive_errors: 2,
         };
         let mut state = WebToolBudgetState {
+            attempted_browser: 1,
             browser_used: 1,
             ..Default::default()
         };
@@ -470,11 +602,37 @@ mod tests {
     }
 
     #[test]
+    fn test_batch_three_searches_budget_two_keeps_two() {
+        let limits = WebToolBudgetLimits {
+            browser_max: 2,
+            extract_max: 5,
+            search_max: 2,
+            aggregate_max: None,
+            max_consecutive_errors: 2,
+        };
+        let state = WebToolBudgetState::default();
+        let mut calls: Vec<ToolCall> = (0..3)
+            .map(|i| ToolCall {
+                id: format!("s{i}"),
+                function: FunctionCall {
+                    name: "web_search".into(),
+                    arguments: format!(r#"{{"query":"q{i}"}}"#),
+                },
+                extra_content: None,
+            })
+            .collect();
+        let blocked = apply_web_tool_budget(&state, &limits, &mut calls, 1);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(blocked.len(), 1);
+    }
+
+    #[test]
     fn test_apply_web_tool_budget_caps_web_search_calls() {
         let _guard = env_lock();
         hermes_core::test_env::set_var("HERMES_WEB_SEARCH_BUDGET_MAX_CALLS", "2");
         let limits = WebToolBudgetLimits::from_env();
         let state = WebToolBudgetState {
+            attempted_search: 2,
             search_used: 2,
             ..Default::default()
         };
@@ -490,6 +648,32 @@ mod tests {
         assert_eq!(blocked.len(), 1);
         assert!(calls.is_empty());
         hermes_core::test_env::remove_var("HERMES_WEB_SEARCH_BUDGET_MAX_CALLS");
+    }
+
+    #[test]
+    fn test_budget_block_tells_model_not_to_retry_web_tools() {
+        let limits = WebToolBudgetLimits {
+            browser_max: 2,
+            extract_max: 5,
+            search_max: 2,
+            aggregate_max: None,
+            max_consecutive_errors: 2,
+        };
+        let state = WebToolBudgetState {
+            attempted_search: 2,
+            search_used: 2,
+            ..Default::default()
+        };
+        let mut calls = vec![ToolCall {
+            id: "s1".into(),
+            function: FunctionCall {
+                name: "web_search".into(),
+                arguments: r#"{"query":"test"}"#.into(),
+            },
+            extra_content: None,
+        }];
+        let blocked = apply_web_tool_budget(&state, &limits, &mut calls, 1);
+        assert!(blocked[0].1.content.contains("Do not retry"));
     }
 
     #[test]
@@ -528,6 +712,8 @@ mod tests {
             max_consecutive_errors: 2,
         };
         let state = WebToolBudgetState {
+            attempted_search: 1,
+            attempted_extract: 1,
             billable_total: 2,
             ..Default::default()
         };
@@ -562,10 +748,7 @@ mod tests {
             ),
             Message::tool_result(
                 "tc1",
-                format!(
-                    r#"{{"url":"{url}","content":"{}"}}"#,
-                    "x".repeat(120)
-                ),
+                format!(r#"{{"url":"{url}","content":"{}"}}"#, "x".repeat(120)),
             ),
         ];
         let cached = cached_extract_urls_from_messages(&messages);
@@ -588,6 +771,13 @@ mod tests {
     fn test_user_notice_includes_per_message_scope() {
         let msg = web_tool_budget_user_notice("web_extract", false);
         assert!(msg.contains("本则用户消息"));
+    }
+
+    #[test]
+    fn test_budget_block_should_notify_user_browser_zero() {
+        let limits = WebToolBudgetLimits::from_dynamic_pools(2, 1, 0, Some(3), 3);
+        assert!(!budget_block_should_notify_user("browser_navigate", &limits));
+        assert!(budget_block_should_notify_user("web_extract", &limits));
     }
 
     #[test]

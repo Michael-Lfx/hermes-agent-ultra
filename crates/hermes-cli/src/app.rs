@@ -5298,6 +5298,7 @@ pub fn build_agent_config(config: &GatewayConfig, model: &str) -> AgentConfig {
         cache_ttl,
         use_prompt_caching,
         use_native_cache_layout,
+        web_research: config.agent.web_research.clone(),
         ..AgentConfig::default()
     }
 }

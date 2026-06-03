@@ -11,6 +11,11 @@ use std::sync::LazyLock;
 /// Tools that must never run concurrently (interactive / user-facing).
 pub const NEVER_PARALLEL_TOOLS: &[&str] = &["clarify"];
 
+/// Browser automation shares one CDP / agent-browser session per task — never parallel.
+pub fn is_browser_tool(name: &str) -> bool {
+    name.starts_with("browser_")
+}
+
 /// Read-only tools with no shared mutable session state.
 const PARALLEL_SAFE_TOOLS: &[&str] = &[
     "ha_get_state",
@@ -103,7 +108,8 @@ pub fn should_parallelize_tool_batch(tool_calls: &[ToolCall]) -> bool {
     let path_scoped = tool_set(PATH_SCOPED_TOOLS);
 
     for tc in tool_calls {
-        if never_parallel.contains(&tc.function.name) {
+        let tool_name = tc.function.name.as_str();
+        if never_parallel.contains(tool_name) || is_browser_tool(tool_name) {
             return false;
         }
     }
@@ -200,6 +206,15 @@ mod tests {
             tc("read_file", r#"{"path":"b.txt"}"#),
         ];
         assert!(should_parallelize_tool_batch(&batch));
+    }
+
+    #[test]
+    fn browser_tools_not_parallel() {
+        let batch = [
+            tc("browser_snapshot", "{}"),
+            tc("browser_navigate", r#"{"url":"https://example.com"}"#),
+        ];
+        assert!(!should_parallelize_tool_batch(&batch));
     }
 
     #[test]

@@ -118,6 +118,12 @@ pub fn gateway_status_message_visible(event_type: &str, message: &str) -> bool {
         "triggering compression",
         "ContextLattice",
         "Compaction governance",
+        "Assistant response incomplete",
+        "Continuation retries exhausted",
+        "requesting continuation",
+        "Detected intermediate ack",
+        "Truncated tool arguments",
+        "Parsed textual tool-call markup",
     ];
     !suppressed.iter().any(|needle| message.contains(needle))
 }
@@ -240,6 +246,18 @@ mod tests {
         assert!(gateway_status_message_visible(
             "tool_progress",
             "处理中：正在检索网络数据（第 1 步，工具 web_search）…"
+        ));
+    }
+
+    #[test]
+    fn gateway_status_hides_agent_continuation_lifecycle() {
+        assert!(!gateway_status_message_visible(
+            "lifecycle",
+            "Assistant response incomplete (Some(\"tool_calls\")) - requesting continuation (1/3)"
+        ));
+        assert!(!gateway_status_message_visible(
+            "lifecycle",
+            "Continuation retries exhausted (3) - finalizing with best effort output"
         ));
     }
 

@@ -75,11 +75,8 @@ use crate::user_interest::{
     InterestStore, SessionPoiBuffer, ingest_user_message, is_poi_synthetic_user_text,
     spawn_session_end_ingest,
 };
-use crate::web_tool_budget::{
-    WebToolBudgetLimits, WebToolBudgetState, apply_web_tool_budget, apply_web_url_dedup,
-    record_web_tool_results, web_tool_budget_user_notice, web_url_dedup_user_notice,
-};
 pub(crate) use crate::web_tool_budget::looks_like_tool_error_output;
+use crate::web_research::WebResearchController;
 use hermes_intelligence::auxiliary::AuxiliaryClient;
 
 // ---------------------------------------------------------------------------
@@ -847,6 +844,10 @@ pub struct AgentConfig {
     /// Maximum character budget for injected LSP context block.
     #[serde(default = "default_lsp_context_max_chars")]
     pub lsp_context_max_chars: usize,
+
+    /// Adaptive web research planner/evaluator and per-message tool budgets.
+    #[serde(default)]
+    pub web_research: hermes_config::WebResearchConfig,
 }
 
 fn default_max_turns() -> u32 {
@@ -1079,6 +1080,7 @@ impl Default for AgentConfig {
             code_index_max_symbols: default_code_index_max_symbols(),
             lsp_context_enabled: default_lsp_context_enabled(),
             lsp_context_max_chars: default_lsp_context_max_chars(),
+            web_research: hermes_config::WebResearchConfig::default(),
         }
     }
 }
@@ -5220,8 +5222,33 @@ impl AgentLoop {
             .unwrap_or(false)
     }
 
-    fn finish_reason_requires_continuation(finish_reason: Option<&str>) -> bool {
-        matches!(finish_reason, Some("length" | "pause_turn"))
+    fn finish_reason_requires_continuation(
+        finish_reason: Option<&str>,
+        has_executable_tool_calls: bool,
+    ) -> bool {
+        match finish_reason {
+            Some("length" | "pause_turn") => true,
+            // Provider ended with tool_calls but nothing executable in this turn — do not finalize.
+            Some("tool_calls") if !has_executable_tool_calls => true,
+            _ => false,
+        }
+    }
+
+    /// Prefer textual parses; otherwise use structured provider `tool_calls`.
+    fn resolve_turn_tool_calls(parsed_tool_calls: Vec<ToolCall>, assistant_msg: &Message) -> Vec<ToolCall> {
+        if !parsed_tool_calls.is_empty() {
+            return parsed_tool_calls
+                .into_iter()
+                .filter(|tc| !tc.function.name.is_empty())
+                .collect();
+        }
+        assistant_msg
+            .tool_calls
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tc| !tc.function.name.is_empty())
+            .collect()
     }
 
     fn effective_finish_reason(
@@ -5266,12 +5293,16 @@ impl AgentLoop {
         history_includes_tool: bool,
         message: &Message,
         finish_reason: Option<&str>,
+        resolved_tool_calls: &[ToolCall],
     ) -> FinalizationSignals {
-        let has_tool_calls = message.tool_calls.as_ref().map_or(false, |v| !v.is_empty());
+        let has_tool_calls = !resolved_tool_calls.is_empty()
+            || message.tool_calls.as_ref().map_or(false, |v| !v.is_empty());
         let has_visible_text = Self::assistant_visible_text(message);
         let has_visible_text_after_think = Self::assistant_visible_text_after_think_blocks(message);
         let has_reasoning = Self::assistant_has_reasoning(message);
-        let continuation_required = Self::finish_reason_requires_continuation(finish_reason);
+        let has_executable_tool_calls = !resolved_tool_calls.is_empty();
+        let continuation_required =
+            Self::finish_reason_requires_continuation(finish_reason, has_executable_tool_calls);
         let ack_detected = !has_tool_calls
             && !continuation_required
             && !history_includes_tool
@@ -6390,8 +6421,18 @@ impl AgentLoop {
         let mut governor_llm_latency_window: VecDeque<u64> = VecDeque::new();
         let mut governor_tool_error_window: VecDeque<f64> = VecDeque::new();
         let mut governor_consecutive_error_turns: u32 = 0;
-        let web_budget_limits = WebToolBudgetLimits::from_env();
-        let mut web_budget_state = WebToolBudgetState::new();
+        let mut web_research_ctrl =
+            WebResearchController::new(self.config().web_research.clone());
+        let web_research_auxiliary = if self.config().web_research.enabled
+            && (self.config().web_research.planner_enabled
+                || self.config().web_research.evaluator_enabled)
+        {
+            Some(build_auxiliary_arc_for_config(&self.config()))
+        } else {
+            None
+        };
+        let mut active_tool_schemas: Arc<[ToolSchema]> = Arc::clone(&tool_schemas);
+        let mut web_finalize_hint_injected = false;
         let mut repo_review_budget_state = RepoReviewBudgetState::default();
         let mut objective_guard_retries: u32 = 0;
         let mut finalizer_evidence_retries: u32 = 0;
@@ -6569,6 +6610,17 @@ impl AgentLoop {
             let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
             self.inject_hook_context(&pre_results, &mut ctx);
 
+            if web_research_ctrl.force_finalize() {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
+                if !web_finalize_hint_injected {
+                    if let Some(hint) = web_research_ctrl.finalization_system_hint() {
+                        ctx.add_message(Message::system(hint));
+                        web_finalize_hint_injected = true;
+                    }
+                }
+            }
+
             // --- LLM API call with transport retry + semantic empty/thinking recovery (Python parity) ---
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
@@ -6589,7 +6641,7 @@ impl AgentLoop {
                 let r = match self
                     .call_llm_with_retry(
                         &mut ctx,
-                        &tool_schemas,
+                        active_tool_schemas.as_ref(),
                         turn_runtime_route.as_ref(),
                         llm_governor.max_tokens,
                         &mut api_call_count,
@@ -6784,6 +6836,7 @@ impl AgentLoop {
                 );
             }
             ctx.add_message(assistant_msg.clone());
+            web_research_ctrl.note_assistant_draft(assistant_msg.content.as_deref());
             if assistant_msg
                 .tool_calls
                 .as_ref()
@@ -6823,10 +6876,11 @@ impl AgentLoop {
                 cb(total_turns);
             }
 
+            let tool_calls =
+                Self::resolve_turn_tool_calls(parsed_tool_calls, &assistant_msg);
+
             // If no tool calls, the agent is done
-            let tool_calls = if !parsed_tool_calls.is_empty() {
-                parsed_tool_calls
-            } else {
+            if tool_calls.is_empty() {
                 let effective_finish_reason = self.effective_finish_reason(
                     &response,
                     &assistant_msg,
@@ -6838,6 +6892,7 @@ impl AgentLoop {
                     history_includes_tool,
                     &assistant_msg,
                     effective_finish_reason.as_deref(),
+                    &tool_calls,
                 );
                 tracing::debug!(
                     turn = total_turns,
@@ -7072,7 +7127,7 @@ impl AgentLoop {
                     session_started_hooks_fired,
                     pending_steer: None,
                 }));
-            };
+            }
 
             codex_ack_continuations = 0;
 
@@ -7223,30 +7278,29 @@ impl AgentLoop {
 
             // Cap concurrent delegate_task calls
             self.cap_delegates(&mut tool_calls);
-            let deferred_web_dedup =
-                apply_web_url_dedup(ctx.get_messages(), &mut tool_calls, total_turns);
-            if !deferred_web_dedup.is_empty() {
-                for (_, _) in &deferred_web_dedup {
-                    self.emit_status("tool_failure", &web_url_dedup_user_notice());
-                }
+            if WebResearchController::tool_calls_include_web(&tool_calls) {
+                web_research_ctrl
+                    .ensure_plan_on_first_web(
+                        web_research_auxiliary.as_ref(),
+                        &task_hint,
+                        &tool_calls,
+                    )
+                    .await;
             }
-            let deferred_web_budget_results = apply_web_tool_budget(
-                &web_budget_state,
-                &web_budget_limits,
-                &mut tool_calls,
-                total_turns,
-            );
-            let mut deferred_web_results = deferred_web_dedup;
-            deferred_web_results.extend(deferred_web_budget_results);
-            if !deferred_web_results.is_empty() {
-                let blocked_by_errors = web_budget_state.consecutive_error_turns
-                    >= web_budget_limits.max_consecutive_errors;
-                for (tool_name, _) in &deferred_web_results {
-                    self.emit_status(
-                        "tool_failure",
-                        &web_tool_budget_user_notice(tool_name, blocked_by_errors),
-                    );
-                }
+            let (deferred_web_results, web_user_notices) = web_research_ctrl
+                .gate_web_batch(
+                    web_research_auxiliary.as_ref(),
+                    ctx.get_messages(),
+                    &mut tool_calls,
+                    total_turns,
+                )
+                .await;
+            for notice in web_user_notices {
+                self.emit_status("tool_failure", &notice);
+            }
+            if web_research_ctrl.force_finalize() || web_research_ctrl.planner_invoked() {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
             }
             let contextlattice_connect_intent =
                 detect_contextlattice_connect_intent(ctx.get_messages());
@@ -7353,21 +7407,15 @@ impl AgentLoop {
                 )
                 .await;
             if !deferred_web_results.is_empty() {
-                results.extend(
-                    deferred_web_results
-                        .into_iter()
-                        .map(|(_, result)| result),
-                );
+                results.extend(deferred_web_results.into_iter().map(|(_, result)| result));
             }
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
             _total_tool_time_ms += tool_elapsed;
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            record_web_tool_results(
-                &mut web_budget_state,
-                &web_budget_limits,
-                &tool_calls,
-                &results,
-            );
+            if web_research_ctrl.record_results(&tool_calls, &results) {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
+            }
             tracing::info!(
                 turn = total_turns,
                 tool_count = tool_calls.len(),
@@ -7803,8 +7851,18 @@ impl AgentLoop {
         let mut governor_llm_latency_window: VecDeque<u64> = VecDeque::new();
         let mut governor_tool_error_window: VecDeque<f64> = VecDeque::new();
         let mut governor_consecutive_error_turns: u32 = 0;
-        let web_budget_limits = WebToolBudgetLimits::from_env();
-        let mut web_budget_state = WebToolBudgetState::new();
+        let mut web_research_ctrl =
+            WebResearchController::new(self.config().web_research.clone());
+        let web_research_auxiliary = if self.config().web_research.enabled
+            && (self.config().web_research.planner_enabled
+                || self.config().web_research.evaluator_enabled)
+        {
+            Some(build_auxiliary_arc_for_config(&self.config()))
+        } else {
+            None
+        };
+        let mut active_tool_schemas: Arc<[ToolSchema]> = Arc::clone(&tool_schemas);
+        let mut web_finalize_hint_injected = false;
         let mut repo_review_budget_state = RepoReviewBudgetState::default();
         let mut objective_guard_retries: u32 = 0;
         let mut finalizer_evidence_retries: u32 = 0;
@@ -7982,6 +8040,17 @@ impl AgentLoop {
             let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
             self.inject_hook_context(&pre_results, &mut ctx);
 
+            if web_research_ctrl.force_finalize() {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
+                if !web_finalize_hint_injected {
+                    if let Some(hint) = web_research_ctrl.finalization_system_hint() {
+                        ctx.add_message(Message::system(hint));
+                        web_finalize_hint_injected = true;
+                    }
+                }
+            }
+
             // --- Streaming first attempt + same D-step semantic recovery as `run()` (retries use non-stream) ---
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
@@ -8004,7 +8073,7 @@ impl AgentLoop {
                     match self
                         .collect_stream_llm_response(
                             &mut ctx,
-                            &tool_schemas,
+                            active_tool_schemas.as_ref(),
                             turn_runtime_route.as_ref(),
                             active_model,
                             llm_governor.max_tokens,
@@ -8052,7 +8121,7 @@ impl AgentLoop {
                     match self
                         .call_llm_with_retry(
                             &mut ctx,
-                            &tool_schemas,
+                            active_tool_schemas.as_ref(),
                             turn_runtime_route.as_ref(),
                             llm_governor.max_tokens,
                             &mut api_call_count,
@@ -8256,6 +8325,7 @@ impl AgentLoop {
                 );
             }
             ctx.add_message(assistant_msg.clone());
+            web_research_ctrl.note_assistant_draft(assistant_msg.content.as_deref());
             if assistant_msg
                 .tool_calls
                 .as_ref()
@@ -8294,10 +8364,8 @@ impl AgentLoop {
                 cb(total_turns);
             }
 
-            let tool_calls: Vec<ToolCall> = parsed_tool_calls
-                .into_iter()
-                .filter(|tc| !tc.function.name.is_empty())
-                .collect();
+            let tool_calls =
+                Self::resolve_turn_tool_calls(parsed_tool_calls, &assistant_msg);
 
             if tool_calls.is_empty() {
                 let effective_finish_reason = self.effective_finish_reason(
@@ -8311,6 +8379,7 @@ impl AgentLoop {
                     history_includes_tool,
                     &assistant_msg,
                     effective_finish_reason.as_deref(),
+                    &tool_calls,
                 );
                 tracing::debug!(
                     turn = total_turns,
@@ -8718,30 +8787,29 @@ impl AgentLoop {
                 }
             }
             self.cap_delegates(&mut tool_calls);
-            let deferred_web_dedup =
-                apply_web_url_dedup(ctx.get_messages(), &mut tool_calls, total_turns);
-            if !deferred_web_dedup.is_empty() {
-                for (_, _) in &deferred_web_dedup {
-                    self.emit_status("tool_failure", &web_url_dedup_user_notice());
-                }
+            if WebResearchController::tool_calls_include_web(&tool_calls) {
+                web_research_ctrl
+                    .ensure_plan_on_first_web(
+                        web_research_auxiliary.as_ref(),
+                        &task_hint,
+                        &tool_calls,
+                    )
+                    .await;
             }
-            let deferred_web_budget_results = apply_web_tool_budget(
-                &web_budget_state,
-                &web_budget_limits,
-                &mut tool_calls,
-                total_turns,
-            );
-            let mut deferred_web_results = deferred_web_dedup;
-            deferred_web_results.extend(deferred_web_budget_results);
-            if !deferred_web_results.is_empty() {
-                let blocked_by_errors = web_budget_state.consecutive_error_turns
-                    >= web_budget_limits.max_consecutive_errors;
-                for (tool_name, _) in &deferred_web_results {
-                    self.emit_status(
-                        "tool_failure",
-                        &web_tool_budget_user_notice(tool_name, blocked_by_errors),
-                    );
-                }
+            let (deferred_web_results, web_user_notices) = web_research_ctrl
+                .gate_web_batch(
+                    web_research_auxiliary.as_ref(),
+                    ctx.get_messages(),
+                    &mut tool_calls,
+                    total_turns,
+                )
+                .await;
+            for notice in web_user_notices {
+                self.emit_status("tool_failure", &notice);
+            }
+            if web_research_ctrl.force_finalize() || web_research_ctrl.planner_invoked() {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
             }
             let contextlattice_connect_intent =
                 detect_contextlattice_connect_intent(ctx.get_messages());
@@ -8843,21 +8911,15 @@ impl AgentLoop {
                 )
                 .await;
             if !deferred_web_results.is_empty() {
-                results.extend(
-                    deferred_web_results
-                        .into_iter()
-                        .map(|(_, result)| result),
-                );
+                results.extend(deferred_web_results.into_iter().map(|(_, result)| result));
             }
             let tool_elapsed = tool_start.elapsed().as_millis() as u64;
             _total_tool_time_ms += tool_elapsed;
             let turn_tool_error_count = results.iter().filter(|r| r.is_error).count() as u32;
-            record_web_tool_results(
-                &mut web_budget_state,
-                &web_budget_limits,
-                &tool_calls,
-                &results,
-            );
+            if web_research_ctrl.record_results(&tool_calls, &results) {
+                active_tool_schemas =
+                    Arc::from(web_research_ctrl.filter_tool_schemas(tool_schemas.as_ref()));
+            }
             tracing::info!(
                 turn = total_turns,
                 tool_count = tool_calls.len(),
@@ -9705,7 +9767,12 @@ impl AgentLoop {
         current_user_task: Option<String>,
     ) -> Vec<ToolResult> {
         let mut join_set = JoinSet::new();
-        let tool_concurrency = if hermes_tools::should_parallelize_tool_batch(tool_calls) {
+        let batch_has_browser = tool_calls
+            .iter()
+            .any(|tc| hermes_tools::is_browser_tool(&tc.function.name));
+        let tool_concurrency = if batch_has_browser {
+            1
+        } else if hermes_tools::should_parallelize_tool_batch(tool_calls) {
             tool_concurrency.max(1)
         } else {
             1
@@ -10304,7 +10371,14 @@ fn inject_runtime_tool_params(
         return;
     };
 
-    if let Some(task_id) = task_id.filter(|v| !v.trim().is_empty()) {
+    if tool_name.starts_with("browser_") {
+        if let Some(task_id) = task_id.filter(|v| !v.trim().is_empty()) {
+            obj.insert(
+                "task_id".to_string(),
+                Value::String(task_id.to_string()),
+            );
+        }
+    } else if let Some(task_id) = task_id.filter(|v| !v.trim().is_empty()) {
         obj.entry("task_id".to_string())
             .or_insert_with(|| Value::String(task_id.to_string()));
     }
@@ -11677,7 +11751,7 @@ fn merge_usage(existing: Option<UsageStats>, new: &UsageStats) -> UsageStats {
 mod tests {
     use super::*;
     use futures::stream::BoxStream;
-    use hermes_core::JsonSchema;
+    use hermes_core::{FunctionCall, JsonSchema};
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
     fn env_test_lock() -> MutexGuard<'static, ()> {
@@ -11685,6 +11759,34 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env test lock poisoned")
+    }
+
+    #[test]
+    fn resolve_turn_tool_calls_uses_provider_structured_calls() {
+        let tc = ToolCall {
+            id: "tc1".into(),
+            function: FunctionCall {
+                name: "web_search".into(),
+                arguments: r#"{"query":"番茄小说"}"#.to_string(),
+            },
+            extra_content: None,
+        };
+        let msg = Message::assistant_with_tool_calls(None, vec![tc.clone()]);
+        let resolved = AgentLoop::resolve_turn_tool_calls(vec![], &msg);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].function.name, "web_search");
+    }
+
+    #[test]
+    fn finish_reason_tool_calls_skips_continuation_when_tools_resolved() {
+        assert!(!AgentLoop::finish_reason_requires_continuation(
+            Some("tool_calls"),
+            true
+        ));
+        assert!(AgentLoop::finish_reason_requires_continuation(
+            Some("tool_calls"),
+            false
+        ));
     }
 
     #[test]
@@ -13473,8 +13575,8 @@ mod tests {
                 .contains("connection dropped mid tool-call; reconnecting")
         }));
         assert_eq!(
-            crate::python_alignment::continuation_prompt_for_response(&resp),
-            crate::python_alignment::get_continuation_prompt(true, None)
+            crate::message_sanitization::continuation_prompt_for_response(&resp),
+            crate::message_sanitization::get_continuation_prompt(true, None)
         );
     }
 
@@ -16613,5 +16715,4 @@ mod tests {
         .expect("expected user notice");
         assert!(msg.contains("浏览器"));
     }
-
 }

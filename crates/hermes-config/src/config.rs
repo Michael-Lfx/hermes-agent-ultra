@@ -287,6 +287,10 @@ pub struct AgentLoopBehaviorConfig {
     /// Inbound image routing: `auto` | `native` | `text` (parity with Python `agent.image_input_mode`).
     #[serde(default = "default_agent_image_input_mode")]
     pub image_input_mode: String,
+
+    /// Adaptive web research planner/evaluator and per-message budgets.
+    #[serde(default)]
+    pub web_research: crate::web_research::WebResearchConfig,
 }
 
 fn default_agent_memory_nudge_interval() -> u32 {
@@ -342,6 +346,7 @@ impl Default for AgentLoopBehaviorConfig {
             lsp_context_enabled: default_agent_lsp_context_enabled(),
             lsp_context_max_chars: default_agent_lsp_context_max_chars(),
             image_input_mode: default_agent_image_input_mode(),
+            web_research: crate::web_research::WebResearchConfig::default(),
         }
     }
 }

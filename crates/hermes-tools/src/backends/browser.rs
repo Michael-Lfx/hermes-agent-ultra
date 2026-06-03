@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
+use tokio::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -21,6 +22,8 @@ pub struct CdpBrowserBackend {
     /// CDP WebSocket endpoint URL (e.g., ws://localhost:9222/devtools/page/...)
     endpoint: String,
     client: reqwest::Client,
+    /// Prevent parallel auto-start from launching multiple Chrome instances.
+    launch_lock: Mutex<()>,
 }
 
 /// CamoFox anti-detection browser backend (compat layer).
@@ -55,6 +58,7 @@ impl CdpBrowserBackend {
         Self {
             endpoint,
             client: reqwest::Client::new(),
+            launch_lock: Mutex::new(()),
         }
     }
 
@@ -177,6 +181,10 @@ impl CdpBrowserBackend {
     }
 
     async fn ensure_connected(&self) -> Result<(), ToolError> {
+        if Self::probe_endpoint(&self.client, &self.endpoint).await {
+            return Ok(());
+        }
+        let _guard = self.launch_lock.lock().await;
         if Self::probe_endpoint(&self.client, &self.endpoint).await {
             return Ok(());
         }

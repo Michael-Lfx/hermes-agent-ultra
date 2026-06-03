@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::Mutex;
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 #[cfg(windows)]
@@ -12,6 +12,7 @@ use std::os::windows::process::CommandExt;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use super::browser_auth::BrowserAuthContext;
 use super::browser_snapshot_util::process_snapshot_text;
 use crate::tools::browser::BrowserBackend;
@@ -98,7 +99,9 @@ fn normalize_ref(ref_id: &str) -> String {
 
 pub struct AgentBrowserBackend {
     cmd: BrowserCommand,
-    sessions: Mutex<HashMap<String, String>>,
+    sessions: StdMutex<HashMap<String, String>>,
+    /// Serialize subprocess calls — parallel `open` spawns multiple Chrome windows.
+    command_lock: Mutex<()>,
 }
 
 impl AgentBrowserBackend {
@@ -112,7 +115,8 @@ impl AgentBrowserBackend {
         })?;
         Ok(Self {
             cmd,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: StdMutex::new(HashMap::new()),
+            command_lock: Mutex::new(()),
         })
     }
 
@@ -144,6 +148,7 @@ impl AgentBrowserBackend {
         args: &[String],
         timeout_secs: u64,
     ) -> Result<Value, ToolError> {
+        let _guard = self.command_lock.lock().await;
         let session_name = self.session_name_for(task_id);
         let auth = self.auth_context_for(task_id);
         let socket_dir = self.socket_dir(&session_name);
