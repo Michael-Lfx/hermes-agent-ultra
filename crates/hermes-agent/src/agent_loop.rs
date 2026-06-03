@@ -567,6 +567,15 @@ pub struct AgentConfig {
     #[serde(default)]
     pub api_mode: ApiMode,
 
+    /// Python `model.openai_runtime` — when `codex_app_server`, OpenAI/Codex providers use
+    /// [`ApiMode::CodexAppServer`] (see [`crate::smart_model_routing::maybe_apply_codex_app_server_runtime`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_runtime: Option<String>,
+
+    /// Ollama runtime `num_ctx` for local models (Python `agent._ollama_num_ctx`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama_num_ctx: Option<u32>,
+
     /// Retry / failover configuration.
     #[serde(default)]
     pub retry: RetryConfig,
@@ -1006,6 +1015,8 @@ impl Default for AgentConfig {
             budget: BudgetConfig::default(),
             model: default_model(),
             api_mode: ApiMode::default(),
+            openai_runtime: None,
+            ollama_num_ctx: None,
             retry: RetryConfig::default(),
             system_prompt: None,
             personality: None,
@@ -2429,6 +2440,37 @@ impl AgentLoop {
         )
     }
 
+    /// Attach Python `run_conversation` return-dict telemetry to [`AgentResult`].
+    pub(crate) fn enrich_turn_telemetry(
+        &self,
+        mut result: AgentResult,
+        guardrails: Option<&crate::tool_guardrails::ToolGuardrailController>,
+    ) -> AgentResult {
+        if let Some(reason) = guardrails.and_then(|g| g.halt_decision()) {
+            result.guardrail = Some(serde_json::json!({ "reason": reason }));
+        }
+        if result.interrupted {
+            result.interrupt_message = self.interrupt.peek_redirect_message();
+        }
+        let rt = self.primary_runtime_snapshot();
+        result.model = Some(rt.model);
+        result.provider = rt.provider;
+        result.base_url = rt.base_url;
+        result.session_id = self.config().session_id.clone();
+        if let Some(usage) = &result.usage {
+            result.input_tokens = Some(usage.prompt_tokens);
+            result.output_tokens = Some(usage.completion_tokens);
+            result.prompt_tokens = Some(usage.prompt_tokens);
+            result.completion_tokens = Some(usage.completion_tokens);
+            result.total_tokens = Some(usage.total_tokens);
+        }
+        if result.session_cost_usd.is_some() {
+            result.cost_status = Some("tracked".into());
+            result.cost_source = Some("session".into());
+        }
+        result
+    }
+
     pub(crate) fn finalize_agent_result(&self, mut result: AgentResult) -> AgentResult {
         if result.pending_steer.is_none() {
             result.pending_steer = self.pending_steer.drain();
@@ -2451,7 +2493,7 @@ impl AgentLoop {
         if result.api_calls == 0 && result.total_turns > 0 {
             result.api_calls = result.total_turns;
         }
-        result
+        self.enrich_turn_telemetry(result, None)
     }
 
     /// Pack loop state into [`AgentResult`] (C–D segment return).
@@ -2480,6 +2522,29 @@ impl AgentLoop {
             turn_exit_reason: exit.turn_exit_reason.to_string(),
             failed: exit.failed,
             partial: exit.partial,
+            guardrail: None,
+            interrupt_message: if exit.interrupted {
+                self.interrupt.peek_redirect_message()
+            } else {
+                None
+            },
+            response_transformed: false,
+            response_previewed: false,
+            cost_status: None,
+            cost_source: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            reasoning_tokens: None,
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+            last_prompt_tokens: None,
+            model: None,
+            provider: None,
+            base_url: None,
+            session_id: None,
         })
     }
 
@@ -2536,11 +2601,17 @@ impl AgentLoop {
                 }
             }
         }
+        let provider_key = provider.as_deref().unwrap_or("");
+        let api_mode = crate::smart_model_routing::maybe_apply_codex_app_server_runtime(
+            provider_key,
+            config.api_mode.clone(),
+            config.openai_runtime.as_deref(),
+        );
         PrimaryRuntime {
             model: config.model.clone(),
             provider,
             base_url,
-            api_mode: config.api_mode.clone(),
+            api_mode,
             command,
             args,
             credential_pool: None,
@@ -2698,6 +2769,25 @@ impl AgentLoop {
             .lock()
             .map(|rt| rt.model.clone())
             .unwrap_or_else(|_| self.config_snapshot().model)
+    }
+
+    /// Try switching to a configured fallback model when Nous cross-session guard is active.
+    pub(crate) fn try_activate_nous_session_fallback(&self, active_model: &str) -> bool {
+        if self
+            .turn_fallback
+            .lock()
+            .map(|fb| fb.is_fallback_activated())
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        let chain = self.resolve_retry_failover_chain(active_model);
+        let Some(next) = chain.first() else {
+            return false;
+        };
+        let rt = self.primary_runtime_for_failover_model(next);
+        self.activate_runtime_fallback(rt);
+        true
     }
 
     /// Apply an in-session fallback runtime (Python `_try_activate_fallback` outcome).
@@ -3253,6 +3343,72 @@ impl AgentLoop {
         Vec::new()
     }
 
+    /// Python `pre_llm_call` — inject plugin context into the **current user** message (not system).
+    pub(crate) fn inject_pre_llm_hook_into_user_message(
+        &self,
+        results: &[HookResult],
+        ctx: &mut ContextManager,
+    ) {
+        let mut parts: Vec<String> = Vec::new();
+        for r in results {
+            if let HookResult::InjectContext(text) = r {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    parts.push(trimmed.to_string());
+                }
+            }
+        }
+        if parts.is_empty() {
+            return;
+        }
+        let plugin_ctx = parts.join("\n\n");
+        let messages = ctx.get_messages_mut();
+        if let Some(idx) = messages
+            .iter()
+            .rposition(|m| m.role == hermes_core::MessageRole::User)
+        {
+            let msg = &mut messages[idx];
+            let base = msg.content.clone().unwrap_or_default();
+            let merged = if base.trim().is_empty() {
+                plugin_ctx
+            } else {
+                format!("{base}\n\n{plugin_ctx}")
+            };
+            msg.content = Some(merged);
+        }
+    }
+
+    /// Fire `pre_llm_call` once before the tool loop (Python `conversation_loop.py` ~652–686).
+    pub(crate) fn apply_pre_llm_call_hooks_once(
+        &self,
+        ctx: &mut ContextManager,
+        user_message: &str,
+        _session_id: &str,
+    ) {
+        let history: Vec<Message> = ctx
+            .get_messages()
+            .iter()
+            .filter(|m| m.role != hermes_core::MessageRole::System)
+            .cloned()
+            .collect();
+        let user_turns = history
+            .iter()
+            .filter(|m| m.role == hermes_core::MessageRole::User)
+            .count();
+        let hook_ctx = serde_json::json!({
+            "session_id": self.config().session_id,
+            "user_message": user_message,
+            "conversation_history": history,
+            "is_first_turn": user_turns <= 1,
+            "model": self.active_model(),
+            "platform": self.config().platform,
+            "sender_id": serde_json::Value::Null,
+            "turn": 0,
+        });
+        let results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
+        self.inject_pre_llm_hook_into_user_message(&results, ctx);
+    }
+
     pub(crate) fn inject_hook_context(&self, results: &[HookResult], ctx: &mut ContextManager) {
         for r in results {
             if let HookResult::InjectContext(text) = r {
@@ -3786,6 +3942,7 @@ impl AgentLoop {
             ApiMode::ChatCompletions => "chat_completions",
             ApiMode::AnthropicMessages => "anthropic_messages",
             ApiMode::CodexResponses => "codex_responses",
+            ApiMode::CodexAppServer => "codex_app_server",
             ApiMode::BedrockConverse => "bedrock_converse",
         }
     }
@@ -5602,6 +5759,34 @@ impl AgentLoop {
         let mut context_overflow_retries = 0u32;
         let mut has_retried_429_same_cred = false;
 
+        if active_provider == "nous" {
+            if let Some(remaining) = crate::nous_rate_guard::nous_rate_limit_remaining(
+                self.config().hermes_home.as_deref(),
+            ) {
+                if remaining > 0.0 {
+                    let msg = format!(
+                        "Nous Portal rate limit active — resets in {}.",
+                        crate::nous_rate_guard::format_remaining(remaining)
+                    );
+                    tracing::info!(%msg, "nous rate guard: skipping API call");
+                    if self.try_activate_nous_session_fallback(&effective_model_name) {
+                        return self
+                            .call_llm_with_retry(
+                                ctx,
+                                tool_schemas,
+                                route,
+                                max_tokens_override,
+                                api_call_count,
+                            )
+                            .await;
+                    }
+                    return Err(hermes_core::AgentError::RateLimited {
+                        retry_after_secs: Some(remaining.ceil() as u64),
+                    });
+                }
+            }
+        }
+
         for attempt in 0..=effective_max_retries {
             let api_messages = self.build_turn_api_messages(ctx);
             self.interrupt.check_interrupt()?;
@@ -6516,7 +6701,7 @@ impl AgentLoop {
             .filter(|s| !s.is_empty())
     }
 
-    fn primary_runtime_snapshot(&self) -> PrimaryRuntime {
+    pub(crate) fn primary_runtime_snapshot(&self) -> PrimaryRuntime {
         let mut snap = self
             .active_runtime
             .lock()

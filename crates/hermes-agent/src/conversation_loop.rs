@@ -112,6 +112,46 @@ impl ConversationResult {
         self.loop_result.partial
     }
 
+    pub fn guardrail(&self) -> Option<&serde_json::Value> {
+        self.loop_result.guardrail.as_ref()
+    }
+
+    pub fn interrupt_message(&self) -> Option<&str> {
+        self.loop_result.interrupt_message.as_deref()
+    }
+
+    pub fn session_cost_usd(&self) -> Option<f64> {
+        self.loop_result.session_cost_usd
+    }
+
+    pub fn cost_status(&self) -> Option<&str> {
+        self.loop_result.cost_status.as_deref()
+    }
+
+    pub fn cost_source(&self) -> Option<&str> {
+        self.loop_result.cost_source.as_deref()
+    }
+
+    pub fn input_tokens(&self) -> Option<u64> {
+        self.loop_result.input_tokens
+    }
+
+    pub fn output_tokens(&self) -> Option<u64> {
+        self.loop_result.output_tokens
+    }
+
+    pub fn runtime_model(&self) -> Option<&str> {
+        self.loop_result.model.as_deref()
+    }
+
+    pub fn runtime_provider(&self) -> Option<&str> {
+        self.loop_result.provider.as_deref()
+    }
+
+    pub fn runtime_base_url(&self) -> Option<&str> {
+        self.loop_result.base_url.as_deref()
+    }
+
     /// Consume into the loop result (for callers that only need [`AgentResult`]).
     pub fn into_loop_result(self) -> AgentResult {
         self.loop_result
@@ -630,6 +670,21 @@ impl AgentLoop {
         let mem_ctx_raw = self.memory_prefetch(&first_user, session_id);
         self.set_turn_ext_prefetch_cache(mem_ctx_raw);
 
+        self.apply_pre_llm_call_hooks_once(&mut ctx, &first_user, session_id);
+
+        if self.api_mode_is_codex_app_server() {
+            let loop_messages: Vec<Message> = ctx.get_messages().to_vec();
+            let loop_result = self
+                .run_codex_app_server_turn(
+                    &first_user,
+                    loop_messages,
+                    review_memory_at_end,
+                    session_started_hooks_fired,
+                )
+                .await;
+            return Ok(loop_result);
+        }
+
         if self.config().preflight_context_compress {
             self.preflight_context_compress_with_status(&mut ctx).await;
         }
@@ -823,6 +878,45 @@ impl AgentLoop {
             );
             let llm_governor =
                 governor_for_turn(&self.config(), &ctx, 0, Some(&turn_governor_runtime));
+
+            let approx_request_tokens = crate::compression::estimate_request_tokens_for_compression(
+                ctx.get_messages(),
+                &system_content,
+                tool_schemas.as_ref(),
+            ) as u32;
+            let rt_snap = self.primary_runtime_snapshot();
+            if let Some(err) = crate::message_sanitization::ollama_context_limit_error(
+                self.config().ollama_num_ctx,
+                !tool_schemas.is_empty(),
+                approx_request_tokens,
+                active_model,
+                rt_snap.provider.as_deref().unwrap_or("unknown"),
+                rt_snap.base_url.as_deref().unwrap_or("unknown"),
+                tool_schemas.len(),
+                self.config().session_id.as_deref(),
+            ) {
+                ctx.add_message(Message::assistant(err));
+                iteration_budget.refund(1);
+                total_turns = total_turns.saturating_sub(1);
+                return Ok(self.seal_loop_result(
+                    &ctx,
+                    persist_user_idx,
+                    LoopExit {
+                        turn_exit_reason: "ollama_runtime_context_too_small",
+                        api_calls: api_call_count,
+                        failed: true,
+                        partial: false,
+                        finished_naturally: false,
+                        interrupted: false,
+                    },
+                    total_turns,
+                    &tool_errors,
+                    accumulated_usage.clone(),
+                    session_cost_usd,
+                    session_started_hooks_fired,
+                ));
+            }
+
             if forced_runtime_route.is_none()
                 && should_apply_turn_reliability_guard(
                     &turn_governor_runtime,
@@ -871,10 +965,6 @@ impl AgentLoop {
                     "consecutive_error_turns": turn_governor_runtime.consecutive_error_turns,
                 }),
             );
-            let hook_ctx = serde_json::json!({"turn": total_turns, "model": active_model});
-            let pre_results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
-            self.inject_hook_context(&pre_results, &mut ctx);
-
             // --- Streaming first attempt + semantic empty/thinking recovery as `run()` (retries use non-stream) ---
             let api_start = Instant::now();
             let mut inner_empty = 0u32;
@@ -2016,22 +2106,25 @@ impl AgentLoop {
                     total_turns,
                     session_started_hooks_fired,
                 );
-                return Ok(self.seal_loop_result(
-                    &ctx,
-                    persist_user_idx,
-                    LoopExit {
-                        turn_exit_reason: "tool_loop_guard",
-                        api_calls: api_call_count,
-                        failed: false,
-                        partial: false,
-                        finished_naturally: false,
-                        interrupted: false,
-                    },
-                    total_turns,
-                    &tool_errors,
-                    accumulated_usage,
-                    session_cost_usd,
-                    session_started_hooks_fired,
+                return Ok(self.enrich_turn_telemetry(
+                    self.seal_loop_result(
+                        &ctx,
+                        persist_user_idx,
+                        LoopExit {
+                            turn_exit_reason: "tool_loop_guard",
+                            api_calls: api_call_count,
+                            failed: false,
+                            partial: false,
+                            finished_naturally: false,
+                            interrupted: false,
+                        },
+                        total_turns,
+                        &tool_errors,
+                        accumulated_usage,
+                        session_cost_usd,
+                        session_started_hooks_fired,
+                    ),
+                    Some(&tool_guardrails),
                 ));
             }
             if execute_code_refund {
