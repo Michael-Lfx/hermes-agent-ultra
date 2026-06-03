@@ -93,6 +93,8 @@ pub enum ApiMode {
     ChatCompletions,
     AnthropicMessages,
     CodexResponses,
+    /// Optional opt-in: entire turn via `codex app-server` subprocess (Python `codex_app_server`).
+    CodexAppServer,
     BedrockConverse,
 }
 
@@ -338,6 +340,24 @@ where
             signature: sig_primary,
         },
     }
+}
+
+/// Python `_maybe_apply_codex_app_server_runtime` (`hermes_cli/runtime_provider.py`).
+pub fn maybe_apply_codex_app_server_runtime(
+    provider: &str,
+    api_mode: ApiMode,
+    openai_runtime: Option<&str>,
+) -> ApiMode {
+    let runtime = openai_runtime
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase());
+    if runtime.as_deref() == Some("codex_app_server")
+        && matches!(provider, "openai" | "openai-codex")
+    {
+        return ApiMode::CodexAppServer;
+    }
+    api_mode
 }
 
 /// Heuristic from Python `_detect_api_mode_for_url` (OpenAI direct host → Codex/Responses).
