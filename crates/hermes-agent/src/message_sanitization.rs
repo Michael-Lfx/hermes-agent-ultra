@@ -172,6 +172,7 @@ pub fn build_partial_stream_stub_response(
         finish_reason: Some("length".to_string()),
         response_id: Some(PARTIAL_STREAM_STUB_ID.to_string()),
         dropped_tool_names,
+        rate_limit_headers: None,
     }
 }
 

@@ -38,7 +38,7 @@ fn state_path(hermes_home: Option<&str>) -> PathBuf {
     base.join(STATE_SUBDIR).join(STATE_FILENAME)
 }
 
-fn parse_reset_seconds(headers: Option<&HashMap<String, String>>) -> Option<f64> {
+pub fn parse_reset_seconds(headers: Option<&HashMap<String, String>>) -> Option<f64> {
     let headers = headers?;
     let lowered: HashMap<String, String> = headers
         .iter()
@@ -204,6 +204,40 @@ fn has_exhausted_bucket(buckets: &HashMap<String, (Option<i64>, Option<f64>)>) -
 }
 
 /// Python `is_genuine_nous_rate_limit`.
+/// Parse `x-ratelimit-*` headers embedded in provider error strings.
+pub fn parse_rate_limit_headers_from_llm_error(err: &str) -> Option<HashMap<String, String>> {
+    const MARKER: &str = "__HERMES_RL_HEADERS__:";
+    if let Some(idx) = err.find(MARKER) {
+        let json = err[idx + MARKER.len()..].trim();
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(json) {
+            if !map.is_empty() {
+                return Some(map);
+            }
+        }
+    }
+    if let Some(start) = err.find('{') {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&err[start..]) {
+            return headers_from_json_value(&v);
+        }
+    }
+    None
+}
+
+fn headers_from_json_value(v: &serde_json::Value) -> Option<HashMap<String, String>> {
+    let mut out = HashMap::new();
+    if let Some(obj) = v.as_object() {
+        for (k, val) in obj {
+            let kl = k.to_ascii_lowercase();
+            if kl.starts_with("x-ratelimit-") || kl == "retry-after" {
+                if let Some(s) = val.as_str() {
+                    out.insert(kl, s.to_string());
+                }
+            }
+        }
+    }
+    if out.is_empty() { None } else { Some(out) }
+}
+
 pub fn is_genuine_nous_rate_limit(headers: Option<&HashMap<String, String>>) -> bool {
     let state = parse_buckets_from_headers(headers);
     has_exhausted_bucket(&state)

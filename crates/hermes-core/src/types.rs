@@ -400,6 +400,9 @@ pub struct LlmResponse {
     /// Tool names dropped when a stream dies mid tool-call (Python `_dropped_tool_names`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dropped_tool_names: Option<Vec<String>>,
+    /// Rate-limit headers from the provider HTTP response (Nous guard parity; not serialized).
+    #[serde(skip)]
+    pub rate_limit_headers: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Stub id for a partial streaming response (Python `hermes_constants.PARTIAL_STREAM_STUB_ID`).
@@ -414,6 +417,7 @@ impl Default for LlmResponse {
             finish_reason: None,
             response_id: None,
             dropped_tool_names: None,
+            rate_limit_headers: None,
         }
     }
 }

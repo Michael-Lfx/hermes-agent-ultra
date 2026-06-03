@@ -26,6 +26,43 @@ use crate::rate_limit::RateLimitTracker;
 
 const ACP_MULTIMODAL_PREFIX: &str = "__hermes_acp_parts_json__:";
 
+fn rate_limit_headers_json(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    let mut map = HashMap::new();
+    for (k, v) in headers.iter() {
+        let kl = k.as_str().to_ascii_lowercase();
+        if kl.starts_with("x-ratelimit-") || kl == "retry-after" {
+            if let Ok(s) = v.to_str() {
+                map.insert(kl, s.to_string());
+            }
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&map).ok()
+    }
+}
+
+fn llm_api_error(
+    status: reqwest::StatusCode,
+    body: &str,
+    headers: &reqwest::header::HeaderMap,
+) -> AgentError {
+    match rate_limit_headers_json(headers) {
+        Some(h) => AgentError::LlmApi(format!(
+            "API error {status}: {body}\n__HERMES_RL_HEADERS__:{h}"
+        )),
+        None => AgentError::LlmApi(format!("API error {status}: {body}")),
+    }
+}
+
+fn extract_rate_limit_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> Option<HashMap<String, String>> {
+    let json = rate_limit_headers_json(headers)?;
+    serde_json::from_str(&json).ok()
+}
+
 fn parse_acp_multimodal_parts(content: &str) -> Option<Vec<Value>> {
     let payload = content.trim().strip_prefix(ACP_MULTIMODAL_PREFIX)?;
     let parsed: Value = serde_json::from_str(payload).ok()?;
@@ -562,21 +599,23 @@ impl LlmProvider for GenericProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let hdrs = resp.headers().clone();
             let body_text = resp
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
-            return Err(AgentError::LlmApi(format!(
-                "API error {status}: {body_text}"
-            )));
+            return Err(llm_api_error(status, &body_text, &hdrs));
         }
 
+        let rate_headers = extract_rate_limit_headers(resp.headers());
         let resp_json: Value = resp
             .json()
             .await
             .map_err(|e| AgentError::LlmApi(format!("Failed to parse response: {e}")))?;
 
-        parse_openai_response(&resp_json)
+        let mut out = parse_openai_response(&resp_json)?;
+        out.rate_limit_headers = rate_headers;
+        Ok(out)
     }
 
     fn chat_completion_stream(

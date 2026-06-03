@@ -2284,6 +2284,10 @@ pub struct AgentLoop {
     provider_serialize_cache: Arc<crate::provider_serialize_cache::ProviderSerializeCache>,
     /// Python `_disable_streaming` — set after "stream not supported" for the rest of the session.
     disable_streaming: Arc<AtomicBool>,
+    /// Lazy `CodexAppServerSession` (Python `agent._codex_session`).
+    pub(crate) codex_app_server_session: Arc<Mutex<Option<crate::transports::codex_app_server_session::CodexAppServerSession>>>,
+    /// Last-known Nous `x-ratelimit-*` headers from a successful response (Python `_rate_limit_state`).
+    last_nous_rate_limit_headers: Arc<Mutex<Option<std::collections::HashMap<String, String>>>>,
 }
 
 /// Async tool execution hook (gateway: `hermes_tools::ToolRegistry::dispatch_async`).
@@ -2861,6 +2865,8 @@ impl AgentLoop {
                 crate::provider_serialize_cache::ProviderSerializeCache::new(),
             ),
             disable_streaming: Arc::new(AtomicBool::new(false)),
+            codex_app_server_session: Arc::new(Mutex::new(None)),
+            last_nous_rate_limit_headers: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -3144,6 +3150,8 @@ impl AgentLoop {
                 crate::provider_serialize_cache::ProviderSerializeCache::new(),
             ),
             disable_streaming: Arc::new(AtomicBool::new(false)),
+            codex_app_server_session: Arc::new(Mutex::new(None)),
+            last_nous_rate_limit_headers: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -5769,6 +5777,7 @@ impl AgentLoop {
                         crate::nous_rate_guard::format_remaining(remaining)
                     );
                     tracing::info!(%msg, "nous rate guard: skipping API call");
+                    hermes_telemetry::record_nous_rate_limit_skip();
                     if self.try_activate_nous_session_fallback(&effective_model_name) {
                         return self
                             .call_llm_with_retry(
@@ -5790,6 +5799,7 @@ impl AgentLoop {
         for attempt in 0..=effective_max_retries {
             let api_messages = self.build_turn_api_messages(ctx);
             self.interrupt.check_interrupt()?;
+            let api_start = Instant::now();
             *api_call_count = api_call_count.saturating_add(1);
             let hook_api_mode = route
                 .and_then(|rt| rt.api_mode.as_ref())
@@ -5867,8 +5877,20 @@ impl AgentLoop {
             };
 
             match result {
-                Ok(response) => return Ok(response),
+                Ok(mut response) => {
+                    hermes_telemetry::record_llm_request();
+                    hermes_telemetry::record_llm_latency(api_start.elapsed());
+                    if active_provider == "nous" {
+                        if let Some(headers) = response.rate_limit_headers.take() {
+                            if let Ok(mut slot) = self.last_nous_rate_limit_headers.lock() {
+                                *slot = Some(headers);
+                            }
+                        }
+                    }
+                    return Ok(response);
+                }
                 Err(e) => {
+                    hermes_telemetry::record_error();
                     let err_str = e.to_string();
                     let class = classify_error(&err_str);
                     tracing::warn!(
@@ -6075,6 +6097,58 @@ impl AgentLoop {
                             return Err(AgentError::LlmApi(err_str));
                         }
                         ErrorClass::RateLimit | ErrorClass::Retryable => {
+                            if matches!(class, ErrorClass::RateLimit)
+                                && active_provider == "nous"
+                            {
+                                let parsed =
+                                    crate::nous_rate_guard::parse_rate_limit_headers_from_llm_error(
+                                        &err_str,
+                                    );
+                                let last = self
+                                    .last_nous_rate_limit_headers
+                                    .lock()
+                                    .ok()
+                                    .and_then(|g| g.clone());
+                                let genuine = crate::nous_rate_guard::is_genuine_nous_rate_limit(
+                                    parsed.as_ref(),
+                                ) || crate::nous_rate_guard::is_genuine_nous_rate_limit(
+                                    last.as_ref(),
+                                );
+                                if genuine {
+                                    crate::nous_rate_guard::record_nous_rate_limit(
+                                        self.config().hermes_home.as_deref(),
+                                        parsed.as_ref(),
+                                        None,
+                                        300.0,
+                                    );
+                                    hermes_telemetry::record_nous_rate_limit_recorded();
+                                    tracing::info!(
+                                        "Nous genuine rate limit — tripping cross-session breaker"
+                                    );
+                                    if self.try_activate_nous_session_fallback(&effective_model_name)
+                                    {
+                                        return self
+                                            .call_llm_with_retry(
+                                                ctx,
+                                                tool_schemas,
+                                                route,
+                                                max_tokens_override,
+                                                api_call_count,
+                                            )
+                                            .await;
+                                    }
+                                    return Err(hermes_core::AgentError::RateLimited {
+                                        retry_after_secs: parsed
+                                            .as_ref()
+                                            .and_then(|h| {
+                                                crate::nous_rate_guard::parse_reset_seconds(
+                                                    Some(h),
+                                                )
+                                            })
+                                            .map(|s| s.ceil() as u64),
+                                    });
+                                }
+                            }
                             if matches!(class, ErrorClass::RateLimit) {
                                 let pool = route
                                     .and_then(|rt| self.credential_pool_for_route(rt))
