@@ -71,6 +71,17 @@ impl InterruptController {
         self.flag.load(Ordering::Acquire)
     }
 
+    /// Peek redirect text without consuming the interrupt (Python `_interrupt_message` on result).
+    pub fn peek_redirect_message(&self) -> Option<String> {
+        if !self.is_interrupted() {
+            return None;
+        }
+        self.redirect_message
+            .lock()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
     /// If an interrupt is pending, consume it (clear flag + redirect) and return `Some(redirect)`.
     ///
     /// Used by the agent loop for **graceful** shutdown with

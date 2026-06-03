@@ -319,6 +319,46 @@ pub struct AgentResult {
     /// Stopped on invalid tool calls without a final answer (Python `partial`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub partial: bool,
+    /// Tool guardrail halt metadata (Python `guardrail` in `run_conversation` result).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrail: Option<serde_json::Value>,
+    /// Redirect message when interrupted (Python `interrupt_message`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_message: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub response_transformed: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub response_previewed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_prompt_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
