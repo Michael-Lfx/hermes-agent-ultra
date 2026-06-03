@@ -3,7 +3,9 @@
 import argparse
 import json
 import os
+import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -14,6 +16,43 @@ ALLOWED_PATTERNS = [
     "install.sh",
     "hermes-agent-ultra.rb",
 ]
+
+
+def parse_checksums(dist_dir: Path) -> dict[str, str]:
+    """Parse checksums.sha256 file into {filename: sha256} mapping."""
+    checksums_file = dist_dir / "checksums.sha256"
+    result: dict[str, str] = {}
+    if checksums_file.exists():
+        for line in checksums_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                sha256_hash = parts[0]
+                filename = parts[-1]  # last field is filename (coreutils format)
+                result[filename] = sha256_hash
+    return result
+
+
+def derive_channel(version: str) -> str:
+    """Derive release channel from version string."""
+    v_lower = version.lower()
+    if "beta" in v_lower:
+        return "beta"
+    if "rc" in v_lower:
+        return "rc"
+    if "nightly" in v_lower:
+        return "nightly"
+    return "stable"
+
+
+def artifact_to_platform_key(filename: str) -> str | None:
+    """Map artifact filename to platform key, or None if not a binary artifact."""
+    m = re.match(r"^hermes-(.+?)(?:\.tar\.gz|\.zip)$", filename)
+    if m:
+        return m.group(1)
+    return None
 
 
 def collect_artifacts(dist_dir: Path) -> list[Path]:
@@ -31,13 +70,42 @@ def collect_artifacts(dist_dir: Path) -> list[Path]:
     return unique
 
 
-def build_latest_json(version: str, artifacts: list[Path]) -> dict:
-    """Build the latest.json payload."""
+def build_latest_json(version: str, repo: str, artifacts: list[Path], dist_dir: Path) -> dict:
+    """Build the manifest payload (new format with platforms + backward-compat artifacts)."""
     clean_version = version.lstrip("v")
+    channel = derive_channel(version)
+    pub_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    checksums = parse_checksums(dist_dir)
+
+    base_url = (
+        f"https://modelscope.cn/api/v1/models/{repo}/repo"
+        f"?Revision=master&FilePath=hermes-agent-ultra/{version}"
+    )
+
+    platforms: dict[str, dict] = {}
+    artifact_names: list[str] = []
+
+    for a in artifacts:
+        artifact_names.append(a.name)
+        platform_key = artifact_to_platform_key(a.name)
+        if platform_key is not None:
+            entry: dict = {
+                "url": f"{base_url}/{a.name}",
+            }
+            if a.name in checksums:
+                entry["sha256"] = checksums[a.name]
+            entry["size"] = os.path.getsize(a)
+            platforms[platform_key] = entry
+
     return {
         "version": clean_version,
-        "tag": version,
-        "artifacts": [a.name for a in artifacts],
+        "channel": channel,
+        "pub_date": pub_date,
+        "forced": False,
+        "notes": "",
+        "platforms": platforms,
+        "artifacts": artifact_names,
     }
 
 
@@ -81,7 +149,7 @@ def main():
         print(f"  - {a.name} ({a.stat().st_size:,} bytes)")
 
     # Build latest.json
-    latest = build_latest_json(version, artifacts)
+    latest = build_latest_json(version, repo, artifacts, dist_dir)
     latest_path = dist_dir / "latest.json"
     latest_path.write_text(json.dumps(latest, indent=2) + "\n", encoding="utf-8")
     print(f"\nGenerated latest.json: {json.dumps(latest)}")
@@ -135,6 +203,23 @@ def main():
         success_count += 1
     except Exception as e:
         print(f"  [FAIL] latest.json: {e}", file=sys.stderr)
+        fail_count += 1
+
+    # Upload channels/{channel}.json
+    channel = latest["channel"]
+    remote_channel = f"hermes-agent-ultra/channels/{channel}.json"
+    try:
+        api.upload_file(
+            path_or_fileobj=str(latest_path),
+            path_in_repo=remote_channel,
+            repo_id=repo,
+            repo_type="model",
+            commit_message=f"Release {version}: update channels/{channel}.json",
+        )
+        print(f"  [OK] latest.json -> {remote_channel}")
+        success_count += 1
+    except Exception as e:
+        print(f"  [FAIL] channels/{channel}.json: {e}", file=sys.stderr)
         fail_count += 1
 
     # Summary

@@ -43,6 +43,7 @@ pub enum CliCommand {
         rollback: bool,
         force: bool,
         source: Option<String>,
+        channel: Option<String>,
     },
     EliteCheck {
         json: bool,

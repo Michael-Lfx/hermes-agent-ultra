@@ -149,6 +149,9 @@ struct UpdateArgs {
     /// Force update source: "github" or "modelscope"
     #[arg(long, value_parser = ["github", "modelscope"])]
     source: Option<String>,
+    /// Update channel: "stable", "beta", "rc", "nightly"
+    #[arg(long, value_parser = ["stable", "beta", "rc", "nightly"])]
+    channel: Option<String>,
 }
 
 pub fn parse_update(args: &[OsString]) -> Result<CliCommand, clap::Error> {
@@ -158,6 +161,7 @@ pub fn parse_update(args: &[OsString]) -> Result<CliCommand, clap::Error> {
         rollback: a.rollback,
         force: a.force,
         source: a.source,
+        channel: a.channel,
     })
 }
 

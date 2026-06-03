@@ -5,39 +5,61 @@ pub mod verify;
 pub mod replace;
 pub mod modelscope;
 pub mod probe;
+pub mod version;
+pub mod manifest;
 
 use hermes_core::errors::AgentError;
 use crate::update::platform::Platform;
+use crate::update::version::{SemverPolicy, VersionPolicy, UpdateMeta, UpdateDecision};
 
 /// 更新选项
 pub struct UpdateOptions {
     pub yes: bool,
     pub force: bool,
     pub source: Option<String>,
+    pub channel: Option<String>,
 }
 
 /// 检查是否有更新可用（兼容旧接口）
 pub async fn check_for_updates() -> Result<String, AgentError> {
     let platform = Platform::detect()?;
     let source = probe::select_fastest_source(None).await;
+    println!("Checking for updates from {}...", source.name());
 
     let info = source.fetch_latest(&platform).await?;
-    let current = env!("CARGO_PKG_VERSION");
-    let current_normalized = current.trim_start_matches('v');
+    let current = semver::Version::parse(
+        env!("CARGO_PKG_VERSION").trim_start_matches('v')
+    ).unwrap_or_else(|_| semver::Version::new(0, 0, 0));
 
-    if info.version == current_normalized {
-        Ok(format!("Already up to date (v{current_normalized})."))
-    } else {
-        let mut msg = format!(
-            "New version available: v{} (current: v{current_normalized})\nRun `hermes update` to upgrade.",
-            info.version
-        );
-        if let Some(notes) = &info.release_notes {
-            // Show first 5 lines of release notes
-            let preview: String = notes.lines().take(5).collect::<Vec<_>>().join("\n");
-            msg.push_str(&format!("\n\nRelease notes:\n{preview}"));
+    let policy = SemverPolicy;
+    let meta = UpdateMeta {
+        channel: info.channel,
+        forced: info.forced,
+        min_supported_version: info.min_version.clone(),
+        ..Default::default()
+    };
+
+    match policy.evaluate(&current, &info.version, &meta) {
+        UpdateDecision::UpToDate => {
+            Ok(format!("Already up to date (v{}).", current))
         }
-        Ok(msg)
+        UpdateDecision::UpdateAvailable { forced } => {
+            let mut msg = format!(
+                "New version available: v{} (current: v{})\nRun `hermes update` to upgrade.",
+                info.version, current
+            );
+            if forced {
+                msg = format!("[FORCED UPDATE REQUIRED]\n{}", msg);
+            }
+            if let Some(notes) = &info.release_notes {
+                let preview: String = notes.lines().take(5).collect::<Vec<_>>().join("\n");
+                msg.push_str(&format!("\n\nRelease notes:\n{preview}"));
+            }
+            Ok(msg)
+        }
+        UpdateDecision::DoNotUpdate { reason } => {
+            Ok(format!("No update available: {}", reason))
+        }
     }
 }
 
@@ -52,15 +74,43 @@ pub async fn perform_update(opts: UpdateOptions) -> Result<(), AgentError> {
     println!("Checking for updates from {}...", source.name());
     let info = source.fetch_latest(&platform).await?;
 
-    // 3. Version comparison
-    let current = env!("CARGO_PKG_VERSION").trim_start_matches('v');
-    if !opts.force && info.version == current {
-        println!("Already up to date (v{current}).");
-        return Ok(());
-    }
+    // 3. Version comparison using SemverPolicy
+    let current = semver::Version::parse(
+        env!("CARGO_PKG_VERSION").trim_start_matches('v')
+    ).unwrap_or_else(|_| semver::Version::new(0, 0, 0));
 
-    println!("Current version: v{current}");
-    println!("Latest version:  v{}", info.version);
+    let policy = SemverPolicy;
+    let meta = UpdateMeta {
+        channel: info.channel,
+        forced: info.forced,
+        min_supported_version: info.min_version.clone(),
+        ..Default::default()
+    };
+
+    let decision = if opts.force {
+        // --force 标记总是允许更新
+        UpdateDecision::UpdateAvailable { forced: false }
+    } else {
+        policy.evaluate(&current, &info.version, &meta)
+    };
+
+    match decision {
+        UpdateDecision::UpToDate => {
+            println!("Already up to date (v{}).", current);
+            return Ok(());
+        }
+        UpdateDecision::DoNotUpdate { reason } => {
+            println!("No update available: {}", reason);
+            return Ok(());
+        }
+        UpdateDecision::UpdateAvailable { forced } => {
+            println!("Current version: v{}", current);
+            println!("Latest version:  v{}", info.version);
+            if forced {
+                println!("[FORCED UPDATE - security or compatibility requirement]");
+            }
+        }
+    }
 
     if let Some(ref notes) = info.release_notes {
         let preview: String = notes.lines().take(10).collect::<Vec<_>>().join("\n");

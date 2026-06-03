@@ -2213,6 +2213,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.3",
  "rustls",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",

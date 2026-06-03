@@ -96,6 +96,7 @@ unicode-width = "0.2"
 keepawake = "0.6"
 qrcode = { workspace = true }
 indicatif = { workspace = true }
+semver = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_System_Power"] }

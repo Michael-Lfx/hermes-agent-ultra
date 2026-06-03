@@ -1,16 +1,21 @@
 use async_trait::async_trait;
 use hermes_core::errors::AgentError;
+use semver::Version;
 use serde::Deserialize;
 use std::process::Command;
 use crate::update::platform::Platform;
+use crate::update::version::Channel;
 
 /// Release 信息
 pub struct ReleaseInfo {
-    pub version: String,
+    pub version: Version,
     pub tag: String,
+    pub channel: Channel,
     pub artifact_url: String,
     pub checksum_url: Option<String>,
     pub release_notes: Option<String>,
+    pub forced: bool,
+    pub min_version: Option<Version>,
 }
 
 /// Release 源抽象
@@ -111,14 +116,20 @@ impl ReleaseSource for GitHubSource {
             .find(|a| a.name == "checksums.sha256")
             .map(|a| a.browser_download_url.clone());
 
-        let version = release.tag_name.trim_start_matches('v').to_string();
+        let version_str = release.tag_name.trim_start_matches('v');
+        let version = Version::parse(version_str)
+            .unwrap_or_else(|_| Version::new(0, 0, 0));
+        let channel = Channel::from_prerelease(&version.pre.to_string());
 
         Ok(ReleaseInfo {
             version,
             tag: release.tag_name,
+            channel,
             artifact_url,
             checksum_url,
             release_notes: release.body,
+            forced: false,  // GitHub releases 暂不支持 forced 标记
+            min_version: None,  // GitHub releases 暂不支持 min_version
         })
     }
 }

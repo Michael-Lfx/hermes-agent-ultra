@@ -1,9 +1,11 @@
 use async_trait::async_trait;
 use hermes_core::errors::AgentError;
-use serde::Deserialize;
+use semver::Version;
 use std::process::Command;
 use crate::update::github::{ReleaseInfo, ReleaseSource};
+use crate::update::manifest::ReleaseManifest;
 use crate::update::platform::Platform;
+use crate::update::version::Channel;
 
 /// ModelScope Release 源
 pub struct ModelScopeSource {
@@ -30,7 +32,7 @@ impl ModelScopeSource {
     /// URL to fetch latest.json
     fn latest_json_url(&self) -> String {
         format!(
-            "https://modelscope.cn/api/v1/datasets/{}/repo?Revision=master&FilePath={}/latest.json",
+            "https://modelscope.cn/api/v1/models/{}/repo?Revision=master&FilePath={}/latest.json",
             self.repo, self.prefix
         )
     }
@@ -38,7 +40,7 @@ impl ModelScopeSource {
     /// URL to download a specific file
     fn file_download_url(&self, version_tag: &str, filename: &str) -> String {
         format!(
-            "https://modelscope.cn/api/v1/datasets/{}/repo?Revision=master&FilePath={}/{}/{}",
+            "https://modelscope.cn/api/v1/models/{}/repo?Revision=master&FilePath={}/{}/{}",
             self.repo, self.prefix, version_tag, filename
         )
     }
@@ -66,20 +68,6 @@ fn curl_get(url: &str) -> Result<String, AgentError> {
         .map_err(|e| AgentError::Io(format!("Invalid UTF-8 in response: {e}")))
 }
 
-#[derive(Deserialize)]
-struct LatestJson {
-    version: String,
-    tag: String,
-    artifacts: Vec<ArtifactEntry>,
-}
-
-#[derive(Deserialize)]
-struct ArtifactEntry {
-    name: String,
-    #[allow(dead_code)]
-    url: Option<String>,
-}
-
 #[async_trait]
 impl ReleaseSource for ModelScopeSource {
     fn name(&self) -> &str {
@@ -90,32 +78,48 @@ impl ReleaseSource for ModelScopeSource {
         let body = curl_get(&self.latest_json_url())
             .map_err(|e| AgentError::Io(format!("Failed to fetch latest.json from ModelScope: {e}")))?;
 
-        let latest: LatestJson = serde_json::from_str(&body)
-            .map_err(|e| AgentError::Io(format!("Failed to parse latest.json: {e}")))?;
+        let manifest: ReleaseManifest = serde_json::from_str(&body)
+            .map_err(|e| AgentError::Io(format!("Failed to parse manifest: {e}")))?;
 
-        let artifact_name = platform.artifact_name();
-        let has_artifact = latest.artifacts.iter().any(|a| a.name == artifact_name);
-        if !has_artifact {
-            return Err(AgentError::Io(format!(
-                "No artifact '{}' found in ModelScope release {}",
-                artifact_name, latest.tag
-            )));
-        }
+        let version = Version::parse(&manifest.version)
+            .unwrap_or_else(|_| Version::new(0, 0, 0));
+        let channel = Channel::from_str(&manifest.channel);
 
-        let artifact_url = self.file_download_url(&latest.tag, &artifact_name);
-
-        let checksum_url = if latest.artifacts.iter().any(|a| a.name == "checksums.sha256") {
-            Some(self.file_download_url(&latest.tag, "checksums.sha256"))
+        // 获取 artifact URL
+        let platform_key = format!("{}-{}", platform.os, platform.arch);
+        let artifact_url = if let Some(plat) = manifest.get_platform(&platform_key) {
+            plat.url.clone()
         } else {
+            // Fallback: 旧格式用 artifacts 列表
+            let artifact_name = platform.artifact_name();
+            if manifest.artifacts.contains(&artifact_name) {
+                self.file_download_url(&manifest.version_tag(), &artifact_name)
+            } else {
+                return Err(AgentError::Io(format!(
+                    "No artifact for platform {} in manifest", platform_key
+                )));
+            }
+        };
+
+        // Checksum URL
+        let checksum_url = if manifest.has_platform_info() {
+            // 新格式: sha256 已内联，不需要额外下载
             None
+        } else {
+            // 旧格式: 下载 checksums.sha256
+            Some(self.file_download_url(&manifest.version_tag(), "checksums.sha256"))
         };
 
         Ok(ReleaseInfo {
-            version: latest.version,
-            tag: latest.tag,
+            version,
+            tag: manifest.version_tag(),
+            channel,
             artifact_url,
             checksum_url,
-            release_notes: None,
+            release_notes: manifest.notes.clone(),
+            forced: manifest.forced,
+            min_version: manifest.min_version.as_ref()
+                .and_then(|v| Version::parse(v).ok()),
         })
     }
 }
@@ -152,7 +156,7 @@ mod tests {
         };
         assert_eq!(
             source.latest_json_url(),
-            "https://modelscope.cn/api/v1/datasets/flowy2025/agent/repo?Revision=master&FilePath=hermes-agent-ultra/latest.json"
+            "https://modelscope.cn/api/v1/models/flowy2025/agent/repo?Revision=master&FilePath=hermes-agent-ultra/latest.json"
         );
     }
 
@@ -164,7 +168,7 @@ mod tests {
         };
         assert_eq!(
             source.file_download_url("v0.1.0", "hermes-linux-x86_64.tar.gz"),
-            "https://modelscope.cn/api/v1/datasets/flowy2025/agent/repo?Revision=master&FilePath=hermes-agent-ultra/v0.1.0/hermes-linux-x86_64.tar.gz"
+            "https://modelscope.cn/api/v1/models/flowy2025/agent/repo?Revision=master&FilePath=hermes-agent-ultra/v0.1.0/hermes-linux-x86_64.tar.gz"
         );
     }
 }
