@@ -5665,7 +5665,7 @@ fn compression_user_rules_path() -> PathBuf {
 }
 
 fn compression_project_rules_path() -> Option<PathBuf> {
-    detect_repo_root_from_cwd()
+    hermes_tools::repo::detect_repo_root_from_cwd()
         .map(|root| root.join(".hermes-ultra").join("compression-rules.json"))
 }
 
@@ -12424,7 +12424,8 @@ fn handle_telemetry_command(app: &mut App, args: &[&str]) -> Result<CommandResul
         .split_once(':')
         .map(|(p, _)| p.to_string())
         .unwrap_or_else(|| "openai".to_string());
-    let provider_health = provider_health_snapshot(&provider);
+    let provider_health =
+        hermes_tools::tools::telemetry_snapshot::provider_health_snapshot(&provider);
     let session = app.session_info();
     let mut out = String::new();
     let _ = writeln!(out, "Telemetry snapshot");
@@ -12433,25 +12434,19 @@ fn handle_telemetry_command(app: &mut App, args: &[&str]) -> Result<CommandResul
     let _ = writeln!(out, "messages: {}", session.message_count);
     let _ = writeln!(out, "provider health: {}", provider_health);
 
-    if let Some(repo_root) = detect_repo_root_from_cwd() {
-        let report_dir = repo_root.join(".sync-reports");
-        let eval = latest_json_report(&report_dir, "eval-trend-gate-")
-            .and_then(|p| summarize_gate_report(&p, "eval"))
-            .unwrap_or_else(|| "eval=unknown".to_string());
-        let autopilot = latest_json_report(&report_dir, "performance-autopilot-")
-            .and_then(|p| summarize_performance_autopilot_report(&p, "autopilot"))
-            .unwrap_or_else(|| "autopilot=unknown".to_string());
-        let replay = latest_json_report(&report_dir, "deterministic-replay-")
-            .and_then(|p| summarize_gate_report(&p, "replay"))
-            .unwrap_or_else(|| "replay=unknown".to_string());
-        let _ = writeln!(out, "gates: {}; {}; {}", eval, autopilot, replay);
+    if let Some(repo_root) = hermes_tools::repo::detect_repo_root_from_cwd() {
+        let _ = writeln!(
+            out,
+            "{}",
+            hermes_tools::tools::telemetry_snapshot::telemetry_gate_line(&repo_root)
+        );
     }
 
     if action == "lane" {
-        let _ = writeln!(
-            out,
-            "lane hints:\n- Ctrl+L toggle activity lane\n- Ctrl+O switch lane mode (live/cockpit)\n- Ctrl+G force transcript refresh + jump latest"
-        );
+        let _ = writeln!(out, "lane hints:");
+        for hint in hermes_tools::tools::telemetry_snapshot::lane_hints() {
+            let _ = writeln!(out, "- {}", hint);
+        }
     } else if action != "status" {
         emit_command_output(
             app,
@@ -12490,26 +12485,6 @@ fn handle_runbook_command(app: &mut App, args: &[&str]) -> Result<CommandResult,
     }
     emit_command_output(app, "Usage: /runbook [list|show <name>]");
     Ok(CommandResult::Handled)
-}
-
-fn provider_health_snapshot(provider: &str) -> &'static str {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "nous" | "google-gemini-cli" | "gemini-cli" | "gemini-oauth" | "qwen-oauth" => {
-            "oauth-capable"
-        }
-        "openai" | "anthropic" | "openrouter" => "api-key/session",
-        _ => "unknown",
-    }
-}
-
-fn detect_repo_root_from_cwd() -> Option<PathBuf> {
-    let cwd = std::env::current_dir().ok()?;
-    for candidate in cwd.ancestors() {
-        if candidate.join(".git").exists() {
-            return Some(candidate.to_path_buf());
-        }
-    }
-    None
 }
 
 fn handle_profile_command(app: &mut App) -> Result<CommandResult, AgentError> {
