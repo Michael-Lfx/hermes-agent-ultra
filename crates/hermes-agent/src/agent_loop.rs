@@ -2780,8 +2780,8 @@ impl AgentLoop {
             .unwrap_or_else(|_| self.config_snapshot().model)
     }
 
-    /// Try switching to a configured fallback model when Nous cross-session guard is active.
-    pub(crate) fn try_activate_nous_session_fallback(&self, active_model: &str) -> bool {
+    /// Try switching to a configured fallback model (Nous guard, billing, rate limit).
+    pub(crate) fn try_activate_session_fallback(&self, active_model: &str) -> bool {
         if self
             .turn_fallback
             .lock()
@@ -5771,6 +5771,8 @@ impl AgentLoop {
         let effective_max_tokens = max_tokens_override.or(self.config().max_tokens);
         let mut context_overflow_retries = 0u32;
         let mut has_retried_429_same_cred = false;
+        let mut auth_refresh_attempted = false;
+        let mut thinking_sig_retry_attempted = false;
 
         if active_provider == "nous" {
             if let Some(remaining) = crate::nous_rate_guard::nous_rate_limit_remaining(
@@ -5783,7 +5785,7 @@ impl AgentLoop {
                     );
                     tracing::info!(%msg, "nous rate guard: skipping API call");
                     hermes_telemetry::record_nous_rate_limit_skip();
-                    if self.try_activate_nous_session_fallback(&effective_model_name) {
+                    if self.try_activate_session_fallback(&effective_model_name) {
                         return self
                             .call_llm_with_retry(
                                 ctx,
@@ -5897,16 +5899,47 @@ impl AgentLoop {
                 Err(e) => {
                     hermes_telemetry::record_error();
                     let err_str = e.to_string();
-                    let class = classify_error(&err_str);
+                    let failover = crate::retry_failover::classify_failover_reason(&err_str);
+                    if failover == crate::retry_failover::FailoverReason::ThinkingSignature
+                        && !thinking_sig_retry_attempted
+                    {
+                        thinking_sig_retry_attempted = true;
+                        crate::retry_failover::strip_thinking_blocks_from_context(ctx);
+                        self.invalidate_turn_api_messages_cache();
+                        tracing::warn!(
+                            "Thinking block signature invalid — stripped reasoning blocks, retrying"
+                        );
+                        self.emit_status(
+                            "lifecycle",
+                            "Thinking block signature invalid — stripped reasoning blocks and retrying",
+                        );
+                        continue;
+                    }
+                    let class = if failover == crate::retry_failover::FailoverReason::Billing {
+                        ErrorClass::RateLimit
+                    } else {
+                        classify_error(&err_str)
+                    };
                     tracing::warn!(
                         attempt,
                         error_class = ?class,
+                        failover = ?failover,
                         "LLM API error: {}",
                         &err_str[..err_str.len().min(200)]
                     );
 
                     match class {
                         ErrorClass::Auth => {
+                            if !auth_refresh_attempted {
+                                auth_refresh_attempted = true;
+                                self.refresh_oauth_store_tokens_if_needed().await;
+                                tracing::info!("Auth error — refreshed OAuth tokens, retrying");
+                                self.emit_status(
+                                    "lifecycle",
+                                    "Authentication error — refreshed OAuth tokens and retrying",
+                                );
+                                continue;
+                            }
                             if let Some(diag) = maybe_nous_401_diagnostic(
                                 active_provider.as_str(),
                                 &err_str,
@@ -6102,6 +6135,38 @@ impl AgentLoop {
                             return Err(AgentError::LlmApi(err_str));
                         }
                         ErrorClass::RateLimit | ErrorClass::Retryable => {
+                            if failover == crate::retry_failover::FailoverReason::Billing {
+                                let pool = route
+                                    .and_then(|rt| self.credential_pool_for_route(rt))
+                                    .or(self.primary_credential_pool.as_ref());
+                                let base_url = self.resolve_runtime_base_url(
+                                    active_provider.as_str(),
+                                    route.and_then(|rt| rt.base_url.as_deref()),
+                                );
+                                let pool_may_recover =
+                                    crate::credential_pool_recovery::pool_may_recover_from_rate_limit(
+                                        pool.map(|p| p.as_ref()),
+                                        active_provider.as_str(),
+                                        base_url.as_deref(),
+                                    );
+                                if !pool_may_recover {
+                                    self.emit_status(
+                                        "lifecycle",
+                                        "Billing or credits exhausted — switching to fallback provider",
+                                    );
+                                    if self.try_activate_session_fallback(&effective_model_name) {
+                                        return self
+                                            .call_llm_with_retry(
+                                                ctx,
+                                                tool_schemas,
+                                                route,
+                                                max_tokens_override,
+                                                api_call_count,
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
                             if matches!(class, ErrorClass::RateLimit)
                                 && active_provider == "nous"
                             {
@@ -6130,7 +6195,7 @@ impl AgentLoop {
                                     tracing::info!(
                                         "Nous genuine rate limit — tripping cross-session breaker"
                                     );
-                                    if self.try_activate_nous_session_fallback(&effective_model_name)
+                                    if self.try_activate_session_fallback(&effective_model_name)
                                     {
                                         return self
                                             .call_llm_with_retry(
