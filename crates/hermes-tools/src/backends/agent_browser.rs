@@ -124,6 +124,19 @@ impl AgentBrowserBackend {
         Self::new().ok()
     }
 
+    /// Drop cached browser session mapping for a turn task (Python turn-end cleanup).
+    pub fn release_task_session(&self, task_id: &str) {
+        let task_id = task_id.trim();
+        if task_id.is_empty() {
+            return;
+        }
+        if let Ok(mut guard) = self.sessions.lock() {
+            if guard.remove(task_id).is_some() {
+                tracing::debug!(task_id = %task_id, "released agent-browser session mapping");
+            }
+        }
+    }
+
     fn session_name_for(&self, task_id: &str) -> String {
         let ctx = BrowserAuthContext::for_scope(task_id);
         let mut guard = self.sessions.lock().expect("browser sessions lock");

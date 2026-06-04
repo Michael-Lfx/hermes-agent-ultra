@@ -106,6 +106,6 @@ impl AgentLoop {
         if task_id.trim().is_empty() {
             return;
         }
-        tracing::debug!(task_id = %task_id, "turn-end task resource cleanup (browser/vm best-effort noop)");
+        hermes_tools::cleanup_task_resources(task_id);
     }
 }
