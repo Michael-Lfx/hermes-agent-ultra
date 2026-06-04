@@ -47,6 +47,7 @@ mod error_classifier;
 mod retry_failover;
 pub mod session_log;
 pub mod session_persistence;
+pub mod session_state;
 pub mod shell_hooks;
 pub mod skill_provenance;
 pub mod skill_orchestrator;
@@ -71,6 +72,7 @@ pub use agent_loop::{
     AgentCallbacks, AgentConfig, AgentLoop, ApiMode, AsyncToolDispatch, CheapModelRouteConfig,
     ErrorClass, RetryConfig, SmartModelRoutingConfig, ToolRegistry, TurnMetrics,
 };
+pub use session_state::SessionUsageMetrics;
 pub use conversation_loop::{
     ConversationResult, RunConversationParams, extract_last_assistant_reply,
     split_messages_for_run_conversation,

@@ -2323,6 +2323,10 @@ impl App {
         self.flush_session_teardown(false);
         let old_session_id = self.session_id.clone();
         self.session_id = Uuid::new_v4().to_string();
+        self.agent.set_runtime_session_id(&self.session_id);
+        self.agent.reset_session_state(None, None, false);
+        self.agent.reset_session_db_flush_cursor();
+        self.agent.invalidate_cached_system_prompt();
         self.notify_memory_session_switch(&self.session_id, &old_session_id, true, "new_session");
         self.messages.clear();
         self.ui_messages.clear();

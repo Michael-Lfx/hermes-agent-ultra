@@ -277,6 +277,24 @@ impl ContextCompressor {
         self.last_prompt_tokens = prompt_tokens;
     }
 
+    /// Active model context window (tokens).
+    pub fn config_context_length(&self) -> u64 {
+        self.config.context_length
+    }
+
+    /// Reset per-session compressor state (`/new`, `/reset`; Python `on_session_reset`).
+    pub fn reset_session_state(&mut self) {
+        self.compression_count = 0;
+        self.last_prompt_tokens = 0;
+        self.previous_summary = None;
+        self.failure_cooldown_until = None;
+        self.summary_model_fallen_back = false;
+        self.last_summary_error = None;
+        self.last_summary_dropped_count = 0;
+        self.last_summary_fallback_used = false;
+        self.ineffective_compression_count = 0;
+    }
+
     /// Re-target token budgets when the active model changes mid-session.
     pub fn set_context_length(&mut self, context_length: u64) {
         let summary_ratio = self.config.summary_target_ratio;
@@ -1351,6 +1369,23 @@ mod tests {
     }
 
     // ---------- threshold + budget ----------
+
+    #[test]
+    fn reset_session_state_clears_previous_summary_and_counters() {
+        let cfg = CompressorConfig {
+            context_length: 100_000,
+            ..quiet_config()
+        };
+        let mut compressor =
+            ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
+        compressor.previous_summary = Some("Stale summary".into());
+        compressor.compression_count = 3;
+        compressor.last_prompt_tokens = 100;
+        compressor.reset_session_state();
+        assert!(compressor.previous_summary.is_none());
+        assert_eq!(compressor.compression_count(), 0);
+        assert_eq!(compressor.last_prompt_tokens, 0);
+    }
 
     #[test]
     fn should_compress_anti_thrashing_after_ineffective_passes() {

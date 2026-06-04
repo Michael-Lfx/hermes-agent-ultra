@@ -5,6 +5,7 @@ pub use crate::error_classifier::FailoverReason;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_classifier::classify_failover_reason_with_provider;
     use serde_json::Value;
 
     fn parse_expected(label: &str) -> FailoverReason {

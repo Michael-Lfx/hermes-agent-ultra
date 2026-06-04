@@ -617,6 +617,10 @@ pub struct AgentConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 
+    /// Stable gateway chat key for context-engine `conversation_id` (Python `_gateway_session_key`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_session_key: Option<String>,
+
     /// HERMES_HOME path - used by memory plugins for config resolution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hermes_home: Option<String>,
@@ -1032,6 +1036,7 @@ impl Default for AgentConfig {
             max_concurrent_delegates: default_max_concurrent_delegates(),
             memory_flush_interval: default_memory_flush_interval(),
             session_id: None,
+            gateway_session_key: None,
             hermes_home: None,
             skip_memory: false,
             interest: hermes_config::InterestConfig::default(),
@@ -2252,6 +2257,8 @@ pub struct AgentLoop {
     pub primary_credential_pool: Option<Arc<CredentialPool>>,
     /// Memory/skill nudge counters (persist for the lifetime of this `AgentLoop`).
     pub evolution_counters: Arc<Mutex<EvolutionCounters>>,
+    /// Session-scoped token/cost counters (Python `session_*` fields).
+    pub session_usage: Arc<Mutex<crate::session_state::SessionUsageMetrics>>,
     /// Backoff window for oauth refresh failures (avoid hammering token endpoints every turn).
     oauth_refresh_backoff: Arc<Mutex<HashMap<String, Instant>>>,
     /// Optional in-process sub-agent orchestrator. When set, `delegate_task`
@@ -2284,7 +2291,7 @@ pub struct AgentLoop {
     /// Python `_ext_prefetch_cache` — fetched once per turn, injected at API-call time only.
     turn_ext_prefetch_cache: Arc<Mutex<String>>,
     /// Python `agent.context_compressor.ContextCompressor` (LLM summary + boundary alignment).
-    context_compressor: Arc<tokio::sync::Mutex<ContextCompressor>>,
+    pub(crate) context_compressor: Arc<tokio::sync::Mutex<ContextCompressor>>,
     /// Reused SQLite persistence handle for this agent (Python `SessionDB._conn` parity).
     shared_session_persistence: std::sync::OnceLock<Arc<SessionPersistence>>,
     /// Per-turn cache of assembled API messages (LLM retry fast path).
@@ -2859,6 +2866,7 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             evolution_counters: Arc::new(Mutex::new(EvolutionCounters::default())),
+            session_usage: Arc::new(Mutex::new(crate::session_state::SessionUsageMetrics::default())),
             oauth_refresh_backoff: Arc::new(Mutex::new(HashMap::new())),
             sub_agent_orchestrator: None,
             code_index,
@@ -3150,6 +3158,7 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             evolution_counters: Arc::new(Mutex::new(EvolutionCounters::default())),
+            session_usage: Arc::new(Mutex::new(crate::session_state::SessionUsageMetrics::default())),
             oauth_refresh_backoff: Arc::new(Mutex::new(HashMap::new())),
             sub_agent_orchestrator: None,
             code_index,
@@ -8485,6 +8494,7 @@ pub(crate) fn merge_usage(existing: Option<UsageStats>, new: &UsageStats) -> Usa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message_sanitization::budget_pressure_text;
     use futures::stream::BoxStream;
     use hermes_core::JsonSchema;
     use std::sync::{Mutex, MutexGuard, OnceLock};
