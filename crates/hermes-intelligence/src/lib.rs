@@ -21,6 +21,7 @@ pub mod redact;
 pub mod router;
 pub mod session_insights;
 pub mod swarm_runtime;
+pub mod runtime_main;
 pub mod title;
 pub mod usage;
 pub mod usage_pricing;

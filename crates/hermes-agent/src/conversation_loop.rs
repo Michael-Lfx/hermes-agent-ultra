@@ -275,6 +275,8 @@ impl AgentLoop {
 
         self.apply_turn_message_prelude(&mut messages).await;
 
+        self.apply_turn_prep_infrastructure_hooks();
+
         Ok(PreparedTurn {
             meta: TurnFinalizeMeta {
                 original_user_message,
@@ -307,6 +309,9 @@ impl AgentLoop {
                 *text = self.apply_turn_level_output_hooks(text, meta, &messages);
             }
         }
+
+        let mut messages = messages;
+        self.apply_turn_finalize_infrastructure_hooks(meta, &mut messages, &loop_result, completed);
 
         // Python `_persist_session` always runs at turn end; `persist_turn_session` no-ops without session_id.
         self.persist_turn_session(&messages, &loop_result);

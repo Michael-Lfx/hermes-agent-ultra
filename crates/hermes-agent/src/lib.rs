@@ -51,6 +51,7 @@ pub mod steer;
 pub mod stream_scrubber;
 pub mod sub_agent_orchestrator;
 pub mod subdirectory_hints;
+mod turn_finalize_hooks;
 mod system_prompt;
 pub mod tool_guardrails;
 pub mod tools_wiring;
