@@ -1068,6 +1068,7 @@ impl AgentLoop {
                         Ok(StreamCollectOutcome::Complete(resp)) => resp,
                         Ok(StreamCollectOutcome::Interrupted(partial)) => {
                             if let Some(ref u) = partial.usage {
+                                self.record_api_usage(u);
                                 accumulated_usage = Some(merge_usage(accumulated_usage.clone(), u));
                                 if let Some(cost) = estimate_usage_cost_usd(
                                     u,
@@ -1139,6 +1140,7 @@ impl AgentLoop {
                 inner_attempt = inner_attempt.saturating_add(1);
 
                 if let Some(ref u) = r.usage {
+                    self.record_api_usage(u);
                     turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
                 }
 
