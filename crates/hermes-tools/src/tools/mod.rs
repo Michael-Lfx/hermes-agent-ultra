@@ -4,6 +4,7 @@
 //! to the `ToolHandler` trait from `hermes-core`.
 
 pub mod ansi_strip;
+pub mod binary_extensions;
 pub mod browser;
 pub mod clarify;
 pub mod code_execution;
