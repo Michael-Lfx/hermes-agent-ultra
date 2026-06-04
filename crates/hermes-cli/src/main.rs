@@ -4733,24 +4733,19 @@ async fn register_gateway_adapters(
 
     if let Some(platform_cfg) = config.platforms.get("whatsapp") {
         if platform_cfg.enabled {
-            if let Some(token) = platform_token_or_extra(platform_cfg) {
-                let wa_cfg = WhatsAppConfig {
-                    token,
-                    phone_number_id: extra_string(platform_cfg, "phone_number_id"),
-                    business_account_id: extra_string(platform_cfg, "business_account_id"),
-                    verify_token: extra_string(platform_cfg, "verify_token"),
-                    proxy: Default::default(),
-                };
-                match WhatsAppAdapter::new(wa_cfg) {
-                    Ok(adapter) => {
-                        gateway
-                            .register_adapter("whatsapp", Arc::new(adapter))
-                            .await
-                    }
-                    Err(e) => println!("WhatsApp enabled but failed to initialize: {}", e),
+            let wa_cfg = WhatsAppConfig::from_platform_config(platform_cfg);
+            match WhatsAppAdapter::new(wa_cfg) {
+                Ok(adapter) => {
+                    let adapter = Arc::new(adapter);
+                    let (tx, rx) = mpsc::channel::<GatewayIncomingMessage>(512);
+                    adapter.set_inbound_sender(tx).await;
+                    gateway.register_adapter("whatsapp", adapter).await;
+                    let gw_clone = gateway.clone();
+                    sidecar_tasks.push(tokio::spawn(async move {
+                        run_gateway_incoming_loop(gw_clone, rx, "whatsapp").await;
+                    }));
                 }
-            } else {
-                println!("WhatsApp is enabled but token is missing; skipping whatsapp adapter.");
+                Err(e) => println!("WhatsApp enabled but failed to initialize: {}", e),
             }
         }
     }

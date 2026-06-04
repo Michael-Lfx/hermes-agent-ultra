@@ -363,7 +363,7 @@ tail -f ~/.hermes/logs/gateway.log   # View logs
 
 The generated plist lives at `~/Library/LaunchAgents/ai.hermes.gateway.plist`. It includes three environment variables:
 
-- **PATH** — your full shell PATH at install time, with the venv `bin/` and `node_modules/.bin` prepended. This ensures user-installed tools (Node.js, ffmpeg, etc.) are available to gateway subprocesses like the WhatsApp bridge.
+- **PATH** — your full shell PATH at install time, with the venv `bin/` and `node_modules/.bin` prepended. This ensures user-installed tools (Node.js for browser/dashboard, ffmpeg, etc.) are available to gateway subprocesses.
 - **VIRTUAL_ENV** — points to the Python virtualenv so tools can resolve packages correctly.
 - **HERMES_HOME** — scopes the gateway to your Hermes installation.
 

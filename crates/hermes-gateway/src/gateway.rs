@@ -3507,6 +3507,20 @@ impl Gateway {
         Ok(())
     }
 
+    /// Send a text message and return the platform message id when available.
+    pub async fn send_message_with_id(
+        &self,
+        platform: &str,
+        chat_id: &str,
+        text: &str,
+        parse_mode: Option<ParseMode>,
+    ) -> Result<Option<String>, GatewayError> {
+        let adapter = self.get_adapter(platform).await.ok_or_else(|| {
+            GatewayError::Platform(format!("No adapter registered for platform: {}", platform))
+        })?;
+        adapter.send_message_with_id(chat_id, text, parse_mode).await
+    }
+
     /// Edit an existing message on a specific platform chat.
     pub async fn edit_message(
         &self,

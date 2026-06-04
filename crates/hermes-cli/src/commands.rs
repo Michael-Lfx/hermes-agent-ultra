@@ -23768,26 +23768,25 @@ pub async fn handle_cli_logout(provider: Option<String>) -> Result<(), hermes_co
 
 /// Handle `hermes whatsapp [action]`.
 pub async fn handle_cli_whatsapp(action: Option<String>) -> Result<(), hermes_core::AgentError> {
-    match action.as_deref().unwrap_or("status") {
-        "setup" => {
-            whatsapp_setup().await?;
-        }
-        "status" => {
-            whatsapp_status().await?;
-        }
-        "qr" => {
-            whatsapp_qr().await?;
-        }
+    match action.as_deref().unwrap_or("setup") {
+        "setup" | "" => crate::whatsapp_wizard::whatsapp_baileys_wizard().await,
+        "status" => crate::whatsapp_wizard::whatsapp_baileys_status().await,
+        "pair" | "qr" => crate::whatsapp_wizard::whatsapp_baileys_wizard().await,
+        "cloud" => crate::whatsapp_wizard::whatsapp_cloud_setup().await,
         other => {
             println!("WhatsApp action '{}' is not recognized.", other);
-            println!("Available actions: setup, status, qr");
+            println!("Available actions: setup, status, pair, cloud");
+            Ok(())
         }
     }
-    Ok(())
 }
 
-/// Interactive setup: collect credentials, persist to config.yaml, verify.
-async fn whatsapp_setup() -> Result<(), hermes_core::AgentError> {
+/// Cloud API setup (optional feature `whatsapp-cloud`).
+pub(crate) async fn whatsapp_cloud_setup_impl() -> Result<(), hermes_core::AgentError> {
+    whatsapp_cloud_setup_legacy().await
+}
+
+async fn whatsapp_cloud_setup_legacy() -> Result<(), hermes_core::AgentError> {
     use std::io::{self, BufRead, Write};
 
     println!("WhatsApp Cloud API Setup");

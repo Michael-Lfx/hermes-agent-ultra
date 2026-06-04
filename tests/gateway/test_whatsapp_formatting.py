@@ -1,9 +1,9 @@
-"""Tests for WhatsApp message formatting and chunking.
+"""Tests for WhatsApp message formatting and chunking (ported to Rust)."""
 
-Covers:
-- format_message(): markdown → WhatsApp syntax conversion
-- send(): message chunking for long responses
-- MAX_MESSAGE_LENGTH: practical UX limit
+import pytest
+
+pytestmark = pytest.mark.skip(reason="ported to Rust (hermes-gateway whatsapp_format tests)")
+
 """
 
 import asyncio

@@ -217,13 +217,17 @@ pub fn evaluate_gateway_requirements(
 
     #[cfg(feature = "whatsapp")]
     if let Some(p) = config.platforms.get("whatsapp") {
-        if check(p.enabled, platform_token_or_extra(p).is_some()) {
-            push_fatal(
-                &mut issues,
-                "whatsapp",
-                "missing_token",
-                "whatsapp.enabled=true 但缺少 token",
-            );
+        if p.enabled {
+            use crate::platforms::whatsapp::{is_paired, WhatsAppConfig};
+            let wa = WhatsAppConfig::from_platform_config(p);
+            if check(p.enabled, is_paired(&wa.session_path())) {
+                push_fatal(
+                    &mut issues,
+                    "whatsapp",
+                    "whatsapp_not_paired",
+                    "whatsapp.enabled=true 但未配对 — 运行 `hermes whatsapp`",
+                );
+            }
         }
     }
 

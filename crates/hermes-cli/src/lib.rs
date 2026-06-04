@@ -48,6 +48,7 @@ pub mod tools_config;
 pub mod tui;
 pub mod update;
 pub mod webhook_delivery;
+pub mod whatsapp_wizard;
 
 #[cfg(test)]
 pub(crate) mod test_env_lock;

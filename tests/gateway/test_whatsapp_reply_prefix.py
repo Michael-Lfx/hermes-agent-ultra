@@ -1,10 +1,9 @@
-"""Tests for WhatsApp reply_prefix config.yaml support.
+"""Tests for WhatsApp reply_prefix config.yaml support (ported to Rust)."""
 
-Covers:
-- config.yaml whatsapp.reply_prefix bridging into PlatformConfig.extra
-- WhatsAppAdapter reading reply_prefix from config.extra
-- Bridge subprocess receiving WHATSAPP_REPLY_PREFIX env var
-- Config version covers all ENV_VARS_BY_VERSION keys (regression guard)
+import pytest
+
+pytestmark = pytest.mark.skip(reason="ported to Rust (hermes-gateway whatsapp config tests)")
+
 """
 
 from pathlib import Path
