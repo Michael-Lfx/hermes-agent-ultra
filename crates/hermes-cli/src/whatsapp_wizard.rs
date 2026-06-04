@@ -132,6 +132,10 @@ pub fn apply_whatsapp_to_gateway_config(
     wa.enabled = true;
     wa.extra
         .insert("mode".to_string(), serde_json::json!(mode));
+    if mode == "self-chat" {
+        wa.extra
+            .insert("dm_policy".to_string(), serde_json::json!("open"));
+    }
     if !allow_from.is_empty() {
         wa.extra.insert(
             "allow_from".to_string(),
@@ -183,6 +187,12 @@ fn persist_whatsapp_config_yaml(
         serde_yaml::Value::String("mode".into()),
         serde_yaml::Value::String(mode.to_string()),
     );
+    if mode == "self-chat" {
+        extra.insert(
+            serde_yaml::Value::String("dm_policy".into()),
+            serde_yaml::Value::String("open".into()),
+        );
+    }
     if !allow_from.is_empty() {
         extra.insert(
             serde_yaml::Value::String("allow_from".into()),

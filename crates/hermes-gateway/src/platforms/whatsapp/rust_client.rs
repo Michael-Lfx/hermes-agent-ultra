@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, Mutex, Notify, RwLock};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use wa_rs::bot::Bot;
 use wa_rs::store::SqliteStore;
 use wa_rs::types::events::Event;
@@ -360,16 +360,29 @@ async fn handle_event(
         }
         Event::Connected(_) => {
             info!("WhatsApp connected");
-            if let Some(pn) = client.get_pn().await {
-                let pn_str = pn.to_string();
+            {
                 let mut st = state.write().await;
                 st.connected = true;
                 st.client = Some(client.clone());
+            }
+            if let Some(pn) = client.get_pn().await {
+                let pn_str = pn.to_string();
+                let mut st = state.write().await;
                 if st.bot_pn.is_none() {
                     st.bot_pn = Some(jid_user_part(&pn_str));
                 }
-                if st.bot_ids.is_empty() {
+                if !st.bot_ids.iter().any(|id| id == &pn_str) {
                     st.bot_ids.push(pn_str);
+                }
+            }
+            if let Some(lid) = client.get_lid().await {
+                let lid_str = lid.to_string();
+                let mut st = state.write().await;
+                if st.bot_lid.is_none() {
+                    st.bot_lid = Some(jid_user_part(&lid_str));
+                }
+                if !st.bot_ids.iter().any(|id| id == &lid_str) {
+                    st.bot_ids.push(lid_str);
                 }
             }
             if pair_only && pairing_crypto_done.load(Ordering::SeqCst) {
@@ -426,6 +439,14 @@ async fn handle_event(
             drop(st);
 
             if !should_accept_incoming(config, &info, &msg, &bot_pn, &bot_lid, &recently_sent) {
+                debug!(
+                    chat = %info.source.chat,
+                    from_me = info.source.is_from_me,
+                    mode = %config.whatsapp_mode(),
+                    bot_pn = ?bot_pn,
+                    bot_lid = ?bot_lid,
+                    "[whatsapp] Ignoring inbound message (self-chat filter or echo)"
+                );
                 return;
             }
 

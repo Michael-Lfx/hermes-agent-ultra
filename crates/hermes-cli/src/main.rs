@@ -4389,6 +4389,14 @@ fn build_gateway_platform_access_policies(
             .unwrap_or_else(|| platform.eq_ignore_ascii_case("discord") && has_allowlist);
 
         let mut dm_mode = parse_dm_access_mode(platform, platform_cfg);
+        if platform.eq_ignore_ascii_case("whatsapp") {
+            let wa_cfg = hermes_gateway::platforms::whatsapp::WhatsAppConfig::from_platform_config(
+                platform_cfg,
+            );
+            if wa_cfg.self_chat_dm_policy_open() {
+                dm_mode = DmAccessMode::Open;
+            }
+        }
         if dm_mode == DmAccessMode::Pairing
             && platform.eq_ignore_ascii_case("discord")
             && extra_string(platform_cfg, "dm_policy").is_none()

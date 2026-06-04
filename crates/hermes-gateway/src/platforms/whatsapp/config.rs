@@ -172,6 +172,11 @@ impl WhatsAppConfig {
             .to_lowercase()
     }
 
+    /// Self-chat talks to the owner's own DM; gateway DM pairing gate must be open.
+    pub fn self_chat_dm_policy_open(&self) -> bool {
+        self.whatsapp_mode() == "self-chat"
+    }
+
     pub fn effective_reply_prefix(&self) -> String {
         if self.whatsapp_mode() != "self-chat" {
             return String::new();
@@ -308,5 +313,13 @@ mod tests {
         p.extra.insert("reply_prefix".into(), Value::String("".into()));
         let cfg = WhatsAppConfig::from_platform_config(&p);
         assert_eq!(cfg.reply_prefix.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn self_chat_requests_open_dm_policy() {
+        let mut p = PlatformConfig::default();
+        p.extra.insert("mode".into(), Value::String("self-chat".into()));
+        let cfg = WhatsAppConfig::from_platform_config(&p);
+        assert!(cfg.self_chat_dm_policy_open());
     }
 }
