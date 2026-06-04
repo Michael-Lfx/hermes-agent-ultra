@@ -303,9 +303,8 @@ impl AgentLoop {
             }
         }
 
-        if meta.persist_session {
-            self.persist_turn_session(&messages, &loop_result);
-        }
+        // Python `_persist_session` always runs at turn end; `persist_turn_session` no-ops without session_id.
+        self.persist_turn_session(&messages, &loop_result);
 
         loop_result.messages = messages;
         let loop_result = self.finalize_agent_result(loop_result);
