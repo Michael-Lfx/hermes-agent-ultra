@@ -248,7 +248,7 @@ Each inner loop iteration calls `invalidate_turn_api_messages_cache()` before LL
 
 1. ~~**Full `error_classifier.py` parity**~~ — core recovery paths in `error_classifier.rs` (image shrink, encrypted replay strip, llama.cpp grammar, oauth 1M beta, provider policy UX); full classifier matrix still partial.
 2. ~~**Kanban budget-exhausted edge cases**~~ — `record_task_failure` + outcomes (`timed_out`, `spawn_failed`, …); dispatcher/task `failure_limit` tiers.
-3. **Trajectory save config** — align `AgentConfig.save_trajectories` with Python instead of env-only `HERMES_SAVE_TRAJECTORIES`.
+3. ~~**Trajectory save config**~~ — `AgentConfig.save_trajectories` + env `HERMES_SAVE_TRAJECTORIES` fallback.
 4. **Task VM/browser cleanup** — real resource teardown vs debug stub.
 5. ~~**Turn-prep dead-connection cleanup**~~ — done via `turn_start_connection_hygiene` (stale-client probe; not full socket scan).
 6. **Replay compression warning** — Python warns when continuing a compressed session.

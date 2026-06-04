@@ -34,7 +34,10 @@ pub fn drop_trailing_empty_response_scaffolding(messages: &mut Vec<Message>) {
     }
 }
 
-fn trajectories_enabled() -> bool {
+fn trajectories_enabled(agent: &AgentLoop) -> bool {
+    if agent.config().save_trajectories {
+        return true;
+    }
     std::env::var("HERMES_SAVE_TRAJECTORIES")
         .ok()
         .map(|raw| {
@@ -85,7 +88,7 @@ impl AgentLoop {
         messages: &[Message],
         completed: bool,
     ) {
-        if !trajectories_enabled() {
+        if !trajectories_enabled(self) {
             return;
         }
         let Some(sp) = self.session_persistence() else {

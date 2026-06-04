@@ -854,6 +854,10 @@ pub struct AgentConfig {
     /// Adaptive web research planner/evaluator and per-message tool budgets.
     #[serde(default)]
     pub web_research: hermes_config::WebResearchConfig,
+
+    /// Persist turn trajectories to JSONL (Python `save_trajectories`).
+    #[serde(default)]
+    pub save_trajectories: bool,
 }
 
 fn default_max_turns() -> u32 {
@@ -1089,6 +1093,7 @@ impl Default for AgentConfig {
             lsp_context_enabled: default_lsp_context_enabled(),
             lsp_context_max_chars: default_lsp_context_max_chars(),
             web_research: hermes_config::WebResearchConfig::default(),
+            save_trajectories: false,
         }
     }
 }
