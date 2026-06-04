@@ -85,6 +85,22 @@ pub enum Event {
     Mouse(MouseEvent),
     /// Terminal bracketed paste payload.
     Paste(String),
+    /// Voice chat: ASR final ready for the agent.
+    VoiceChatUserText(String),
+    /// Voice chat: interrupt in-flight agent turn and process new user speech.
+    VoiceChatInterruptForUtterance(String),
+    /// Voice chat: agent finished a turn (TTS may still drain).
+    VoiceChatTurnComplete,
+    /// Voice chat: user spoke while agent was busy.
+    VoiceChatBusyReply { phrase: String, heard: String },
+    /// Voice chat: session status update.
+    VoiceChatStatus(String),
+    /// Voice chat: fatal session error.
+    VoiceChatError(String),
+    /// Wake word accepted; prompt user to speak.
+    VoiceChatWakeAccepted,
+    /// User barged in during TTS; cancel in-flight agent work.
+    VoiceChatBargeIn,
 }
 
 // ---------------------------------------------------------------------------
@@ -698,6 +714,10 @@ pub struct TuiState {
     awaiting_run_complete: bool,
     /// Last composer snapshot painted to the terminal.
     last_input_paint: Option<InputPaintSnapshot>,
+    /// Pure voice chat (`/chat`) session, if active.
+    voice_chat: Option<crate::voice_chat::VoiceChatSession>,
+    /// Short label for the status bar (Listening / Thinking / Speaking).
+    voice_chat_status: String,
 }
 
 /// A section of tool output that can be folded/expanded.
@@ -793,8 +813,14 @@ impl Default for TuiState {
             degraded_notes: Vec::new(),
             awaiting_run_complete: false,
             last_input_paint: None,
+            voice_chat: None,
+            voice_chat_status: String::new(),
         }
     }
+}
+
+fn voice_chat_active(state: &TuiState) -> bool {
+    state.voice_chat.is_some()
 }
 
 impl TuiState {
@@ -4345,6 +4371,11 @@ fn render_status(
             processing_indicator, state.mode, model, msg_count, session
         )
     };
+    if voice_chat_active(state) && !state.voice_chat_status.is_empty() {
+        status_text.push_str(&format!(" | VOICE CHAT {}", state.voice_chat_status));
+    } else if voice_chat_active(state) {
+        status_text.push_str(" | VOICE CHAT");
+    }
     status_text.push_str(match state.view_density {
         ViewDensity::Compact => " | compact",
         ViewDensity::Detailed => " | detailed",
@@ -5475,6 +5506,136 @@ fn process_stream_lane_event(app: &mut App, state: &mut TuiState, event: Event) 
     }
 }
 
+fn voice_chat_invalidate_transcript(state: &mut TuiState) {
+    state.transcript_cache = TranscriptCache::default();
+    state.jump_to_latest();
+}
+
+/// Speakable assistant text from a streaming chunk (skip reasoning / muted post-response).
+fn stream_chunk_tts_content(chunk: &hermes_core::StreamChunk, stream_muted: bool) -> Option<String> {
+    if stream_muted {
+        return None;
+    }
+    let delta = chunk.delta.as_ref()?;
+    if let Some(extra) = delta.extra.as_ref() {
+        if extra.get("ui_event").and_then(|v| v.as_str()) == Some("thinking") {
+            return None;
+        }
+    }
+    delta
+        .content
+        .as_ref()
+        .filter(|text| !text.is_empty())
+        .cloned()
+}
+
+async fn voice_chat_feed_stream_event(
+    state: &TuiState,
+    event: &Event,
+) {
+    let Some(sess) = state.voice_chat.as_ref() else {
+        return;
+    };
+    match event {
+        Event::StreamDelta(delta) if !delta.is_empty() => {
+            sess.bridge.feed_assistant_delta(delta).await;
+        }
+        Event::StreamChunk(chunk) => {
+            if let Some(content) = stream_chunk_tts_content(chunk, state.stream_muted) {
+                sess.bridge.feed_assistant_delta(&content).await;
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn voice_chat_finalize_agent_turn(state: &TuiState) {
+    if let Some(sess) = state.voice_chat.as_ref() {
+        sess.bridge.complete_agent_turn().await;
+    }
+}
+
+async fn spawn_voice_chat_agent_turn(
+    app: &mut App,
+    state: &mut TuiState,
+    tui: &Tui,
+    active_agent_task: &mut Option<tokio::task::JoinHandle<()>>,
+    text: String,
+) {
+    abort_and_join_task(active_agent_task).await;
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+        return;
+    }
+    app.input_history.push(trimmed.clone());
+    app.history_index = app.input_history.len();
+    app.messages.push(Message::user(format!("🎤 {trimmed}")));
+    voice_chat_invalidate_transcript(state);
+
+    state.begin_processing_cycle(&app.current_model);
+    state.status_message = "Processing voice turn…".to_string();
+
+    let stream_tx = tui.stream_sender();
+    let agent = app.agent.clone();
+    let stream_enabled = app.config.streaming.enabled;
+    let tool_schemas = app.tool_schemas.clone();
+    let mut messages = app.messages.clone();
+    messages.pop();
+    let user_message = trimmed.clone();
+    let stream_handle = app.stream_handle.clone();
+    let task_id = Some(app.session_id.clone());
+
+    let task = tokio::spawn(async move {
+        let started = Instant::now();
+        let history = messages;
+        if user_message.trim().is_empty() {
+            let _ = stream_tx.send(Event::AgentRunComplete {
+                result: Err("no user message in turn".to_string()),
+                elapsed_secs: started.elapsed().as_secs_f64(),
+            });
+            return;
+        }
+        let result = if stream_enabled {
+            let stream_cb: Option<Box<dyn Fn(hermes_core::StreamChunk) + Send + Sync>> =
+                stream_handle.map(|h| {
+                    Box::new(move |chunk: hermes_core::StreamChunk| {
+                        h.send_chunk(chunk);
+                    }) as Box<dyn Fn(hermes_core::StreamChunk) + Send + Sync>
+                });
+            agent
+                .run_conversation(hermes_agent::RunConversationParams {
+                    user_message,
+                    conversation_history: history,
+                    task_id,
+                    stream_callback: stream_cb,
+                    persist_user_message: None,
+                    tools: Some(tool_schemas),
+                    persist_session: false,
+                })
+                .await
+                .map(|c| c.into_loop_result())
+        } else {
+            agent
+                .run_conversation(hermes_agent::RunConversationParams {
+                    user_message,
+                    conversation_history: history,
+                    task_id,
+                    stream_callback: None,
+                    persist_user_message: None,
+                    tools: Some(tool_schemas),
+                    persist_session: false,
+                })
+                .await
+                .map(|c| c.into_loop_result())
+        };
+        let _ = stream_tx.send(Event::AgentRunComplete {
+            result: result.map_err(|e| e.to_string()),
+            elapsed_secs: started.elapsed().as_secs_f64(),
+        });
+    });
+    *active_agent_task = Some(task);
+}
+
 // ---------------------------------------------------------------------------
 // Main TUI run loop
 // ---------------------------------------------------------------------------
@@ -5529,7 +5690,11 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
             event = tui.events.recv() => {
                 match event {
                     Some(Event::Paste(text)) => {
-                        if state.modal_active() {
+                        if voice_chat_active(&state) {
+                            state.status_message =
+                                "Voice chat active — paste disabled. Use /stop-chat to exit."
+                                    .to_string();
+                        } else if state.modal_active() {
                             state.status_message = "Paste ignored while picker is open".to_string();
                         } else {
                             let line_count = text.lines().count().max(1);
@@ -5600,6 +5765,58 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                             state.jump_to_latest();
 
                             if !input.is_empty() {
+                                let trimmed_gate = input.trim();
+                                if voice_chat_active(&state) {
+                                    if trimmed_gate.eq_ignore_ascii_case("/stop-chat") {
+                                        if let Some(sess) = state.voice_chat.take() {
+                                            sess.stop().await;
+                                        }
+                                        state.voice_chat_status.clear();
+                                        voice_chat_invalidate_transcript(&mut state);
+                                        app.push_ui_assistant(
+                                            "Voice chat stopped. Keyboard input restored.",
+                                        );
+                                        state.status_message.clear();
+                                        needs_redraw = true;
+                                        continue;
+                                    }
+                                    state.status_message = "Voice chat active — speak to the mic. Use /stop-chat to exit.".to_string();
+                                    needs_redraw = true;
+                                    continue;
+                                }
+                                if trimmed_gate.eq_ignore_ascii_case("/chat") {
+                                    if voice_chat_active(&state) {
+                                        state.status_message =
+                                            "Voice chat already active. Use /stop-chat to exit."
+                                                .to_string();
+                                        needs_redraw = true;
+                                        continue;
+                                    }
+                                    match crate::voice_chat::start_voice_chat(tui.event_sender())
+                                        .await
+                                    {
+                                        Ok(sess) => {
+                                            state.voice_chat_status = if sess.wake_enabled {
+                                                "Dormant (say wake word)".to_string()
+                                            } else {
+                                                "Listening".to_string()
+                                            };
+                                            state.voice_chat = Some(sess);
+                                            voice_chat_invalidate_transcript(&mut state);
+                                            app.push_ui_assistant(
+                                                "Voice chat started. Speak to the microphone; /stop-chat to exit.",
+                                            );
+                                        }
+                                        Err(err) => {
+                                            app.push_ui_assistant(format!(
+                                                "Voice chat failed: {err}"
+                                            ));
+                                        }
+                                    }
+                                    state.status_message.clear();
+                                    needs_redraw = true;
+                                    continue;
+                                }
                                 let mut handled_by_tui = false;
                                 if let Some((cmd, args)) = parse_slash_parts(&input) {
                                     if cmd.eq_ignore_ascii_case("/ask")
@@ -5885,6 +6102,94 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                             result,
                             elapsed_secs,
                         );
+                        if state.voice_chat.is_some() {
+                            voice_chat_invalidate_transcript(&mut state);
+                        }
+                        voice_chat_finalize_agent_turn(&state).await;
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatBargeIn) => {
+                        app.interrupt_controller.interrupt(None);
+                        abort_and_join_task(&mut active_agent_task).await;
+                        if let Some(sess) = state.voice_chat.as_ref() {
+                            sess.bridge.abort_agent_turn_fast();
+                        }
+                        state.stream_buffer.clear();
+                        state.stream_md_cache.clear();
+                        state.stream_muted = false;
+                        state.stream_needs_break = false;
+                        state.active_tools.clear();
+                        state.finish_processing_cycle("⏹ barge-in");
+                        state.status_message.clear();
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatUserText(text)) => {
+                        spawn_voice_chat_agent_turn(
+                            &mut app,
+                            &mut state,
+                            &tui,
+                            &mut active_agent_task,
+                            text,
+                        )
+                        .await;
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatInterruptForUtterance(text)) => {
+                        app.interrupt_controller.interrupt(None);
+                        abort_and_join_task(&mut active_agent_task).await;
+                        if let Some(sess) = state.voice_chat.as_ref() {
+                            sess.bridge.abort_agent_turn_fast();
+                        }
+                        state.stream_buffer.clear();
+                        state.stream_md_cache.clear();
+                        state.stream_muted = false;
+                        state.stream_needs_break = false;
+                        state.active_tools.clear();
+                        state.finish_processing_cycle("⏹ interrupted for voice");
+                        state.status_message.clear();
+                        spawn_voice_chat_agent_turn(
+                            &mut app,
+                            &mut state,
+                            &tui,
+                            &mut active_agent_task,
+                            text,
+                        )
+                        .await;
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatBusyReply { phrase, heard }) => {
+                        if phrase.is_empty() {
+                            app.push_ui_assistant(format!(
+                                "(voice · busy) 听到：{heard}（仍在处理上一条）"
+                            ));
+                        } else {
+                            app.push_ui_assistant(format!(
+                                "(voice · busy) {phrase}  [听到：{heard}]"
+                            ));
+                        }
+                        voice_chat_invalidate_transcript(&mut state);
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatStatus(label)) => {
+                        state.voice_chat_status = label;
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatError(msg)) => {
+                        app.push_ui_assistant(format!("Voice chat error: {msg}"));
+                        if let Some(sess) = state.voice_chat.take() {
+                            sess.stop().await;
+                        }
+                        state.voice_chat_status.clear();
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatWakeAccepted) => {
+                        state.voice_chat_status = "Awake — speak now".to_string();
+                        app.push_ui_assistant("(voice) 已唤醒，请说出你的问题。");
+                        voice_chat_invalidate_transcript(&mut state);
+                        needs_redraw = true;
+                    }
+                    Some(Event::VoiceChatTurnComplete) => {
+                        state.voice_chat_status = "Listening".to_string();
                         needs_redraw = true;
                     }
                     Some(Event::ManagedAppRunComplete {
@@ -5936,6 +6241,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                 if let Some(first) = stream_event {
                     let mut task_completed =
                         stream_event_completes_background_task(&first);
+                    voice_chat_feed_stream_event(&state, &first).await;
                     let mut redraw = process_stream_lane_event(&mut app, &mut state, first);
                     let (drain_cap, drain_budget) =
                         stream_lane_budget(state.processing, state.stream_chunk_count);
@@ -5944,6 +6250,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         match tui.stream_events.try_recv() {
                             Ok(next) => {
                                 task_completed |= stream_event_completes_background_task(&next);
+                                voice_chat_feed_stream_event(&state, &next).await;
                                 redraw |= process_stream_lane_event(&mut app, &mut state, next);
                                 if drain_started.elapsed() >= drain_budget {
                                     break;
@@ -5955,6 +6262,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                     }
                     if task_completed {
                         active_agent_task = None;
+                        voice_chat_finalize_agent_turn(&state).await;
                     }
                     if redraw {
                         if should_redraw_stream_while_composing(

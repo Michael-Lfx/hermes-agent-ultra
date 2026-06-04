@@ -1,0 +1,57 @@
+[dashscope]
+api_key = "sk-your-key"
+ws_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+
+[asr]
+model = "fun-asr-realtime"
+sample_rate = 16000
+chunk_ms = 100
+format = "pcm"
+
+[tts]
+model = "cosyvoice-v3-flash"
+voice = "longanyang"
+sample_rate = 24000
+format = "pcm"
+
+[orchestrator]
+endpoint_silence_ms = 150
+trigger_on_asr_final = true
+min_silence_ms = 450
+cold_start_sec = 3
+min_final_chars = 2
+sentence_min_len = 12
+tts_first_chunk_chars = 6
+barge_in_frames = 2
+speculative_llm = false
+speculative_stable_ms = 300
+
+[audio]
+input_device = ""
+output_device = ""
+
+# When enabled=false (default), user speech while the agent is busy interrupts the
+# current LLM turn and starts a new one. When true, plays random wait phrases instead.
+[busy_replies]
+enabled = false
+cooldown_secs = 10
+
+# Wake word (optional). Paths relative to half_duplex.toml directory.
+# Download: https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models (zh-en-3M)
+[wake]
+enabled = false
+ack_reply = "哎，我在！"
+phrases = ["小智小智"]
+model_dir = "models/kws-zh-en-3M-2025-12-20"
+tokens_type = "phone+ppinyin"
+encoder = ""
+decoder = ""
+joiner = ""
+tokens = ""
+lexicon = ""
+bpe_model = ""
+boost_score = 2.0
+trigger_threshold = 0.35
+grace_after_wake_sec = 5
+idle_after_turn_sec = 30
+num_threads = 1

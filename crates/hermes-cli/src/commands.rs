@@ -157,6 +157,8 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/skin", "Show available skin/theme options"),
     ("/skins", "Alias for /skin"),
     ("/voice", "Show voice mode status"),
+    ("/chat", "Start voice-only chat (DashScope ASR/TTS)"),
+    ("/stop-chat", "Stop voice chat and restore keyboard input"),
     (
         "/pet",
         "Animated companion controls (`status|on|off|toggle|list|set|mood|dock|speed`)",

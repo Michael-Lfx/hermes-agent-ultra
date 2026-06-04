@@ -46,6 +46,7 @@ pub mod theme;
 pub mod tool_preview;
 pub mod tools_config;
 pub mod tui;
+pub mod voice_chat;
 pub mod update;
 pub mod webhook_delivery;
 
