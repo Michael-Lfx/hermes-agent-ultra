@@ -295,7 +295,12 @@ impl AgentLoop {
         let mut final_response = extract_last_assistant_reply(&messages);
         let last_reasoning = extract_last_reasoning_current_turn(&messages);
         let interrupted = loop_result.interrupted;
-        let completed = loop_result.finished_naturally && !interrupted;
+        let max_iterations = effective_max_turns(self.config().max_turns)
+            .unwrap_or(self.config().max_turns);
+        let completed = final_response.is_some()
+            && !loop_result.failed
+            && !interrupted
+            && loop_result.api_calls < max_iterations;
 
         if let Some(ref mut text) = final_response {
             if !interrupted {
