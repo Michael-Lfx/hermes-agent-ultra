@@ -246,7 +246,7 @@ Each inner loop iteration calls `invalidate_turn_api_messages_cache()` before LL
 
 ## Remaining gaps (lower priority)
 
-1. **Full `error_classifier.py` parity** — vision shrink, invalid encrypted replay, llama.cpp grammar, oauth 1M beta, content-policy UX, per-provider auth refresh (Codex/Nous/Anthropic).
+1. ~~**Full `error_classifier.py` parity**~~ — core recovery paths in `error_classifier.rs` (image shrink, encrypted replay strip, llama.cpp grammar, oauth 1M beta, provider policy UX); full classifier matrix still partial.
 2. **Kanban budget-exhausted edge cases** — `record_iteration_budget_exhausted` covers timed_out/gave_up; full `kanban_db.py` matrix not ported.
 3. **Trajectory save config** — align `AgentConfig.save_trajectories` with Python instead of env-only `HERMES_SAVE_TRAJECTORIES`.
 4. **Task VM/browser cleanup** — real resource teardown vs debug stub.

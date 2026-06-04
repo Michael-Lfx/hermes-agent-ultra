@@ -43,6 +43,7 @@ mod provider_serialize_cache;
 pub mod providers_extra;
 pub mod rate_limit;
 pub mod reasoning;
+mod error_classifier;
 mod retry_failover;
 pub mod session_log;
 pub mod session_persistence;

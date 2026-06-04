@@ -222,12 +222,15 @@ impl AgentLoop {
                         );
                         continue;
                     }
-                    let failover = crate::retry_failover::classify_failover_reason(&err_str);
-                    if failover == crate::retry_failover::FailoverReason::ThinkingSignature
+                    let failover = crate::error_classifier::classify_failover_reason_with_provider(
+                        &err_str,
+                        active_provider.as_str(),
+                    );
+                    if failover == crate::error_classifier::FailoverReason::ThinkingSignature
                         && !thinking_sig_retry_attempted
                     {
                         thinking_sig_retry_attempted = true;
-                        crate::retry_failover::strip_thinking_blocks_from_context(ctx);
+                        crate::error_classifier::strip_thinking_blocks_from_context(ctx);
                         self.invalidate_turn_api_messages_cache();
                         tracing::warn!(
                             "Thinking block signature invalid — stripped reasoning blocks, retrying"
@@ -238,7 +241,61 @@ impl AgentLoop {
                         );
                         continue;
                     }
-                    let class = if failover == crate::retry_failover::FailoverReason::Billing {
+                    if failover == crate::error_classifier::FailoverReason::InvalidEncryptedReplay
+                    {
+                        if crate::error_classifier::strip_invalid_encrypted_replay_from_context(ctx)
+                        {
+                            self.invalidate_turn_api_messages_cache();
+                            tracing::warn!(
+                                "Invalid encrypted reasoning replay — stripped and retrying"
+                            );
+                            self.emit_status(
+                                "lifecycle",
+                                "Encrypted reasoning replay invalid — stripped and retrying",
+                            );
+                            continue;
+                        }
+                    }
+                    if failover == crate::error_classifier::FailoverReason::ImageTooLarge
+                    {
+                        if crate::error_classifier::shrink_oversized_images_in_context(ctx) {
+                            self.invalidate_turn_api_messages_cache();
+                            tracing::warn!("Image too large — stripped image parts and retrying");
+                            self.emit_status(
+                                "lifecycle",
+                                "Image too large — reduced image payload and retrying",
+                            );
+                            continue;
+                        }
+                    }
+                    if failover == crate::error_classifier::FailoverReason::LlamaCppGrammarPattern
+                    {
+                        tracing::warn!(
+                            "llama.cpp grammar/schema error — retrying without tool strictness"
+                        );
+                        self.emit_status(
+                            "lifecycle",
+                            "Tool schema rejected by local grammar engine — retrying",
+                        );
+                        continue;
+                    }
+                    if failover
+                        == crate::error_classifier::FailoverReason::OAuthLongContextBetaForbidden
+                    {
+                        self.emit_status(
+                            "lifecycle",
+                            "Anthropic 1M context beta unavailable for this subscription — retrying",
+                        );
+                        continue;
+                    }
+                    if failover == crate::error_classifier::FailoverReason::ProviderPolicyBlocked
+                    {
+                        return Err(AgentError::LlmApi(format!(
+                            "{err_str}\n\nProvider policy blocked this model endpoint. \
+                             Adjust privacy/guardrail settings at the provider console."
+                        )));
+                    }
+                    let class = if failover == crate::error_classifier::FailoverReason::Billing {
                         ErrorClass::RateLimit
                     } else {
                         classify_error(&err_str)
