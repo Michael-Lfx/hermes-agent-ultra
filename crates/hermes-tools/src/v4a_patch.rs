@@ -228,7 +228,32 @@ pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<Stri
     // Finalize last operation
     finalize_op(&mut current_op, &mut current_hunk, &mut operations);
 
-    (operations, None)
+    if operations.is_empty() {
+        return (operations, None);
+    }
+
+    let mut parse_errors = Vec::new();
+    for op in &operations {
+        if op.file_path.is_empty() {
+            parse_errors.push("Operation with empty file path".to_string());
+        }
+        if op.operation == OperationType::Update && op.hunks.is_empty() {
+            parse_errors.push(format!("UPDATE {:?}: no hunks found", op.file_path));
+        }
+        if op.operation == OperationType::Move && op.new_path.as_deref().unwrap_or("").is_empty()
+        {
+            parse_errors.push(format!(
+                "MOVE {:?}: missing destination path (expected 'src -> dst')",
+                op.file_path
+            ));
+        }
+    }
+
+    if parse_errors.is_empty() {
+        (operations, None)
+    } else {
+        (Vec::new(), Some(format!("Parse error: {}", parse_errors.join("; "))))
+    }
 }
 
 /// Helper to finalize the current operation and push it to the list.
@@ -363,6 +388,20 @@ mod tests {
         let patch = "*** Update File: test.rs\n fn test() {\n-    old();\n+    new();\n }";
         let (ops, _) = parse_v4a_patch(patch);
         assert_eq!(ops.len(), 1);
+    }
+
+    #[test]
+    fn test_empty_patch_is_not_error() {
+        let (ops, err) = parse_v4a_patch("*** Begin Patch\n*** End Patch");
+        assert!(ops.is_empty());
+        assert!(err.is_none());
+    }
+
+    #[test]
+    fn test_update_without_hunks_is_parse_error() {
+        let (ops, err) = parse_v4a_patch("*** Begin Patch\n*** Update File: test.rs\n*** End Patch");
+        assert!(ops.is_empty());
+        assert!(err.expect("parse error").contains("no hunks found"));
     }
 
     #[test]
