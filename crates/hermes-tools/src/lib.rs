@@ -14,6 +14,7 @@ pub mod backends;
 pub mod dispatch;
 pub mod register_builtins;
 pub mod registry;
+pub mod repo;
 pub mod rtk_filter;
 pub mod teams_pipeline;
 pub mod terminal_requirements;
@@ -85,6 +86,7 @@ pub use tools::skills::{SkillManageHandler, SkillViewHandler, SkillsListHandler}
 pub use tools::spotify::{
     SpotifyApiRequest, SpotifyBackend, SpotifyHandler, SpotifyHttpMethod, SpotifyTool,
 };
+pub use tools::telemetry_snapshot::TelemetrySnapshotHandler;
 pub use tools::terminal::{ProcessBackend, ProcessHandler, TerminalHandler};
 pub use tools::todo::{TodoBackend, TodoHandler};
 pub use tools::tool_policy_simulate::ToolPolicySimulateHandler;

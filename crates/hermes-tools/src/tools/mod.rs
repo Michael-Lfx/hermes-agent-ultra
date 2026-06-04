@@ -29,6 +29,7 @@ pub mod skill_commands;
 pub mod skill_utils;
 pub mod skills;
 pub mod spotify;
+pub mod telemetry_snapshot;
 pub mod terminal;
 pub mod todo;
 pub mod tool_policy_simulate;
