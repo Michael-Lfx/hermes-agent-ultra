@@ -5766,6 +5766,19 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
 
                             if !input.is_empty() {
                                 let trimmed_gate = input.trim();
+                                if trimmed_gate.eq_ignore_ascii_case("/audio-devices") {
+                                    match hermes_half_duplex::list_audio_devices() {
+                                        Ok(text) => app.push_ui_assistant(text),
+                                        Err(err) => {
+                                            app.push_ui_assistant(format!(
+                                                "Failed to list audio devices: {err}"
+                                            ));
+                                        }
+                                    }
+                                    state.status_message.clear();
+                                    needs_redraw = true;
+                                    continue;
+                                }
                                 if voice_chat_active(&state) {
                                     if trimmed_gate.eq_ignore_ascii_case("/stop-chat") {
                                         if let Some(sess) = state.voice_chat.take() {

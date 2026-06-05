@@ -3,10 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::SampleFormat;
 use tracing::{error, info};
 
+use crate::audio::devices::{audio_host, resolve_output_device};
 use crate::audio::fault::AudioFault;
 use crate::config::AudioConfig;
 use crate::error::{HalfDuplexError, Result};
@@ -34,11 +35,26 @@ impl AudioPlayback {
         source_rate: u32,
         audio_fault: Arc<AudioFault>,
     ) -> Result<Self> {
-        let host = cpal::default_host();
-        let device = pick_output_device(&host, audio_cfg)?;
+        let host = audio_host();
+        let device = resolve_output_device(&host, audio_cfg)?;
         let config = device
             .default_output_config()
-            .map_err(|e| HalfDuplexError::Audio(e.to_string()))?;
+            .or_else(|_| {
+                device
+                    .supported_output_configs()
+                    .map_err(|e| HalfDuplexError::Audio(e.to_string()))?
+                    .max_by(|a, b| {
+                        a.max_sample_rate()
+                            .0
+                            .cmp(&b.max_sample_rate().0)
+                            .then(a.channels().cmp(&b.channels()))
+                    })
+                    .map(|r| r.with_max_sample_rate())
+                    .ok_or_else(|| {
+                        HalfDuplexError::Audio("no supported output config for device".into())
+                    })
+            })
+            .map_err(|e: HalfDuplexError| e)?;
         let device_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
 
@@ -211,19 +227,6 @@ impl AudioPlayback {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     }
-}
-
-fn pick_output_device(host: &cpal::Host, cfg: &AudioConfig) -> Result<cpal::Device> {
-    if cfg.output_device.is_empty() {
-        return host
-            .default_output_device()
-            .ok_or_else(|| HalfDuplexError::Audio("no default output device".into()));
-    }
-    let name = &cfg.output_device;
-    host.output_devices()
-        .map_err(|e| HalfDuplexError::Audio(e.to_string()))?
-        .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
-        .ok_or_else(|| HalfDuplexError::Audio(format!("output device not found: {name}")))
 }
 
 /// Resample from `source_rate` buffer to `device_rate` output using linear interpolation.

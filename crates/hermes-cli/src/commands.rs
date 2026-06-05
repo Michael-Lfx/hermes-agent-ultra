@@ -160,6 +160,10 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/chat", "Start voice-only chat (DashScope ASR/TTS)"),
     ("/stop-chat", "Stop voice chat and restore keyboard input"),
     (
+        "/audio-devices",
+        "List microphones/speakers for half_duplex.toml [audio] settings",
+    ),
+    (
         "/pet",
         "Animated companion controls (`status|on|off|toggle|list|set|mood|dock|speed`)",
     ),

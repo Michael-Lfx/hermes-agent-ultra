@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+﻿use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -337,10 +337,14 @@ impl WakeConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct AudioConfig {
+    /// Device name, substring (e.g. `"USB"`), or index (e.g. `"#1"`). Empty = system default.
     #[serde(default)]
     pub input_device: String,
     #[serde(default)]
     pub output_device: String,
+    /// When device names are empty, prefer USB/UAC endpoints over the OS default (often Bluetooth).
+    #[serde(default = "default_prefer_usb")]
+    pub prefer_usb: bool,
 }
 
 fn absolutize_config_path(base: &Path, raw: &str) -> String {
@@ -355,6 +359,10 @@ fn absolutize_config_path(base: &Path, raw: &str) -> String {
     base.join(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+fn default_prefer_usb() -> bool {
+    false
 }
 
 fn default_asr_model() -> String {

@@ -2,11 +2,12 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::SampleFormat;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 use tracing::{error, info};
 
+use crate::audio::devices::{audio_host, resolve_input_device};
 use crate::audio::fault::AudioFault;
 use crate::audio::pcm::f32_to_i16_le;
 use crate::config::AudioConfig;
@@ -30,11 +31,26 @@ impl AudioCapture {
         chunk_ms: u32,
         audio_fault: Arc<AudioFault>,
     ) -> Result<Self> {
-        let host = cpal::default_host();
-        let device = pick_input_device(&host, audio_cfg)?;
+        let host = audio_host();
+        let device = resolve_input_device(&host, audio_cfg)?;
         let config = device
             .default_input_config()
-            .map_err(|e| HalfDuplexError::Audio(e.to_string()))?;
+            .or_else(|_| {
+                device
+                    .supported_input_configs()
+                    .map_err(|e| HalfDuplexError::Audio(e.to_string()))?
+                    .max_by(|a, b| {
+                        a.max_sample_rate()
+                            .0
+                            .cmp(&b.max_sample_rate().0)
+                            .then(a.channels().cmp(&b.channels()))
+                    })
+                    .map(|r| r.with_max_sample_rate())
+                    .ok_or_else(|| {
+                        HalfDuplexError::Audio("no supported input config for device".into())
+                    })
+            })
+            .map_err(|e: HalfDuplexError| e)?;
         let sample_rate = config.sample_rate().0;
         let channels = config.channels() as usize;
         let chunk_samples_16k = (TARGET_RATE as u64 * chunk_ms as u64 / 1000) as usize;
@@ -146,19 +162,6 @@ impl AudioCapture {
     pub fn try_recv_chunk(&self) -> Option<AudioChunk> {
         self.rx.try_recv().ok()
     }
-}
-
-fn pick_input_device(host: &cpal::Host, cfg: &AudioConfig) -> Result<cpal::Device> {
-    if cfg.input_device.is_empty() {
-        return host
-            .default_input_device()
-            .ok_or_else(|| HalfDuplexError::Audio("no default input device".into()));
-    }
-    let name = &cfg.input_device;
-    host.input_devices()
-        .map_err(|e| HalfDuplexError::Audio(e.to_string()))?
-        .find(|d| d.name().map(|n| n == *name).unwrap_or(false))
-        .ok_or_else(|| HalfDuplexError::Audio(format!("input device not found: {name}")))
 }
 
 fn on_input(

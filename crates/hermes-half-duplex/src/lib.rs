@@ -25,6 +25,11 @@ pub use config::Config;
 pub use error::{HalfDuplexError, Result};
 pub use voice_session::VoiceChatSession;
 
+/// List cpal input/output devices for `half_duplex.toml` configuration.
+pub fn list_audio_devices() -> Result<String> {
+    crate::audio::format_device_list()
+}
+
 /// Running voice chat: bridge for TUI, event stream, cancel handle.
 pub struct VoiceChatHandle {
     pub bridge: Arc<VoiceChatBridge>,

@@ -30,11 +30,11 @@ speculative_llm = false
 speculative_stable_ms = 300
 
 [audio]
-# Leave empty for OS default. On Windows, Bluetooth/USB headsets may disconnect and
-# break voice chat until you re-plug and run /stop-chat then /chat.
-# Pin a stable device name if defaults change (see startup logs: "audio capture").
+# Device name, substring ("USB"), or index ("#0"). Empty uses system default.
+# On Windows, OS default is often Bluetooth; use prefer_usb or pin USB by name.
 input_device = ""
 output_device = ""
+prefer_usb = false
 
 # When enabled=false (default), user speech while the agent is busy interrupts the
 # current LLM turn and starts a new one. When true, plays random wait phrases instead.
