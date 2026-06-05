@@ -1367,7 +1367,9 @@ impl Gateway {
         let process_start = Instant::now();
         let supports_streaming = self.config.streaming_enabled
             // 微信 iLink API 不支持消息编辑，streaming 模式会导致只显示 "..."
-            && !incoming.platform.eq_ignore_ascii_case("weixin");
+            && !incoming.platform.eq_ignore_ascii_case("weixin")
+            // WhatsApp (wa-rs) 对 "..." 占位 + edit 流式不可靠，走一次性回复
+            && !incoming.platform.eq_ignore_ascii_case("whatsapp");
         self.begin_turn_outbound_tracking(
             &session_key,
             &incoming.platform,

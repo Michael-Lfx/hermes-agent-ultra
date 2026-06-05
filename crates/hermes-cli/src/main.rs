@@ -4531,12 +4531,26 @@ async fn run_gateway_incoming_loop(
     platform: &'static str,
 ) {
     while let Some(incoming) = rx.recv().await {
-        if let Err(err) = gateway.route_message(&incoming).await {
-            tracing::warn!("Failed to route {} message: {}", platform, err);
-            let err_text = format!("⚠️ 请求处理失败，请稍后重试。({})", err);
-            let _ = gateway
-                .send_message(&incoming.platform, &incoming.chat_id, &err_text, None)
-                .await;
+        if platform == "whatsapp" {
+            let preview: String = incoming.text.chars().take(48).collect();
+            println!("[whatsapp] Gateway routing (preview={preview:?})…");
+        }
+        match gateway.route_message(&incoming).await {
+            Ok(()) => {
+                if platform == "whatsapp" {
+                    println!("[whatsapp] Gateway route finished OK");
+                }
+            }
+            Err(err) => {
+                tracing::warn!("Failed to route {} message: {}", platform, err);
+                if platform == "whatsapp" {
+                    eprintln!("[whatsapp] Gateway route failed: {err}");
+                }
+                let err_text = format!("⚠️ 请求处理失败，请稍后重试。({})", err);
+                let _ = gateway
+                    .send_message(&incoming.platform, &incoming.chat_id, &err_text, None)
+                    .await;
+            }
         }
     }
 }

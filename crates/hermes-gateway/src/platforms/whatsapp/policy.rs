@@ -8,6 +8,7 @@ use super::config::WhatsAppConfig;
 
 #[derive(Debug, Clone)]
 pub struct WhatsAppPolicy {
+    whatsapp_mode: String,
     dm_policy: String,
     allow_from: HashSet<String>,
     group_policy: String,
@@ -20,6 +21,7 @@ pub struct WhatsAppPolicy {
 impl WhatsAppPolicy {
     pub fn from_config(cfg: &WhatsAppConfig) -> Self {
         Self {
+            whatsapp_mode: cfg.whatsapp_mode(),
             dm_policy: cfg.dm_policy.clone(),
             allow_from: cfg.allow_from.iter().cloned().collect(),
             group_policy: cfg.group_policy.clone(),
@@ -62,6 +64,9 @@ impl WhatsAppPolicy {
             if !self.is_group_allowed(chat_id_raw) {
                 return false;
             }
+        } else if self.whatsapp_mode == "self-chat" {
+            // rust_client already filters non-owner chats; do not re-drop owner DMs here.
+            return true;
         } else {
             let sender_id = data
                 .get("senderId")

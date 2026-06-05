@@ -134,6 +134,11 @@ impl WhatsAppConfig {
             DEFAULT_TEXT_BATCH_SPLIT_DELAY_SECS,
         );
         cfg.mode = extra_string(ex, "mode");
+        if cfg.whatsapp_mode() == "self-chat"
+            && ex.get("text_batch_delay_seconds").is_none()
+        {
+            cfg.text_batch_delay_seconds = 1.0;
+        }
         cfg
     }
 

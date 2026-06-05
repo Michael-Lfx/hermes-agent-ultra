@@ -23,6 +23,8 @@ use wa_rs_ureq_http::UreqHttpClient;
 
 use hermes_core::errors::GatewayError;
 
+use crate::whatsapp_identity::expand_whatsapp_aliases;
+
 use super::config::WhatsAppConfig;
 use super::policy::WhatsAppPolicy;
 use super::session_store::{ensure_session_dir, mark_paired, session_db_path};
@@ -391,6 +393,18 @@ async fn handle_event(
                 }
                 println!("\nWhatsApp linked successfully!");
                 pair_done.notify_one();
+            } else if !pair_only {
+                let mode = config.whatsapp_mode();
+                let st = state.read().await;
+                let pn = st.bot_pn.as_deref().unwrap_or("unknown");
+                let lid = st.bot_lid.as_deref().unwrap_or("unknown");
+                if mode == "self-chat" {
+                    println!(
+                        "WhatsApp connected (mode=self-chat). Send in “Message yourself” on this phone; bot PN={pn}, LID={lid}."
+                    );
+                } else {
+                    println!("WhatsApp connected (mode={mode}). bot PN={pn}, LID={lid}.");
+                }
             }
         }
         Event::Disconnected(_) => {
@@ -404,6 +418,10 @@ async fn handle_event(
                     "\nWhatsApp disconnected before showing a QR code. Check network and try again."
                 );
                 pair_done.notify_one();
+            } else if !pair_only {
+                eprintln!(
+                    "WhatsApp disconnected — inbound messages will not be processed until reconnected."
+                );
             }
         }
         Event::LoggedOut(_) => {
@@ -412,6 +430,10 @@ async fn handle_event(
             if pair_only && !pairing_crypto_done.load(Ordering::SeqCst) {
                 eprintln!("\nWhatsApp session was logged out. Retry QR pairing.");
                 pair_done.notify_one();
+            } else if !pair_only {
+                eprintln!(
+                    "WhatsApp logged out — run `hermes gateway setup` (WhatsApp) to re-pair."
+                );
             }
         }
         Event::PairError(err) => {
@@ -438,7 +460,22 @@ async fn handle_event(
             let bot_lid = st.bot_lid.clone();
             drop(st);
 
-            if !should_accept_incoming(config, &info, &msg, &bot_pn, &bot_lid, &recently_sent) {
+            if !should_accept_incoming(
+                config,
+                &info,
+                &msg,
+                &bot_pn,
+                &bot_lid,
+                &bot_ids,
+                session_path,
+                &recently_sent,
+            ) {
+                let body = extract_body(&msg);
+                let preview: String = body.chars().take(48).collect();
+                println!(
+                    "[whatsapp] Ignored inbound (chat={}, from_me={}, preview={preview:?})",
+                    info.source.chat, info.source.is_from_me
+                );
                 debug!(
                     chat = %info.source.chat,
                     from_me = info.source.is_from_me,
@@ -450,16 +487,59 @@ async fn handle_event(
                 return;
             }
 
+            let chat = info.source.chat.to_string();
+            let body_preview: String = extract_body(&msg).chars().take(48).collect();
             match convert_incoming_message(&client, session_path, msg, info, bot_ids).await {
                 Ok(Some(wa_msg)) => {
-                    let _ = tx.send(wa_msg);
+                    if tx.send(wa_msg).is_err() {
+                        eprintln!(
+                            "[whatsapp] Inbound queue closed (adapter stopped?); chat={chat}"
+                        );
+                    }
                 }
-                Ok(None) => {}
-                Err(e) => warn!("[whatsapp] Failed to convert incoming message: {e}"),
+                Ok(None) => {
+                    println!(
+                        "[whatsapp] Dropped after filter (empty/edit), chat={chat}, preview={body_preview:?}"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[whatsapp] Failed to convert incoming message: {e}");
+                    warn!("[whatsapp] Failed to convert incoming message: {e}");
+                }
             }
         }
         _ => {}
     }
+}
+
+/// True when the chat JID is the owner's self-chat (PN, LID, or alias mapping).
+fn chat_matches_self(
+    chat_id: &str,
+    bot_pn: &Option<String>,
+    bot_lid: &Option<String>,
+    bot_ids: &[String],
+    session_path: &Path,
+) -> bool {
+    let chat_user = jid_user_part(chat_id);
+    if chat_user.is_empty() {
+        return false;
+    }
+    if bot_pn.as_ref().is_some_and(|pn| chat_user == *pn) {
+        return true;
+    }
+    if bot_lid.as_ref().is_some_and(|lid| chat_user == *lid) {
+        return true;
+    }
+    for id in bot_ids {
+        if jid_user_part(id) == chat_user {
+            return true;
+        }
+    }
+    let aliases = expand_whatsapp_aliases(&chat_user, Some(session_path));
+    if bot_pn.as_ref().is_some_and(|pn| aliases.contains(pn)) {
+        return true;
+    }
+    bot_lid.as_ref().is_some_and(|lid| aliases.contains(lid))
 }
 
 fn should_accept_incoming(
@@ -468,6 +548,8 @@ fn should_accept_incoming(
     msg: &wa::Message,
     bot_pn: &Option<String>,
     bot_lid: &Option<String>,
+    bot_ids: &[String],
+    session_path: &Path,
     recently_sent: &HashSet<String>,
 ) -> bool {
     let chat_id = info.source.chat.to_string();
@@ -479,20 +561,15 @@ fn should_accept_incoming(
     let from_me = info.source.is_from_me;
     let body = extract_body(msg);
 
-    if from_me {
+    if config.whatsapp_mode() == "self-chat" {
         if is_group {
             return false;
         }
-        if config.whatsapp_mode() == "bot" {
+        if !chat_matches_self(&chat_id, bot_pn, bot_lid, bot_ids, session_path) {
             return false;
         }
-        if config.whatsapp_mode() == "self-chat" {
-            let chat_user = jid_user_part(&chat_id);
-            let is_self = bot_pn.as_ref().is_some_and(|pn| chat_user == *pn)
-                || bot_lid.as_ref().is_some_and(|lid| chat_user == *lid);
-            if !is_self {
-                return false;
-            }
+        // Bot echoes and linked-device sends we originated (from_me) — skip.
+        if from_me {
             let prefix = config.effective_reply_prefix();
             if !prefix.is_empty() && body.starts_with(&prefix) {
                 return false;
@@ -501,8 +578,17 @@ fn should_accept_incoming(
                 return false;
             }
         }
-    } else if config.whatsapp_mode() == "self-chat" {
-        return false;
+        // Phone → "Message yourself" often arrives as from_me=false on the Web session.
+        return !body.trim().is_empty() || message_has_media(msg);
+    }
+
+    if from_me {
+        if is_group {
+            return false;
+        }
+        if config.whatsapp_mode() == "bot" {
+            return false;
+        }
     }
 
     !body.trim().is_empty() || message_has_media(msg)
@@ -827,6 +913,32 @@ mod tests {
     fn jid_user_part_strips_server() {
         assert_eq!(jid_user_part("15551234567@s.whatsapp.net"), "15551234567");
         assert_eq!(jid_user_part("123:10@lid"), "123");
+    }
+
+    #[test]
+    fn chat_matches_self_pn_or_lid() {
+        let pn = Some("8619996253338".into());
+        let lid = Some("248662248677608".into());
+        let ids = vec![
+            "8619996253338@s.whatsapp.net".into(),
+            "248662248677608@lid".into(),
+        ];
+        let session = std::path::Path::new(".");
+        assert!(chat_matches_self(
+            "8619996253338@s.whatsapp.net",
+            &pn,
+            &lid,
+            &ids,
+            session
+        ));
+        assert!(chat_matches_self("248662248677608@lid", &pn, &lid, &ids, session));
+        assert!(!chat_matches_self(
+            "15551234567@s.whatsapp.net",
+            &pn,
+            &lid,
+            &ids,
+            session
+        ));
     }
 
     #[test]

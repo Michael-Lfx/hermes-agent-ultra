@@ -97,6 +97,16 @@ impl WhatsAppAdapter {
     }
 
     async fn connect(&self) -> Result<(), GatewayError> {
+        if self.inner.client.is_connected().await
+            && self.inner.inbound_task.lock().await.is_some()
+        {
+            return Ok(());
+        }
+        if let Some(task) = self.inner.inbound_task.lock().await.take() {
+            task.abort();
+        }
+        self.inner.client.stop().await;
+
         let session_path = self.inner.config.session_path();
         if has_legacy_baileys_session(&session_path) && !is_paired(&session_path) {
             self.set_fatal(
@@ -126,7 +136,18 @@ impl WhatsAppAdapter {
         let handle = tokio::spawn(async move {
             while let Some(msg) = wa_rx.recv().await {
                 if let Some(incoming) = build_incoming(&inner, &msg).await {
+                    let preview: String = incoming.text.chars().take(48).collect();
+                    println!(
+                        "[whatsapp] Queued for agent (chat={}, preview={preview:?}, ~{:.0}s batch)",
+                        incoming.chat_id, inner.config.text_batch_delay_seconds
+                    );
                     dispatch_incoming(&inner, incoming).await;
+                } else {
+                    let preview: String = msg.body.chars().take(48).collect();
+                    println!(
+                        "[whatsapp] Dropped after accept (policy/filter): chat={}, preview={preview:?}",
+                        msg.chat_id
+                    );
                 }
             }
         });
@@ -189,6 +210,10 @@ async fn build_incoming(inner: &WhatsAppInner, msg: &WaMessage) -> Option<Incomi
 async fn dispatch_incoming(inner: &Arc<WhatsAppInner>, incoming: IncomingMessage) {
     let tx = inner.inbound_tx.read().await.clone();
     let Some(tx) = tx else {
+        let preview: String = incoming.text.chars().take(48).collect();
+        eprintln!(
+            "[whatsapp] Cannot hand off (gateway inbound channel not wired yet), preview={preview:?}"
+        );
         return;
     };
     let key = batch_key(&incoming);
@@ -198,7 +223,16 @@ async fn dispatch_incoming(inner: &Arc<WhatsAppInner>, incoming: IncomingMessage
         .enqueue(key, incoming, move |merged| {
             let tx = tx_clone.clone();
             async move {
-                let _ = tx.send(merged).await;
+                let preview: String = merged.text.chars().take(48).collect();
+                if let Err(e) = tx.send(merged).await {
+                    eprintln!(
+                        "[whatsapp] Failed to hand off to gateway router (preview={preview:?}): {e}"
+                    );
+                } else {
+                    println!(
+                        "[whatsapp] Handed off to gateway router (preview={preview:?})"
+                    );
+                }
             }
         })
         .await;
@@ -208,6 +242,11 @@ async fn dispatch_incoming(inner: &Arc<WhatsAppInner>, incoming: IncomingMessage
 impl PlatformAdapter for WhatsAppAdapter {
     async fn start(&self) -> Result<(), GatewayError> {
         info!("WhatsApp Rust adapter starting");
+        let mode = self.inner.config.whatsapp_mode();
+        println!(
+            "WhatsApp: connecting (mode={mode}, session={})…",
+            self.inner.config.session_path().display()
+        );
         self.connect().await?;
         self.inner.base.mark_running();
         Ok(())
@@ -269,7 +308,11 @@ impl PlatformAdapter for WhatsAppAdapter {
                 .inner
                 .client
                 .send_text(chat_id, chunk, reply)
-                .await?;
+                .await
+                .map_err(|e| {
+                    eprintln!("[whatsapp] Send failed (chat={chat_id}): {e}");
+                    e
+                })?;
             last_id = result;
             if chunks.len() > 1 && idx + 1 < chunks.len() {
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
