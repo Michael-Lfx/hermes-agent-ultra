@@ -64,6 +64,7 @@ pub async fn spawn_voice_chat(
         cfg.orchestrator.clone(),
         event_tx,
         cfg.busy_replies.cooldown_secs,
+        cfg.busy_replies.enabled,
         playback.clone(),
         play_gen.clone(),
     );

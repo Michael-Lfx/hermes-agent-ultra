@@ -161,15 +161,17 @@ impl VoiceChatSession {
                     }
                     vad.feed(&chunk.samples_f32);
 
-                    if try_barge_in(
-                        "vad",
-                        &orch,
-                        &mut state,
-                        &mut vad,
-                        &playback,
-                        &bridge,
-                        None,
-                    ) {
+                    if !self.cfg.busy_replies.enabled
+                        && try_barge_in(
+                            "vad",
+                            &orch,
+                            &mut state,
+                            &mut vad,
+                            &playback,
+                            &bridge,
+                            None,
+                        )
+                    {
                         continue;
                     }
 
@@ -243,15 +245,17 @@ impl VoiceChatSession {
                             if !wake_phase.allows_dialog() {
                                 continue;
                             }
-                            if try_barge_in(
-                                "asr-partial",
-                                &orch,
-                                &mut state,
-                                &mut vad,
-                                &playback,
-                                &bridge,
-                                Some(text.as_str()),
-                            ) {
+                            if !self.cfg.busy_replies.enabled
+                                && try_barge_in(
+                                    "asr-partial",
+                                    &orch,
+                                    &mut state,
+                                    &mut vad,
+                                    &playback,
+                                    &bridge,
+                                    Some(text.as_str()),
+                                )
+                            {
                                 continue;
                             }
                         }
@@ -270,7 +274,12 @@ impl VoiceChatSession {
                             if !wake_phase.allows_dialog() {
                                 continue;
                             }
-                            if bridge.is_agent_busy() {
+                            let turn_in_progress = bridge.is_agent_busy()
+                                || bridge.is_output_busy(
+                                    playback.buffered_samples(),
+                                    playback.sample_rate(),
+                                );
+                            if turn_in_progress {
                                 if self.cfg.busy_replies.enabled {
                                     bridge.on_asr_final_while_busy(text).await;
                                 } else {
@@ -285,23 +294,6 @@ impl VoiceChatSession {
                                     );
                                     bridge.on_asr_final_request_interrupt(text).await;
                                 }
-                                last_final = None;
-                                continue;
-                            }
-                            if bridge.is_output_busy(
-                                playback.buffered_samples(),
-                                playback.sample_rate(),
-                            ) {
-                                try_barge_in(
-                                    "asr-final-playout",
-                                    &orch,
-                                    &mut state,
-                                    &mut vad,
-                                    &playback,
-                                    &bridge,
-                                    Some(text.as_str()),
-                                );
-                                bridge.on_asr_final_request_interrupt(text).await;
                                 last_final = None;
                                 continue;
                             }

@@ -19,7 +19,8 @@ impl WakePhase {
     }
 
     pub fn allows_dialog(&self) -> bool {
-        matches!(self, WakePhase::Active)
+        // Dormant requires wake word; grace/idle windows accept speech without KWS.
+        !matches!(self, WakePhase::Dormant)
     }
 
     pub fn check_timeout(&self, now: Instant) -> bool {

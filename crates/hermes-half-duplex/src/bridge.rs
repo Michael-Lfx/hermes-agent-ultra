@@ -50,6 +50,7 @@ pub struct VoiceChatBridge {
     sent_early: Mutex<bool>,
     pending_utterance: Mutex<Option<String>>,
     busy_gate: Mutex<BusyReplyGate>,
+    busy_replies_enabled: bool,
     status: Mutex<VoiceChatStatus>,
 }
 
@@ -59,6 +60,7 @@ impl VoiceChatBridge {
         orch: OrchestratorConfig,
         utterance_tx: mpsc::Sender<VoiceChatEvent>,
         busy_cooldown_secs: u64,
+        busy_replies_enabled: bool,
         playback: Arc<AudioPlayback>,
         play_gen: Arc<AtomicU64>,
     ) -> Arc<Self> {
@@ -75,8 +77,13 @@ impl VoiceChatBridge {
             sent_early: Mutex::new(false),
             pending_utterance: Mutex::new(None),
             busy_gate: Mutex::new(BusyReplyGate::new(busy_cooldown_secs)),
+            busy_replies_enabled,
             status: Mutex::new(VoiceChatStatus::Listening),
         })
+    }
+
+    pub fn busy_replies_enabled(&self) -> bool {
+        self.busy_replies_enabled
     }
 
     pub async fn set_status(self: &Arc<Self>, st: VoiceChatStatus) {
@@ -196,6 +203,17 @@ impl VoiceChatBridge {
 
     pub async fn on_asr_final_while_busy(self: &Arc<Self>, text: String) {
         self.queue_pending_utterance(text.clone()).await;
+        // Do not talk over in-flight assistant TTS; queue only until playout drains.
+        if self.is_playout_active() {
+            let _ = self
+                .utterance_tx
+                .send(VoiceChatEvent::BusyReply {
+                    phrase: String::new(),
+                    heard: text,
+                })
+                .await;
+            return;
+        }
         let mut gate = self.busy_gate.lock().await;
         if !gate.should_play() {
             let _ = self
@@ -289,11 +307,29 @@ impl VoiceChatBridge {
         if let Err(e) = self.tts.finish_turn_async().await {
             warn!(error = %e, "tts finish failed");
         }
-        self.agent_busy.store(false, Ordering::SeqCst);
         // playout_active stays true until playback drains or user barges in.
         let _ = self.set_status(VoiceChatStatus::Listening).await;
         let _ = self.utterance_tx.send(VoiceChatEvent::TurnComplete).await;
 
+        if self.busy_replies_enabled {
+            // Hold agent_busy until speaker queue drains so new speech queues instead of barge-in.
+            let this = self.clone();
+            let playback = self.playback.clone();
+            tokio::spawn(async move {
+                playback
+                    .wait_drain(std::time::Duration::from_secs(300))
+                    .await;
+                this.playout_active.store(false, Ordering::SeqCst);
+                this.release_busy_and_drain_pending().await;
+            });
+        } else {
+            self.agent_busy.store(false, Ordering::SeqCst);
+            self.release_busy_and_drain_pending().await;
+        }
+    }
+
+    async fn release_busy_and_drain_pending(self: &Arc<Self>) {
+        self.agent_busy.store(false, Ordering::SeqCst);
         let pending = self.pending_utterance.lock().await.take();
         if let Some(text) = pending {
             if let Err(e) = self.trigger_user_utterance(text).await {

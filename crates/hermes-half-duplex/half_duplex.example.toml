@@ -36,8 +36,9 @@ input_device = ""
 output_device = ""
 prefer_usb = false
 
-# When enabled=false (default), user speech while the agent is busy interrupts the
-# current LLM turn and starts a new one. When true, plays random wait phrases instead.
+# When enabled=true: no barge-in while the agent is thinking or TTS is playing; extra
+# speech is queued (or gets a cooldown-gated busy phrase). When false (default), user
+# speech during TTS/LLM interrupts the current turn.
 [busy_replies]
 enabled = false
 cooldown_secs = 10
