@@ -58,6 +58,7 @@ impl TtsClient {
                 sample_rate,
                 &format,
                 task_started_timeout_sec,
+                finish_timeout_sec,
                 cmd_rx,
                 audio_tx,
             )
@@ -143,6 +144,7 @@ async fn run_tts_driver(
     sample_rate: u32,
     format: &str,
     task_started_timeout_sec: u64,
+    finish_timeout_sec: u64,
     mut cmd_rx: mpsc::Receiver<TtsCommand>,
     audio_tx: mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
@@ -155,6 +157,7 @@ async fn run_tts_driver(
             sample_rate,
             format,
             task_started_timeout_sec,
+            finish_timeout_sec,
             &mut cmd_rx,
             &audio_tx,
         )
@@ -174,6 +177,7 @@ async fn run_tts_connection(
     sample_rate: u32,
     format: &str,
     task_started_timeout_sec: u64,
+    finish_timeout_sec: u64,
     cmd_rx: &mut mpsc::Receiver<TtsCommand>,
     audio_tx: &mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
@@ -205,18 +209,30 @@ async fn run_tts_connection(
                     TtsCommand::WarmupStart(done) => {
                         pending_finish = None;
                         pending_interrupt = None;
-                        let r = start_new_task(
-                            &mut write,
-                            &mut read,
-                            model,
-                            voice,
-                            sample_rate,
-                            format,
-                            task_started_timeout_sec,
-                            &mut task_id,
-                            &mut ready,
-                            &audio_tx,
-                        )
+                        let r = async {
+                            start_new_task(
+                                &mut write,
+                                &mut read,
+                                model,
+                                voice,
+                                sample_rate,
+                                format,
+                                task_started_timeout_sec,
+                                &mut task_id,
+                                &mut ready,
+                                &audio_tx,
+                            )
+                            .await?;
+                            // Close the empty warmup task; otherwise DashScope idle-tasks out (~23s).
+                            finish_open_task(
+                                &mut write,
+                                &mut read,
+                                &task_id,
+                                &mut ready,
+                                finish_timeout_sec,
+                            )
+                            .await
+                        }
                         .await;
                         let _ = done.send(r);
                     }
@@ -291,19 +307,30 @@ async fn run_tts_connection(
                                     let msg = dashscope::header_field(&v, "error_message")
                                         .unwrap_or_else(|| "task failed".into());
                                     let err = || HalfDuplexError::Tts(msg.clone());
+                                    let had_waiter = pending_finish.is_some() || pending_interrupt.is_some();
                                     if let Some(done) = pending_finish.take() {
                                         let _ = done.send(Err(err()));
                                     }
                                     if let Some(done) = pending_interrupt.take() {
                                         let _ = done.send(Err(err()));
                                     }
+                                    let has_waiter = had_waiter;
                                     if msg.contains("timeout") {
-                                        error!(
-                                            error = %msg,
-                                            "tts failed (check board can reach dashscope WSS and DNS; try raising tts.task_started_timeout_sec)"
-                                        );
-                                    } else {
+                                        if has_waiter {
+                                            error!(
+                                                error = %msg,
+                                                "tts failed (check network to dashscope WSS; try tts.task_started_timeout_sec)"
+                                            );
+                                        } else {
+                                            warn!(
+                                                error = %msg,
+                                                "tts task-failed with no pending turn (stale task?)"
+                                            );
+                                        }
+                                    } else if has_waiter {
                                         error!(error = %msg, "tts failed");
+                                    } else {
+                                        warn!(error = %msg, "tts task-failed with no pending turn");
                                     }
                                 }
                                 _ => {}
@@ -381,4 +408,65 @@ async fn start_new_task(
         }
     }
     Err(HalfDuplexError::Tts("task-started timeout".into()))
+}
+
+/// Send `finish-task` and wait for `task-finished` on the same websocket read half.
+async fn finish_open_task(
+    write: &mut futures_util::stream::SplitSink<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+        Message,
+    >,
+    read: &mut futures_util::stream::SplitStream<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    >,
+    task_id: &str,
+    ready: &mut bool,
+    finish_timeout_sec: u64,
+) -> Result<()> {
+    if !*ready {
+        return Ok(());
+    }
+    let fin = finish_task(task_id);
+    write
+        .send(Message::Text(fin.to_string().into()))
+        .await
+        .map_err(|e| HalfDuplexError::Tts(e.to_string()))?;
+
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(finish_timeout_sec.max(5));
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(v) = serde_json::from_str(&t) {
+                            match event_name(&v).as_deref() {
+                                Some("task-finished") => {
+                                    *ready = false;
+                                    return Ok(());
+                                }
+                                Some("task-failed") => {
+                                    *ready = false;
+                                    return Err(HalfDuplexError::Tts(
+                                        dashscope::header_field(&v, "error_message")
+                                            .unwrap_or_else(|| "task failed".into()),
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    Some(Err(e)) => return Err(HalfDuplexError::Tts(e.to_string())),
+                    None => return Err(HalfDuplexError::Tts("eof".into())),
+                    _ => {}
+                }
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+    }
+    Err(HalfDuplexError::Tts("finish-task timeout".into()))
 }

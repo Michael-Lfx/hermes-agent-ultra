@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::asr::{AsrClient, AsrEvent};
-use crate::audio::{AudioCapture, AudioPlayback};
+use crate::audio::{AudioCapture, AudioFault, AudioPlayback};
 use crate::bridge::{VoiceChatBridge, VoiceChatStatus};
 use crate::config::Config;
 use crate::error::Result;
@@ -26,6 +26,7 @@ pub struct VoiceChatSession {
     tts_rx: mpsc::Receiver<TtsAudio>,
     playback: Arc<AudioPlayback>,
     play_gen: Arc<AtomicU64>,
+    audio_fault: Arc<AudioFault>,
 }
 
 impl VoiceChatSession {
@@ -36,6 +37,7 @@ impl VoiceChatSession {
         tts_rx: mpsc::Receiver<TtsAudio>,
         playback: Arc<AudioPlayback>,
         play_gen: Arc<AtomicU64>,
+        audio_fault: Arc<AudioFault>,
     ) -> Self {
         Self {
             cfg,
@@ -44,6 +46,7 @@ impl VoiceChatSession {
             tts_rx,
             playback,
             play_gen,
+            audio_fault,
         }
     }
 
@@ -52,7 +55,11 @@ impl VoiceChatSession {
         let wake_cfg = self.cfg.wake.clone();
         let wake_enabled = wake_cfg.enabled;
 
-        let capture = AudioCapture::start(&self.cfg.audio, self.cfg.asr.chunk_ms)?;
+        let capture = AudioCapture::start(
+            &self.cfg.audio,
+            self.cfg.asr.chunk_ms,
+            self.audio_fault.clone(),
+        )?;
         let playback = self.playback;
         let _play_gen = self.play_gen;
 
@@ -74,7 +81,12 @@ impl VoiceChatSession {
             WakePhase::Active
         };
 
-        self.bridge.warmup().await?;
+        if let Err(e) = self.bridge.warmup().await {
+            warn!(
+                error = %e,
+                "tts warmup failed; voice chat continues but first speak may be slow"
+            );
+        }
         let mut tts_rx = self.tts_rx;
 
         let (pcm_tx, mut pcm_rx) = mpsc::channel(64);
@@ -131,6 +143,10 @@ impl VoiceChatSession {
         loop {
             if self.cancel.is_cancelled() {
                 break;
+            }
+
+            for msg in self.audio_fault.drain_messages() {
+                bridge.send_error(msg).await;
             }
 
             bridge.clear_playout_if_drained();

@@ -5,8 +5,9 @@ use std::thread::{self, JoinHandle};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
-use tracing::info;
+use tracing::{error, info};
 
+use crate::audio::fault::AudioFault;
 use crate::config::AudioConfig;
 use crate::error::{HalfDuplexError, Result};
 
@@ -28,7 +29,11 @@ struct PlaybackState {
 }
 
 impl AudioPlayback {
-    pub fn start(audio_cfg: &AudioConfig, source_rate: u32) -> Result<Self> {
+    pub fn start(
+        audio_cfg: &AudioConfig,
+        source_rate: u32,
+        audio_fault: Arc<AudioFault>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
         let device = pick_output_device(&host, audio_cfg)?;
         let config = device
@@ -63,7 +68,10 @@ impl AudioPlayback {
 
         let stream_config: cpal::StreamConfig = config.clone().into();
         let thread = thread::spawn(move || {
-            let err_fn = |e| eprintln!("playback error: {e}");
+            let fault_cb = audio_fault.clone();
+            let err_fn = move |e: cpal::StreamError| {
+                fault_cb.report_playback(e);
+            };
             let stream = match config.sample_format() {
                 SampleFormat::F32 => device.build_output_stream(
                     &stream_config,
@@ -98,19 +106,19 @@ impl AudioPlayback {
                     None,
                 ),
                 other => {
-                    eprintln!("unsupported playback format {other:?}");
+                    error!(format = ?other, "unsupported playback sample format");
                     return;
                 }
             };
             let stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("build playback: {e}");
+                    error!(error = %e, "build playback stream failed");
                     return;
                 }
             };
             if let Err(e) = stream.play() {
-                eprintln!("play playback: {e}");
+                error!(error = %e, "start playback stream failed");
             }
             loop {
                 thread::sleep(std::time::Duration::from_secs(1));

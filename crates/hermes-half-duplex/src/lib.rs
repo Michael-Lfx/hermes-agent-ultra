@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::audio::AudioPlayback;
+use crate::audio::{AudioFault, AudioPlayback};
 use crate::tts::TtsClient;
 
 pub use bridge::{VoiceChatBridge, VoiceChatEvent, VoiceChatStatus};
@@ -47,9 +47,11 @@ pub async fn spawn_voice_chat(
 ) -> Result<(VoiceChatHandle, mpsc::Receiver<VoiceChatEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(64);
     let (tts, tts_rx) = TtsClient::connect(&cfg.dashscope, &cfg.tts).await?;
+    let audio_fault = AudioFault::new_shared();
     let playback = Arc::new(AudioPlayback::start(
         &cfg.audio,
         cfg.tts.sample_rate,
+        audio_fault.clone(),
     )?);
     let play_gen = Arc::new(AtomicU64::new(0));
     let bridge = VoiceChatBridge::new(
@@ -68,6 +70,7 @@ pub async fn spawn_voice_chat(
         tts_rx,
         playback,
         play_gen,
+        audio_fault,
     );
     // WebRtcVad is not `Send`; run the capture/ASR loop on a dedicated thread.
     let bridge_err = bridge.clone();

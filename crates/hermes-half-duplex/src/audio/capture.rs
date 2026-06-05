@@ -7,6 +7,7 @@ use cpal::SampleFormat;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
 use tracing::{error, info};
 
+use crate::audio::fault::AudioFault;
 use crate::audio::pcm::f32_to_i16_le;
 use crate::config::AudioConfig;
 use crate::error::{HalfDuplexError, Result};
@@ -24,7 +25,11 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    pub fn start(audio_cfg: &AudioConfig, chunk_ms: u32) -> Result<Self> {
+    pub fn start(
+        audio_cfg: &AudioConfig,
+        chunk_ms: u32,
+        audio_fault: Arc<AudioFault>,
+    ) -> Result<Self> {
         let host = cpal::default_host();
         let device = pick_input_device(&host, audio_cfg)?;
         let config = device
@@ -72,7 +77,10 @@ impl AudioCapture {
                 None
             };
 
-            let err_fn = |e| eprintln!("capture error: {e}");
+            let fault_cb = audio_fault.clone();
+            let err_fn = move |e: cpal::StreamError| {
+                fault_cb.report_capture(e);
+            };
 
             let stream = match config.sample_format() {
                 SampleFormat::F32 => device.build_input_stream(
@@ -108,7 +116,7 @@ impl AudioCapture {
                     None,
                 ),
                 other => {
-                    eprintln!("unsupported format {other:?}");
+                    error!(format = ?other, "unsupported capture sample format");
                     return;
                 }
             };
@@ -116,12 +124,12 @@ impl AudioCapture {
             let stream = match stream {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("build stream: {e}");
+                    error!(error = %e, "build capture stream failed");
                     return;
                 }
             };
             if let Err(e) = stream.play() {
-                eprintln!("play stream: {e}");
+                error!(error = %e, "start capture stream failed");
                 return;
             }
             loop {
