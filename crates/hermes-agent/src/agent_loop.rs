@@ -3173,7 +3173,7 @@ impl AgentLoop {
         interrupt: InterruptController,
     ) -> Self {
         let route_learning = Arc::new(Mutex::new(Self::load_route_learning_state(&config)));
-        let code_index = Self::init_code_index(&config);
+        // let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
         let active_runtime = Mutex::new(stored_primary_runtime.clone());
@@ -3198,7 +3198,7 @@ impl AgentLoop {
             )),
             oauth_refresh_backoff: Arc::new(Mutex::new(HashMap::new())),
             sub_agent_orchestrator: None,
-            code_index,
+            code_index: None,
             lsp_context,
             route_learning,
             stored_primary_runtime,
@@ -3238,7 +3238,7 @@ impl AgentLoop {
             return None;
         }
         let mut index = CodeIndex::default_for_workspace(workspace_root);
-        let _ = index.ensure_fresh();
+        // let _ = index.ensure_fresh(); // high time comsumption, should be called in a separate thread
         Some(Arc::new(Mutex::new(index)))
     }
 
