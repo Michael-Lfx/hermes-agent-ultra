@@ -1,0 +1,206 @@
+name: Nightly Build
+
+on:
+  schedule:
+    - cron: '0 16 * * *'  # UTC 16:00 = 北京时间 00:00
+  workflow_dispatch:       # 允许手动触发
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Phase 1: Create nightly tag + cleanup ──────────────────────────────────
+
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      nightly-tag: ${{ steps.create-tag.outputs.nightly_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create nightly tag
+        id: create-tag
+        run: |
+          VERSION="0.1.0-nightly.$(date +%Y%m%d)"
+          TAG="v${VERSION}"
+          echo "nightly_tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Creating nightly tag: ${TAG}"
+
+          # Delete existing tag with same name if it exists (re-run on same day)
+          git push origin --delete "${TAG}" 2>/dev/null || true
+          git tag -d "${TAG}" 2>/dev/null || true
+
+          # Create and push new tag
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "Successfully pushed tag: ${TAG}"
+
+      - name: Cleanup old nightly tags (keep last 7)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching nightly tags via GitHub API..."
+          ALL_TAGS=$(gh api "repos/${{ github.repository }}/tags?per_page=100" \
+            --jq '.[].name' | grep -E '^v[0-9].*-nightly\.' | sort -V)
+
+          TOTAL=$(echo "$ALL_TAGS" | grep -c . || true)
+          echo "Found ${TOTAL} nightly tags"
+
+          if [ "$TOTAL" -gt 7 ]; then
+            REMOVE_COUNT=$((TOTAL - 7))
+            echo "Removing ${REMOVE_COUNT} old nightly tags (keeping newest 7)..."
+            TAGS_TO_DELETE=$(echo "$ALL_TAGS" | head -n "$REMOVE_COUNT")
+            echo "$TAGS_TO_DELETE" | while read -r tag; do
+              echo "  Deleting: ${tag}"
+              gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/${tag}" 2>/dev/null || true
+            done
+          else
+            echo "Only ${TOTAL} nightly tags exist, no cleanup needed (threshold: 7)"
+          fi
+
+  # ── Phase 2: Build all platforms in parallel ───────────────────────────────
+
+  cross-build:
+    needs: [prepare]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            artifact: hermes-linux-x86_64.tar.gz
+            binary: hermes
+          - target: aarch64-unknown-linux-gnu
+            artifact: hermes-linux-aarch64.tar.gz
+            binary: hermes
+          - target: x86_64-unknown-linux-musl
+            artifact: hermes-linux-x86_64-musl.tar.gz
+            binary: hermes
+          - target: x86_64-pc-windows-gnu
+            artifact: hermes-windows-x86_64.zip
+            binary: hermes.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.nightly-tag }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build release binary
+        env:
+          AWS_LC_SYS_CMAKE_BUILDER: "1"
+          XDG_CACHE_HOME: /tmp/cross-cache
+        run: cross build --release --target ${{ matrix.target }} -p hermes-cli
+      - name: Package artifact (tar.gz)
+        if: "!contains(matrix.artifact, '.zip')"
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          tar -C dist -czf ${{ matrix.artifact }} ${{ matrix.binary }}
+      - name: Package artifact (zip)
+        if: contains(matrix.artifact, '.zip')
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
+          cd dist && zip ../${{ matrix.artifact }} ${{ matrix.binary }}
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: ${{ matrix.artifact }}
+
+  macos-build:
+    needs: [prepare]
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            artifact: hermes-macos-aarch64.tar.gz
+          - runner: macos-latest
+            target: x86_64-apple-darwin
+            artifact: hermes-macos-x86_64.tar.gz
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.nightly-tag }}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} -p hermes-cli
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/hermes dist/
+          tar -C dist -czf ${{ matrix.artifact }} hermes
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-${{ matrix.target }}
+          path: ${{ matrix.artifact }}
+
+  # ── Phase 3: Package + upload to ModelScope ─────────────────────────────────
+
+  modelscope-upload:
+    needs: [prepare, cross-build, macos-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: nightly-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist/
+          sha256sum hermes-*.tar.gz hermes-*.zip > checksums.sha256
+          cat checksums.sha256
+
+      - name: Upload to ModelScope
+        env:
+          MODELSCOPE_TOKEN: ${{ secrets.MODELSCOPE_TOKEN }}
+        if: ${{ env.MODELSCOPE_TOKEN != '' }}
+        run: |
+          cp scripts/install.sh dist/
+          # Homebrew formula is optional for nightly; copy if present
+          if [ -f Formula/hermes-agent-ultra.rb ]; then
+            cp Formula/hermes-agent-ultra.rb dist/
+          fi
+          pip install modelscope
+          python3 scripts/upload-modelscope-release.py \
+            --repo flowy2025/agent \
+            --version "${{ needs.prepare.outputs.nightly-tag }}" \
+            --dist-dir dist/
+
+      - name: Cleanup old nightly artifacts on ModelScope (keep last 7)
+        env:
+          MODELSCOPE_TOKEN: ${{ secrets.MODELSCOPE_TOKEN }}
+        if: ${{ env.MODELSCOPE_TOKEN != '' }}
+        run: |
+          python3 scripts/cleanup-modelscope-nightly.py \
+            --repo flowy2025/agent \
+            --keep 7 || echo "WARNING: ModelScope cleanup failed, continuing anyway"

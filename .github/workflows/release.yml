@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-nightly.*"  # nightly tags handled by nightly.yml
 
 permissions:
   contents: read
@@ -200,14 +201,4 @@ jobs:
             dist/security/release-sbom.cdx.json
             scripts/install.sh
             Formula/hermes-agent-ultra.rb
-      - name: Upload to ModelScope
-        env:
-          MODELSCOPE_TOKEN: ${{ secrets.MODELSCOPE_TOKEN }}
-        run: |
-          cp scripts/install.sh dist/
-          cp Formula/hermes-agent-ultra.rb dist/
-          pip install modelscope
-          python3 scripts/upload-modelscope-release.py \
-            --repo flowy2025/agent \
-            --version "${GITHUB_REF_NAME}" \
-            --dist-dir dist/
+
