@@ -381,6 +381,73 @@ git push origin v1.2.1
 
 ---
 
+## 三-A、Nightly 自动构建
+
+### 触发机制
+
+- **定时触发**：每日 UTC 16:00（北京时间 00:00）自动执行
+- **手动触发**：支持 GitHub Actions `workflow_dispatch` 手动触发
+- **Workflow 文件**：`.github/workflows/nightly.yml`
+
+### 与正式 Release 的隔离
+
+- `release.yml` 通过 `!v*-nightly.*` 排除规则，nightly tag 不会触发正式发布流程
+- Nightly 不会创建 GitHub Release（避免噪音）
+- Nightly 直接上传到 ModelScope nightly 渠道
+
+### Tag 命名与保留策略
+
+- **命名格式**：`v0.1.0-nightly.YYYYMMDD`（如 `v0.1.0-nightly.20260605`）
+- **保留策略**：仅保留最近 7 个 nightly tag，超出部分自动清理
+- **同日重跑**：同一天重复触发会先删除同名 tag 再重建
+
+### Nightly 构建流水线
+
+```
+prepare (创建 tag + 清理旧 tag)
+    ├── cross-build (Linux x86_64, aarch64, musl + Windows)
+    └── macos-build (aarch64, x86_64)
+            └── modelscope-upload (打包 + 上传 + 清理旧 artifact)
+```
+
+| 阶段 | 操作 | 说明 |
+|------|------|------|
+| prepare | 创建 nightly tag | 格式 `v0.1.0-nightly.YYYYMMDD`，清理 >7 个的旧 tag |
+| cross-build | 多平台编译 | Linux (x86_64, aarch64, musl) + Windows |
+| macos-build | macOS 编译 | aarch64 + x86_64 |
+| modelscope-upload | 上传到 ModelScope | 生成 checksums + 上传 manifest 到 nightly channel |
+
+### ModelScope Artifact 清理
+
+- 脚本：`scripts/cleanup-modelscope-nightly.py`
+- 保留最近 7 个 nightly 版本的 artifact
+- 支持 `--dry-run` 预览模式
+- 支持 `--keep N` 自定义保留数量
+
+### 用户获取 Nightly 版本
+
+```bash
+# 检查 nightly 渠道最新版本
+hermes update --check --channel nightly
+
+# 更新到 nightly 最新
+hermes update --channel nightly
+
+# 回到 stable
+hermes update --channel stable
+```
+
+### Nightly 故障排查
+
+| 症状 | 可能原因 | 解决方法 |
+|------|---------|----------|
+| Nightly CI 未触发 | GitHub schedule 延迟（正常30分钟内） | 手动 workflow_dispatch 触发 |
+| Tag 创建失败 | 权限不足 | 检查 `GITHUB_TOKEN` permissions 是否包含 `contents: write` |
+| ModelScope 上传失败 | `MODELSCOPE_TOKEN` 未配置 | 在 repo Settings > Secrets 中配置 |
+| 旧 tag 未清理 | GitHub API rate limit | 下次运行会补偿清理 |
+
+---
+
 ## 四、渠道（Channel）推导规则详解
 
 ### 4.1 推导算法
