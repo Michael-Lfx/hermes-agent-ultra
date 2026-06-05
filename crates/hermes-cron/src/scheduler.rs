@@ -156,6 +156,10 @@ pub struct CronScheduler {
     stop_notify: Arc<Notify>,
     /// Whether the scheduler loop is running.
     running: Arc<Mutex<bool>>,
+    /// Generation counter: incremented on structural changes (remove_job).
+    /// The scheduler loop checks this after job execution to avoid
+    /// re-inserting a job that was removed while it was running.
+    generation: Arc<Mutex<u64>>,
 }
 
 impl CronScheduler {
@@ -168,6 +172,7 @@ impl CronScheduler {
             completion_tx: None,
             stop_notify: Arc::new(Notify::new()),
             running: Arc::new(Mutex::new(false)),
+            generation: Arc::new(Mutex::new(0)),
         }
     }
 
@@ -238,6 +243,7 @@ impl CronScheduler {
         let completion_tx = self.completion_tx.clone();
         let stop_notify = self.stop_notify.clone();
         let running_flag = self.running.clone();
+        let generation = self.generation.clone();
 
         tokio::spawn(async move {
             loop {
@@ -306,9 +312,13 @@ impl CronScheduler {
                             runnable_job.prompt =
                                 format!("{}\n\n{}", ctx_prefix, runnable_job.prompt);
                         }
+                        // Capture generation before releasing lock: if it
+                        // changes while the job is running, remove_job was
+                        // called and we must NOT re-insert the stale clone.
+                        let gen_before = *generation.lock().await;
                         drop(guard);
 
-                        // Run the job
+                        // Execute the job
                         tracing::info!(
                             "Executing cron job '{}' ({})",
                             job.name.as_deref().unwrap_or(&job.id),
@@ -352,6 +362,18 @@ impl CronScheduler {
                                 );
                                 job.mark_failed();
                             }
+                        }
+
+                        // If generation changed, the job was removed while
+                        // executing — skip re-insertion and persistence.
+                        let gen_after = *generation.lock().await;
+                        if gen_after != gen_before {
+                            tracing::info!(
+                                "Skipping re-insert of job '{}' — removed during execution",
+                                job.id
+                            );
+                            guard = jobs.lock().await;
+                            continue;
                         }
 
                         // Update the job in memory and persist
@@ -540,6 +562,9 @@ impl CronScheduler {
         if guard.remove(id).is_none() {
             return Err(CronError::JobNotFound(id.to_string()));
         }
+        // Bump generation so the scheduler loop knows the map was structurally
+        // modified and must not re-insert a stale clone of this job.
+        *self.generation.lock().await += 1;
         drop(guard);
 
         // Delete from persistence
