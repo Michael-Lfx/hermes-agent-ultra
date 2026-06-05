@@ -5,7 +5,7 @@ use std::thread::{self, JoinHandle};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
 use rubato::{Resampler, SincFixedIn, SincInterpolationType, SincInterpolationParameters, WindowFunction};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::audio::pcm::f32_to_i16_le;
 use crate::config::AudioConfig;
@@ -52,7 +52,8 @@ impl AudioCapture {
             let tx = tx.clone();
 
             let ratio = TARGET_RATE as f64 / sample_rate as f64;
-            let mut resampler: Option<SincFixedIn<f32>> = if (sample_rate as f64 - TARGET_RATE as f64).abs() > 1.0 {
+            let needs_resample = (sample_rate as f64 - TARGET_RATE as f64).abs() > 1.0;
+            let mut resampler: Option<SincFixedIn<f32>> = if needs_resample {
                 let params = SincInterpolationParameters {
                     sinc_len: 256,
                     f_cutoff: 0.95,
@@ -63,8 +64,8 @@ impl AudioCapture {
                 match SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_samples_16k * 2, 1) {
                     Ok(r) => Some(r),
                     Err(e) => {
-                        eprintln!("resampler init failed: {e}");
-                        None
+                        error!(error = %e, native_rate = sample_rate, "resampler init failed");
+                        return;
                     }
                 }
             } else {

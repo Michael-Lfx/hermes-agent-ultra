@@ -1,8 +1,9 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::{self, JoinHandle};
 
 use sherpa_onnx::{KeywordSpotter, KeywordSpotterConfig};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::WakeConfig;
 use crate::error::{HalfDuplexError, Result};
@@ -11,12 +12,20 @@ use crate::kws::keywords::encode_phrases;
 pub struct WakeDetectorHandle {
     pcm_tx: SyncSender<Vec<f32>>,
     wake_rx: Receiver<()>,
+    dropped_pcm: AtomicBool,
     _thread: JoinHandle<()>,
 }
 
 impl WakeDetectorHandle {
     pub fn feed(&self, samples: &[f32]) {
-        let _ = self.pcm_tx.try_send(samples.to_vec());
+        if self.pcm_tx.try_send(samples.to_vec()).is_err() {
+            if !self
+                .dropped_pcm
+                .swap(true, Ordering::Relaxed)
+            {
+                warn!("kws pcm queue full; mic chunks dropped until drain");
+            }
+        }
     }
 
     pub fn try_recv_wake(&self) -> bool {
@@ -43,7 +52,7 @@ pub fn start_wake_detector(cfg: &WakeConfig, sample_rate: u32) -> Result<WakeDet
         HalfDuplexError::Config("failed to create KeywordSpotter (check model paths)".into())
     })?;
 
-    let (pcm_tx, pcm_rx) = mpsc::sync_channel::<Vec<f32>>(64);
+    let (pcm_tx, pcm_rx) = mpsc::sync_channel::<Vec<f32>>(256);
     let (wake_tx, wake_rx) = mpsc::channel();
 
     let phrase = phrases.join(", ");
@@ -57,6 +66,7 @@ pub fn start_wake_detector(cfg: &WakeConfig, sample_rate: u32) -> Result<WakeDet
     Ok(WakeDetectorHandle {
         pcm_tx,
         wake_rx,
+        dropped_pcm: AtomicBool::new(false),
         _thread: thread,
     })
 }

@@ -29,6 +29,7 @@ enum TtsCommand {
 #[derive(Clone)]
 pub struct TtsClient {
     cmd_tx: mpsc::Sender<TtsCommand>,
+    finish_timeout_sec: u64,
 }
 
 impl TtsClient {
@@ -45,6 +46,8 @@ impl TtsClient {
         let voice = tts.voice.clone();
         let sample_rate = tts.sample_rate;
         let format = tts.format.clone();
+        let task_started_timeout_sec = tts.task_started_timeout_sec;
+        let finish_timeout_sec = tts.finish_timeout_sec;
 
         tokio::spawn(async move {
             if let Err(e) = run_tts_driver(
@@ -54,6 +57,7 @@ impl TtsClient {
                 &voice,
                 sample_rate,
                 &format,
+                task_started_timeout_sec,
                 cmd_rx,
                 audio_tx,
             )
@@ -63,7 +67,13 @@ impl TtsClient {
             }
         });
 
-        Ok((Self { cmd_tx }, audio_rx))
+        Ok((
+            Self {
+                cmd_tx,
+                finish_timeout_sec,
+            },
+            audio_rx,
+        ))
     }
 
     pub async fn warmup(&self) -> Result<()> {
@@ -92,17 +102,22 @@ impl TtsClient {
         rx
     }
 
-    pub async fn finish_turn_async(&self) -> Result<()> {
+    pub async fn finish_turn_async_with_timeout(&self, timeout_secs: u64) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(TtsCommand::FinishTurn(tx))
             .await
             .map_err(|e| HalfDuplexError::Tts(e.to_string()))?;
-        match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => Err(HalfDuplexError::Tts(e.to_string())),
             Err(_) => Err(HalfDuplexError::Tts("finish-task timeout".into())),
         }
+    }
+
+    pub async fn finish_turn_async(&self) -> Result<()> {
+        self.finish_turn_async_with_timeout(self.finish_timeout_sec)
+            .await
     }
 
     /// Stop the current TTS task (barge-in). Waits for task-finished before returning.
@@ -127,12 +142,21 @@ async fn run_tts_driver(
     voice: &str,
     sample_rate: u32,
     format: &str,
+    task_started_timeout_sec: u64,
     mut cmd_rx: mpsc::Receiver<TtsCommand>,
     audio_tx: mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
     loop {
         if let Err(e) = run_tts_connection(
-            url, api_key, model, voice, sample_rate, format, &mut cmd_rx, &audio_tx,
+            url,
+            api_key,
+            model,
+            voice,
+            sample_rate,
+            format,
+            task_started_timeout_sec,
+            &mut cmd_rx,
+            &audio_tx,
         )
         .await
         {
@@ -149,6 +173,7 @@ async fn run_tts_connection(
     voice: &str,
     sample_rate: u32,
     format: &str,
+    task_started_timeout_sec: u64,
     cmd_rx: &mut mpsc::Receiver<TtsCommand>,
     audio_tx: &mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
@@ -180,7 +205,19 @@ async fn run_tts_connection(
                     TtsCommand::WarmupStart(done) => {
                         pending_finish = None;
                         pending_interrupt = None;
-                        let r = start_new_task(&mut write, &mut read, model, voice, sample_rate, format, &mut task_id, &mut ready, &audio_tx).await;
+                        let r = start_new_task(
+                            &mut write,
+                            &mut read,
+                            model,
+                            voice,
+                            sample_rate,
+                            format,
+                            task_started_timeout_sec,
+                            &mut task_id,
+                            &mut ready,
+                            &audio_tx,
+                        )
+                        .await;
                         let _ = done.send(r);
                     }
                     TtsCommand::InterruptTurn(done) => {
@@ -199,7 +236,19 @@ async fn run_tts_connection(
                     TtsCommand::AppendText { text, done } => {
                         let r = async {
                             if !ready {
-                                start_new_task(&mut write, &mut read, model, voice, sample_rate, format, &mut task_id, &mut ready, &audio_tx).await?;
+                                start_new_task(
+                                    &mut write,
+                                    &mut read,
+                                    model,
+                                    voice,
+                                    sample_rate,
+                                    format,
+                                    task_started_timeout_sec,
+                                    &mut task_id,
+                                    &mut ready,
+                                    &audio_tx,
+                                )
+                                .await?;
                             }
                             let msg = continue_task(&task_id, &text);
                             write.send(Message::Text(msg.to_string().into())).await
@@ -248,7 +297,14 @@ async fn run_tts_connection(
                                     if let Some(done) = pending_interrupt.take() {
                                         let _ = done.send(Err(err()));
                                     }
-                                    error!(error = %msg, "tts failed");
+                                    if msg.contains("timeout") {
+                                        error!(
+                                            error = %msg,
+                                            "tts failed (check board can reach dashscope WSS and DNS; try raising tts.task_started_timeout_sec)"
+                                        );
+                                    } else {
+                                        error!(error = %msg, "tts failed");
+                                    }
                                 }
                                 _ => {}
                             }
@@ -281,6 +337,7 @@ async fn start_new_task(
     voice: &str,
     sample_rate: u32,
     format: &str,
+    task_started_timeout_sec: u64,
     task_id: &mut String,
     ready: &mut bool,
     audio_tx: &mpsc::Sender<TtsAudio>,
@@ -293,7 +350,8 @@ async fn start_new_task(
         .await
         .map_err(|e| HalfDuplexError::Tts(e.to_string()))?;
 
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = tokio::time::Instant::now()
+        + std::time::Duration::from_secs(task_started_timeout_sec.max(5));
     while tokio::time::Instant::now() < deadline {
         tokio::select! {
             msg = read.next() => {

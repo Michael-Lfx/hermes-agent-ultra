@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hermes_config::hermes_home;
-use hermes_half_duplex::{spawn_voice_chat, Config, VoiceChatBridge, VoiceChatEvent, VoiceChatHandle};
+use hermes_half_duplex::{
+    spawn_voice_chat, Config, VoiceChatBridge, VoiceChatEvent, VoiceChatHandle, VoiceChatStatus,
+};
 use tokio::sync::mpsc;
 
 use crate::tui::Event;
@@ -41,7 +43,7 @@ pub async fn start_voice_chat(
                 VoiceChatEvent::TurnComplete => Event::VoiceChatTurnComplete,
                 VoiceChatEvent::WakeAccepted => Event::VoiceChatWakeAccepted,
                 VoiceChatEvent::BargeIn => Event::VoiceChatBargeIn,
-                VoiceChatEvent::Status(st) => Event::VoiceChatStatus(format!("{st:?}")),
+                VoiceChatEvent::Status(st) => Event::VoiceChatStatus(status_label(st)),
                 VoiceChatEvent::Error(msg) => Event::VoiceChatError(msg),
             };
             if event_tx.send(mapped).is_err() {
@@ -65,5 +67,14 @@ pub struct VoiceChatSession {
 impl VoiceChatSession {
     pub async fn stop(self) {
         self.handle.stop().await;
+    }
+}
+
+fn status_label(st: VoiceChatStatus) -> String {
+    match st {
+        VoiceChatStatus::WaitingWake => "Waiting wake word".to_string(),
+        VoiceChatStatus::Listening => "Listening".to_string(),
+        VoiceChatStatus::Thinking => "Thinking".to_string(),
+        VoiceChatStatus::Speaking => "Speaking".to_string(),
     }
 }

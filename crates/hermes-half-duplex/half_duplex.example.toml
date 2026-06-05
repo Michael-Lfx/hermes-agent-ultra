@@ -13,6 +13,9 @@ model = "cosyvoice-v3-flash"
 voice = "longanyang"
 sample_rate = 24000
 format = "pcm"
+# Board/network latency: raise if logs show DashScope task-failed timeouts.
+task_started_timeout_sec = 45
+finish_timeout_sec = 60
 
 [orchestrator]
 endpoint_silence_ms = 150
@@ -39,6 +42,7 @@ cooldown_secs = 10
 # Wake word (optional). Paths relative to half_duplex.toml directory.
 # Download: https://github.com/k2-fsa/sherpa-onnx/releases/tag/kws-models (zh-en-3M)
 [wake]
+# Set true after downloading KWS models (see scripts/download_kws_models.sh).
 enabled = false
 ack_reply = "哎，我在！"
 phrases = ["小智小智"]

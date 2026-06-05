@@ -6189,7 +6189,12 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         needs_redraw = true;
                     }
                     Some(Event::VoiceChatTurnComplete) => {
-                        state.voice_chat_status = "Listening".to_string();
+                        state.voice_chat_status = state
+                            .voice_chat
+                            .as_ref()
+                            .is_some_and(|s| s.wake_enabled)
+                            .then(|| "Listening (wake idle timer)".to_string())
+                            .unwrap_or_else(|| "Listening".to_string());
                         needs_redraw = true;
                     }
                     Some(Event::ManagedAppRunComplete {

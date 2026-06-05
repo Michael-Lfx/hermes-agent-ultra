@@ -1,0 +1,2 @@
+# aarch64 cross: linker + bundled runtime libs (see scripts/package_aarch64_board.sh).
+# Sherpa needs GCC 12+ libstdc++; set linker via make cross-aarch64 (GCC 13 toolchain).

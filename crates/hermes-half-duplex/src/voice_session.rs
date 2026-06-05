@@ -111,7 +111,13 @@ impl VoiceChatSession {
         let mut asr_final_at: Option<Instant> = None;
 
         let bridge = self.bridge.clone();
-        bridge.set_status(VoiceChatStatus::Listening).await;
+        if wake_enabled {
+            bridge
+                .set_status(VoiceChatStatus::WaitingWake)
+                .await;
+        } else {
+            bridge.set_status(VoiceChatStatus::Listening).await;
+        }
 
         info!(
             wake_enabled,
@@ -190,6 +196,7 @@ impl VoiceChatSession {
 
                     if wake_phase.check_timeout(Instant::now()) {
                         enter_dormant(
+                            &bridge,
                             &asr,
                             &mut wake_phase,
                             &mut state,
@@ -409,6 +416,7 @@ fn promote_wake_on_speech(wake: WakePhase) -> WakePhase {
 }
 
 async fn enter_dormant(
+    bridge: &Arc<VoiceChatBridge>,
     asr: &AsrClient,
     wake_phase: &mut WakePhase,
     state: &mut SessionState,
@@ -425,6 +433,7 @@ async fn enter_dormant(
     *state = SessionState::Listening;
     *last_final = None;
     *asr_final_at = None;
+    bridge.set_status(VoiceChatStatus::WaitingWake).await;
     info!(
         drained_asr_events = drained,
         "wake timeout -> dormant; say wake word again"

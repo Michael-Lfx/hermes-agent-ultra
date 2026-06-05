@@ -14,6 +14,8 @@ use crate::tts::TtsClient;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceChatStatus {
+    /// Wake word enabled; mic hot, ASR paused until KWS fires.
+    WaitingWake,
     Listening,
     Thinking,
     Speaking,

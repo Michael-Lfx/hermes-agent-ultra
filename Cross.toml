@@ -1,14 +1,51 @@
 [build]
-pre-build = ["mkdir -p /tmp && chmod 1777 /tmp"]
+# Pre-build runs as root; cargo runs as host UID — cache must be world-writable.
+pre-build = ["mkdir -p /tmp/cross-cache && chmod -R 1777 /tmp/cross-cache && chmod 1777 /tmp"]
+
+# hermes-cli → hermes-environments → liteparse → liteparse-pdfium-sys (downloads pdfium)
+# hermes-cli → hermes-half-duplex → cpal → alsa-sys; sherpa-onnx-sys (GCC 12+ libstdc++)
+#
+# aarch64 pre-build is kept minimal (fast apt only). Large artifacts + GCC 13 toolchain:
+#   make prefetch-aarch64
+#   # or: ./scripts/cross_install_gcc_aarch64.sh && cross_prefetch_*.sh ...
+#   export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="/project/.cross-cache/gcc-aarch64/bin/aarch64-none-linux-gnu-gcc"
+# On old rootfs (RK3588): make package-aarch64-board and run ./run-hermes-agent-ultra.sh
+
+[target.x86_64-unknown-linux-gnu]
+pre-build = [
+    "bash -ec 'export DEBIAN_FRONTEND=noninteractive; sed -i.bak -r \"s/(archive|security)\\.ubuntu\\.com/old-releases.ubuntu.com/g\" /etc/apt/sources.list 2>/dev/null || true; apt-get -o Acquire::http::Timeout=60 update -qq && apt-get install -y -qq --no-install-recommends libasound2-dev curl ca-certificates'",
+    "bash -ec 'ASSET=pdfium-linux-x64; CACHE=/tmp/cross-cache/pdfium-rs/chromium_7847/${ASSET}; if [ ! -d \"${CACHE}/lib\" ]; then mkdir -p \"${CACHE}\"; curl -fsSL -o /tmp/pdfium.tgz \"https://github.com/run-llama/pdfium-binaries/releases/download/chromium%2F7847/${ASSET}.tgz\"; TMP=$(mktemp -d); tar --no-same-owner -xzf /tmp/pdfium.tgz -C \"${TMP}\"; rm -rf \"${CACHE}\"; mv \"${TMP}\" \"${CACHE}\"; rm -f /tmp/pdfium.tgz; fi'",
+    "mkdir -p /tmp/cross-cache && chmod -R 1777 /tmp/cross-cache && chmod 1777 /tmp",
+]
+
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "bash -ec 'export DEBIAN_FRONTEND=noninteractive; sed -i.bak -r \"s/(archive|security)\\.ubuntu\\.com/old-releases.ubuntu.com/g\" /etc/apt/sources.list 2>/dev/null || true; dpkg --add-architecture arm64; apt-get -o Acquire::http::Timeout=60 update -qq && apt-get install -y -qq --no-install-recommends libasound2-dev:arm64 curl ca-certificates xz-utils'",
+    "mkdir -p /tmp/cross-cache && chmod -R 1777 /tmp/cross-cache && chmod 1777 /tmp",
+]
+
+[target.aarch64-unknown-linux-gnu.env]
+passthrough = [
+    "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
+    "PKG_CONFIG_ALLOW_CROSS",
+    "SHERPA_ONNX_ARCHIVE_DIR",
+]
+
+[target.x86_64-unknown-linux-musl]
+pre-build = [
+    "bash -ec 'export DEBIAN_FRONTEND=noninteractive; sed -i.bak -r \"s/(archive|security)\\.ubuntu\\.com/old-releases.ubuntu.com/g\" /etc/apt/sources.list 2>/dev/null || true; apt-get -o Acquire::http::Timeout=60 update -qq && apt-get install -y -qq --no-install-recommends libasound2-dev curl ca-certificates'",
+    "bash -ec 'ASSET=pdfium-linux-x64; CACHE=/tmp/cross-cache/pdfium-rs/chromium_7847/${ASSET}; if [ ! -d \"${CACHE}/lib\" ]; then mkdir -p \"${CACHE}\"; curl -fsSL -o /tmp/pdfium.tgz \"https://github.com/run-llama/pdfium-binaries/releases/download/chromium%2F7847/${ASSET}.tgz\"; TMP=$(mktemp -d); tar --no-same-owner -xzf /tmp/pdfium.tgz -C \"${TMP}\"; rm -rf \"${CACHE}\"; mv \"${TMP}\" \"${CACHE}\"; rm -f /tmp/pdfium.tgz; fi'",
+    "mkdir -p /tmp/cross-cache && chmod -R 1777 /tmp/cross-cache && chmod 1777 /tmp",
+]
 
 [build.env]
 passthrough = [
     "AWS_LC_SYS_CMAKE_BUILDER",
-    # Writable inside the cross container (do not forward host ~/.cache).
     "XDG_CACHE_HOME=/tmp/cross-cache",
-    # cross also forwards host http(s)_proxy after passthrough; use a LAN-reachable
-    # proxy on the host (not 127.0.0.1) before `cross build`, e.g.:
-    #   export https_proxy=http://192.168.31.90:7890
+    "PDFIUM_LIB_PATH",
+    "PDFIUM_INCLUDE_PATH",
+    "SHERPA_ONNX_ARCHIVE_DIR",
+    "SHERPA_ONNX_LIB_DIR",
     "http_proxy",
     "https_proxy",
     "HTTP_PROXY",

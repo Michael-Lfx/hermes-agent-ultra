@@ -1,4 +1,4 @@
-﻿use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -65,6 +65,11 @@ pub struct TtsConfig {
     pub sample_rate: u32,
     #[serde(default = "default_pcm")]
     pub format: String,
+    /// Wait for DashScope `task-started` (raise on slow boards / networks).
+    #[serde(default = "default_tts_task_started_timeout_sec")]
+    pub task_started_timeout_sec: u64,
+    #[serde(default = "default_tts_finish_timeout_sec")]
+    pub finish_timeout_sec: u64,
 }
 
 impl Default for TtsConfig {
@@ -74,6 +79,8 @@ impl Default for TtsConfig {
             voice: default_voice(),
             sample_rate: default_24k(),
             format: default_pcm(),
+            task_started_timeout_sec: default_tts_task_started_timeout_sec(),
+            finish_timeout_sec: default_tts_finish_timeout_sec(),
         }
     }
 }
@@ -430,6 +437,12 @@ fn default_idle_after_turn() -> u64 {
 }
 fn default_kws_threads() -> i32 {
     1
+}
+fn default_tts_task_started_timeout_sec() -> u64 {
+    45
+}
+fn default_tts_finish_timeout_sec() -> u64 {
+    60
 }
 
 impl Config {
