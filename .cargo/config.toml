@@ -1,5 +1,6 @@
 [build]
 incremental = true
+rustc-wrapper = "sccache.exe"
 
 [unstable]
 
