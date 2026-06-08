@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.skip(reason="ported to Rust (hermes-gateway whatsapp_policy tests)")
+
 import json
 from unittest.mock import AsyncMock
 

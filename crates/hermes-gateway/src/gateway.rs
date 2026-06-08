@@ -61,6 +61,9 @@ fn streaming_feedback_delay_ms() -> u64 {
 #[cfg(not(feature = "weixin"))]
 const WEIXIN_TYPING_REFRESH_SECS_FALLBACK: u64 = 5;
 
+/// WhatsApp composing indicator refresh (wa-rs `chatstate` / "typing…").
+const WHATSAPP_TYPING_REFRESH_SECS: u64 = 5;
+
 /// Cancels a platform typing keepalive started by [`Gateway::spawn_route_typing`].
 struct RouteTypingGuard {
     cancel: Option<Arc<AtomicBool>>,
@@ -93,12 +96,13 @@ use hermes_core::{
 };
 
 use crate::background::{BackgroundTaskManager, TaskStatus};
-use crate::commands::{GatewayCommandResult, handle_command};
+use crate::commands::{BatchCommandClass, BatchedCommand, GatewayCommandResult, handle_command, parse_batch_commands};
 use crate::dm::{DmDecision, DmManager};
 use crate::hooks::{HookEvent, HookRegistry};
 use crate::pairing_store::DmPairingStore;
 use crate::platforms::helpers::extract_inline_images;
 use crate::session::{SessionManager, SessionTeardownSnapshot};
+use crate::tool_backends::ClarifyDispatcher;
 use crate::stream::{StreamConfig, StreamManager};
 use crate::voice::VoiceManager;
 use hermes_config::resolve_outbound_media_path;
@@ -470,6 +474,8 @@ pub struct Gateway {
     turn_outbound: StdMutex<HashMap<String, TurnOutboundTracker>>,
     /// Optional agent-layer hook for POI / memory flush before session removal.
     session_teardown_handler: RwLock<Option<SessionTeardownHandler>>,
+    /// Channel clarify dispatcher for IM fast-path answer delivery.
+    clarify_dispatcher: RwLock<Option<ClarifyDispatcher>>,
     /// Concrete Discord adapter for history backfill (P2-8).
     #[cfg(feature = "discord")]
     discord_adapter: RwLock<Option<Arc<crate::platforms::discord::DiscordAdapter>>>,
@@ -613,9 +619,16 @@ impl Gateway {
             active_routes: RwLock::new(HashMap::new()),
             turn_outbound: StdMutex::new(HashMap::new()),
             session_teardown_handler: RwLock::new(None),
+            clarify_dispatcher: RwLock::new(None),
             #[cfg(feature = "discord")]
             discord_adapter: RwLock::new(None),
         }
+    }
+
+    /// Wire the shared clarify dispatcher so inbound IM replies can fulfill an
+    /// active sync `clarify` wait without waiting for the per-session route lock.
+    pub async fn set_clarify_dispatcher(&self, dispatcher: ClarifyDispatcher) {
+        *self.clarify_dispatcher.write().await = Some(dispatcher);
     }
 
     fn begin_turn_outbound_tracking(&self, session_key: &str, platform: &str, chat_id: &str) {
@@ -976,8 +989,8 @@ impl Gateway {
 
     /// Start platform typing indicators for the duration of a route (best-effort).
     ///
-    /// Discord: single `trigger_typing`. Weixin: START immediately, refresh every ~5s,
-    /// then STOP when [`RouteTypingGuard::finish`] is called.
+    /// Discord: single `trigger_typing`. Weixin / WhatsApp: START immediately, refresh
+    /// every ~5s, then STOP when [`RouteTypingGuard::finish`] is called.
     fn spawn_route_typing(
         platform: &str,
         adapter: Arc<dyn PlatformAdapter>,
@@ -990,14 +1003,20 @@ impl Gateway {
             return RouteTypingGuard::none();
         }
 
-        if !platform.eq_ignore_ascii_case("weixin") {
+        let refresh_secs = if platform.eq_ignore_ascii_case("whatsapp") {
+            WHATSAPP_TYPING_REFRESH_SECS
+        } else if platform.eq_ignore_ascii_case("weixin") {
+            #[cfg(feature = "weixin")]
+            {
+                crate::platforms::weixin::WEIXIN_TYPING_REFRESH_SECS
+            }
+            #[cfg(not(feature = "weixin"))]
+            {
+                WEIXIN_TYPING_REFRESH_SECS_FALLBACK
+            }
+        } else {
             return RouteTypingGuard::none();
-        }
-
-        #[cfg(feature = "weixin")]
-        let refresh_secs = crate::platforms::weixin::WEIXIN_TYPING_REFRESH_SECS;
-        #[cfg(not(feature = "weixin"))]
-        let refresh_secs = WEIXIN_TYPING_REFRESH_SECS_FALLBACK;
+        };
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let cancel_flag = cancelled.clone();
@@ -1215,6 +1234,26 @@ impl Gateway {
                 return Ok(());
             }
         }
+        if !is_slash_command {
+            if let Some(dispatcher) = self.clarify_dispatcher.read().await.as_ref() {
+                if dispatcher
+                    .try_fulfill_for_session(
+                        &session_key,
+                        &crate::tool_backends::extract_clarify_choice_token(&incoming.text),
+                    )
+                    .await
+                {
+                    debug!(
+                        session_key = %session_key,
+                        platform = %incoming.platform,
+                        chat_id = %incoming.chat_id,
+                        text_chars = incoming.text.chars().count(),
+                        "gateway clarify fast-path: inbound reply fulfilled active clarify wait"
+                    );
+                    return Ok(());
+                }
+            }
+        }
         let _session_serial = self.acquire_session_serial(&session_key).await;
 
         // 2. Get or create session
@@ -1367,7 +1406,9 @@ impl Gateway {
         let process_start = Instant::now();
         let supports_streaming = self.config.streaming_enabled
             // 微信 iLink API 不支持消息编辑，streaming 模式会导致只显示 "..."
-            && !incoming.platform.eq_ignore_ascii_case("weixin");
+            && !incoming.platform.eq_ignore_ascii_case("weixin")
+            // WhatsApp (wa-rs) 对 "..." 占位 + edit 流式不可靠，走一次性回复
+            && !incoming.platform.eq_ignore_ascii_case("whatsapp");
         self.begin_turn_outbound_tracking(
             &session_key,
             &incoming.platform,
@@ -1458,6 +1499,13 @@ impl Gateway {
         incoming: &IncomingMessage,
         session_key: &str,
     ) -> Result<bool, GatewayError> {
+        // Batch fast-path: when the message contains 2+ slash commands, route to the
+        // generalised batch dispatcher instead of the single-command path.
+        let batch = parse_batch_commands(&incoming.text);
+        if !batch.is_empty() {
+            return self.execute_batch_commands(incoming, session_key, batch).await;
+        }
+
         let result = handle_command(&incoming.text);
         if !matches!(result, GatewayCommandResult::Unknown(_)) {
             if let Some(command_name) = Self::extract_command_name(&incoming.text) {
@@ -2946,6 +2994,152 @@ impl Gateway {
         )
     }
 
+    /// Dispatch a validated batch of 2+ commands parsed by [`parse_batch_commands`].
+    ///
+    /// Policy:
+    /// - Any `Control` command in the batch → reject entire batch.
+    /// - Any `SessionMutation` command in the batch → reject entire batch.
+    /// - Mixed `FireAndForget` + `ReadOnly` → reject (ambiguous ordering).
+    /// - All `FireAndForget` → parallel spawn, single upfront ack message.
+    /// - All `ReadOnly` → sequential execution (each sends its own reply).
+    async fn execute_batch_commands(
+        &self,
+        incoming: &IncomingMessage,
+        session_key: &str,
+        commands: Vec<BatchedCommand>,
+    ) -> Result<bool, GatewayError> {
+        let has_control = commands.iter().any(|c| c.class == BatchCommandClass::Control);
+        let has_mutation = commands
+            .iter()
+            .any(|c| c.class == BatchCommandClass::SessionMutation);
+
+        if has_control || has_mutation {
+            let bad_names: Vec<String> = commands
+                .iter()
+                .filter(|c| {
+                    matches!(
+                        c.class,
+                        BatchCommandClass::Control | BatchCommandClass::SessionMutation
+                    )
+                })
+                .map(|c| format!("/{}", c.name))
+                .collect();
+            let msg = format!(
+                "⚠️ Batch rejected: {} cannot be used in a multi-command message — \
+                 these commands modify session state or require exclusive control. \
+                 Send each command separately.",
+                bad_names.join(", ")
+            );
+            self.send_incoming_reply(incoming, &msg, None).await?;
+            return Ok(true);
+        }
+
+        let ff_count = commands
+            .iter()
+            .filter(|c| c.class == BatchCommandClass::FireAndForget)
+            .count();
+        let ro_count = commands
+            .iter()
+            .filter(|c| c.class == BatchCommandClass::ReadOnly)
+            .count();
+
+        if ff_count > 0 && ro_count > 0 {
+            let msg = "⚠️ Mixed batch (fire-and-forget + read-only commands) is not supported. \
+                       Send each group in a separate message."
+                .to_string();
+            self.send_incoming_reply(incoming, &msg, None).await?;
+            return Ok(true);
+        }
+
+        if ff_count > 0 {
+            // ── All FireAndForget: parallel dispatch ────────────────────────
+            let legacy_handler = self.message_handler.read().await.as_ref().cloned();
+            let context_handler = self
+                .message_handler_with_context
+                .read()
+                .await
+                .as_ref()
+                .cloned();
+            if context_handler.is_none() && legacy_handler.is_none() {
+                return Err(GatewayError::Platform(
+                    "No message handler configured".into(),
+                ));
+            }
+
+            let n = commands.len();
+            let mut ack = format!(
+                "🔄 Received {} background tasks — starting in parallel:\n",
+                n
+            );
+            let mut dispatches: Vec<(String, Arc<Vec<Message>>)> = Vec::with_capacity(n);
+
+            for (i, cmd) in commands.iter().enumerate() {
+                let is_btw = cmd.name == "btw";
+                let task_id = Self::python_async_task_id(if is_btw { "btw" } else { "bg" });
+                let preview = Self::gateway_command_preview(&cmd.args);
+                ack.push_str(&format!("{}. [{}] \"{}\"\n", i + 1, task_id, preview));
+                let _ = self
+                    .background_tasks
+                    .submit_with_id(task_id.clone(), cmd.args.clone());
+
+                let messages: Arc<Vec<Message>> = if is_btw {
+                    let mut history =
+                        self.session_manager.get_messages(session_key).await;
+                    history.push(Message::user(format!(
+                        "[Ephemeral /btw side question. Answer using the conversation \
+                         context. No tools available. Be direct and concise.]\n\n{}",
+                        cmd.args
+                    )));
+                    Arc::new(history)
+                } else {
+                    Arc::new(vec![Message::user(cmd.args.clone())])
+                };
+                dispatches.push((task_id, messages));
+            }
+
+            self.send_incoming_reply(incoming, &ack, None).await?;
+
+            for (task_id, messages) in dispatches {
+                let manager = self.background_tasks.clone();
+                let task_id_inner = task_id;
+                let runtime_context =
+                    self.build_runtime_context(incoming, session_key).await;
+                let ctx_handler = context_handler.clone();
+                let leg_handler = legacy_handler.clone();
+                tokio::spawn(async move {
+                    let legacy_messages = Arc::clone(&messages);
+                    let result = if let Some(handler) = ctx_handler {
+                        handler(messages, runtime_context).await
+                    } else if let Some(handler) = leg_handler {
+                        handler(legacy_messages).await
+                    } else {
+                        Err(GatewayError::Platform(
+                            "No message handler configured".into(),
+                        ))
+                    };
+                    match result {
+                        Ok(r) => manager.complete(&task_id_inner, r),
+                        Err(e) => manager.fail(&task_id_inner, e.to_string()),
+                    }
+                });
+            }
+            return Ok(true);
+        }
+
+        // ── All ReadOnly: sequential dispatch ──────────────────────────────
+        for cmd in commands {
+            let full_input = if cmd.args.is_empty() {
+                format!("/{}", cmd.name)
+            } else {
+                format!("/{} {}", cmd.name, cmd.args)
+            };
+            let result = handle_command(&full_input);
+            self.apply_command_result(incoming, session_key, result)
+                .await?;
+        }
+        Ok(true)
+    }
+
     async fn handle_background_command(
         &self,
         incoming: &IncomingMessage,
@@ -3352,6 +3546,20 @@ impl Gateway {
         }
 
         Ok(())
+    }
+
+    /// Send a text message and return the platform message id when available.
+    pub async fn send_message_with_id(
+        &self,
+        platform: &str,
+        chat_id: &str,
+        text: &str,
+        parse_mode: Option<ParseMode>,
+    ) -> Result<Option<String>, GatewayError> {
+        let adapter = self.get_adapter(platform).await.ok_or_else(|| {
+            GatewayError::Platform(format!("No adapter registered for platform: {}", platform))
+        })?;
+        adapter.send_message_with_id(chat_id, text, parse_mode).await
     }
 
     /// Edit an existing message on a specific platform chat.

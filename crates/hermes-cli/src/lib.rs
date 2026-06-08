@@ -49,6 +49,7 @@ pub mod tui;
 pub mod voice_chat;
 pub mod update;
 pub mod webhook_delivery;
+pub mod whatsapp_wizard;
 
 #[cfg(test)]
 pub(crate) mod test_env_lock;

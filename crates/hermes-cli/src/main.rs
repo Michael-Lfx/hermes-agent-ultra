@@ -87,7 +87,7 @@ use hermes_gateway::platforms::wecom_callback::{
     WeComCallbackAdapter, WeComCallbackApp, WeComCallbackConfig,
 };
 use hermes_gateway::platforms::weixin::{WeChatAdapter, WeixinConfig};
-use hermes_gateway::platforms::whatsapp::{WhatsAppAdapter, WhatsAppConfig};
+use hermes_gateway::platforms::whatsapp::{is_paired, WhatsAppAdapter, WhatsAppConfig};
 use hermes_gateway::tool_backends::ClarifyDispatcher;
 use hermes_gateway::{DmManager, Gateway, GatewayRuntimeContext, SessionManager};
 use hermes_skills::{FileSkillStore, SkillManager};
@@ -3011,6 +3011,9 @@ async fn run_gateway(
                 .set_messaging_session_context(messaging_session.clone())
                 .await;
             let clarify_dispatcher = ClarifyDispatcher::new();
+            gateway
+                .set_clarify_dispatcher(clarify_dispatcher.clone())
+                .await;
             let agent_tools_for_cron = Arc::new(bridge_tool_registry(&tool_registry));
             let config_arc = Arc::new(config.clone());
             let gateway_agent_cache: GatewayAgentCache =
@@ -3318,6 +3321,84 @@ fn parse_csv_list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// Persist Telegram user/chat allowlists on the platform block (YAML + gateway policy).
+fn apply_telegram_allowlists(platform: &mut PlatformConfig, allowed_users: &[String]) {
+    if allowed_users.is_empty() {
+        return;
+    }
+    platform.allowed_users = allowed_users.to_vec();
+    platform.extra.insert(
+        "allow_from".to_string(),
+        serde_json::Value::Array(
+            allowed_users
+                .iter()
+                .cloned()
+                .map(serde_json::Value::String)
+                .collect(),
+        ),
+    );
+    platform
+        .extra
+        .insert("dm_policy".to_string(), serde_json::json!("allowlist"));
+}
+
+fn telegram_platform_has_allowlist(platform: &PlatformConfig) -> bool {
+    platform
+        .allowed_users
+        .iter()
+        .any(|u| !u.trim().is_empty())
+        || platform
+            .extra
+            .get("allow_from")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+            .is_some_and(|users| users.iter().any(|u| !u.trim().is_empty()))
+}
+
+/// Resolve Telegram bot token during `hermes gateway setup` (always shows a wizard step).
+///
+/// Unlike `hermes auth login telegram`, this does not silently consume `TELEGRAM_BOT_TOKEN`
+/// from the environment without asking — matching Python `hermes gateway setup` / Discord UX.
+async fn resolve_telegram_bot_token_for_gateway_setup(
+    disk: &hermes_config::GatewayConfig,
+) -> Result<String, AgentError> {
+    let config_token = disk
+        .platforms
+        .get("telegram")
+        .and_then(platform_token_or_extra);
+    let env_token = std::env::var("TELEGRAM_BOT_TOKEN")
+        .ok()
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+
+    println!("Create a bot with @BotFather on Telegram (/newbot), then paste the HTTP API token.");
+
+    let prompt = if config_token.is_some() {
+        "Telegram bot token (from @BotFather; Enter to keep the token already in config): "
+    } else if env_token.is_some() {
+        "Telegram bot token (from @BotFather; Enter to use TELEGRAM_BOT_TOKEN from .env): "
+    } else {
+        "Telegram bot token (from @BotFather): "
+    };
+
+    let entered = prompt_line(prompt).await?;
+    let trimmed = entered.trim();
+    if !trimmed.is_empty() {
+        return Ok(trimmed.to_string());
+    }
+    if let Some(token) = config_token {
+        println!("Keeping existing Telegram bot token from config.");
+        return Ok(token);
+    }
+    if let Some(token) = env_token {
+        println!("Using Telegram bot token from TELEGRAM_BOT_TOKEN.");
+        return Ok(token);
+    }
+    Err(AgentError::Config(
+        "Telegram bot token is required (from @BotFather, or set TELEGRAM_BOT_TOKEN in ~/.hermes/.env)"
+            .into(),
+    ))
+}
+
 fn enabled_flag(platform: Option<&PlatformConfig>) -> &'static str {
     if platform.map(|p| p.enabled).unwrap_or(false) {
         "enabled"
@@ -3408,20 +3489,6 @@ async fn configure_platform_basic_prompts(
             set_extra_string_if_nonempty(p, "phone_number", &account);
             let api_url = prompt_line("Signal api_url (default http://localhost:8080): ").await?;
             set_extra_string_if_nonempty(p, "api_url", &api_url);
-        }
-        "whatsapp" => {
-            let token = prompt_line("WhatsApp Cloud API token: ").await?;
-            if !token.trim().is_empty() {
-                p.token = Some(token.trim().to_string());
-            }
-            let phone_id = prompt_line("WhatsApp phone_number_id: ").await?;
-            set_extra_string_if_nonempty(p, "phone_number_id", &phone_id);
-            let verify = prompt_line("WhatsApp verify_token (optional): ").await?;
-            set_extra_string_if_nonempty(p, "verify_token", &verify);
-            let home = prompt_line("WhatsApp home channel (optional): ").await?;
-            if !home.trim().is_empty() {
-                p.home_channel = Some(home.trim().to_string());
-            }
         }
         "dingtalk" => {
             let client_id = prompt_line("DingTalk client_id/appkey: ").await?;
@@ -3678,8 +3745,15 @@ fn gateway_platform_is_configured(key: &str, platform: Option<&PlatformConfig>) 
         return false;
     }
     match key {
-        "telegram" | "discord" | "slack" | "whatsapp" | "signal" | "matrix" | "mattermost"
+        "telegram" => {
+            platform_token_or_extra(platform).is_some() && telegram_platform_has_allowlist(platform)
+        }
+        "discord" | "slack" | "signal" | "matrix" | "mattermost"
         | "bluebubbles" | "email" | "homeassistant" => platform_token_or_extra(platform).is_some(),
+        "whatsapp" => {
+            platform.enabled
+                && is_paired(&WhatsAppConfig::from_platform_config(platform).session_path())
+        }
         "weixin" => {
             platform_token_or_extra(platform).is_some()
                 && platform_extra_nonempty(platform, "account_id")
@@ -3708,7 +3782,9 @@ fn gateway_platform_is_configured(key: &str, platform: Option<&PlatformConfig>) 
 }
 
 fn gateway_platform_menu_label(entry: &GatewayPlatformEntry, platform: Option<&PlatformConfig>) -> String {
-    let status = if gateway_platform_is_configured(entry.key, platform) {
+    let status = if entry.key == "whatsapp" {
+        hermes_cli::whatsapp_wizard::whatsapp_gateway_menu_status(platform)
+    } else if gateway_platform_is_configured(entry.key, platform) {
         "configured"
     } else {
         "not configured"
@@ -3810,37 +3886,128 @@ async fn configure_gateway_platform(
                 wx.home_channel = Some(home.trim().to_string());
             }
         }
-        "telegram" => {
+        "wecom" => {
             run_auth(
                 cli.clone(),
                 Some("login".to_string()),
-                Some("telegram".to_string()),
+                Some("wecom".to_string()),
                 None,
                 None,
                 None,
                 None,
-                false,
+                true,
             )
             .await?;
             *disk = load_user_config_file(cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
+        }
+        "telegram" => {
+            let token = resolve_telegram_bot_token_for_gateway_setup(disk).await?;
             let tg = disk
                 .platforms
                 .entry("telegram".to_string())
                 .or_insert_with(PlatformConfig::default);
+            tg.token = Some(token);
             tg.enabled = true;
+            println!(
+                "Telegram bot token saved (platform enabled; written on Done)."
+            );
+
+            println!(
+                "Telegram user ID: message @userinfobot on Telegram to get your numeric user ID."
+            );
+            let allowed = prompt_line(
+                "Telegram allowed user IDs (comma-separated, required; use * for any user): ",
+            )
+            .await?;
+            let allowed_users = parse_csv_list(&allowed);
+            if allowed_users.is_empty() {
+                return Err(AgentError::Config(
+                    "Telegram setup requires at least one allowed user ID (or *)".into(),
+                ));
+            }
+            apply_telegram_allowlists(tg, &allowed_users);
+
+            let group_allowed = prompt_line(
+                "Telegram group-only allowed user IDs (comma-separated, optional): ",
+            )
+            .await?;
+            let group_users = parse_csv_list(&group_allowed);
+            if !group_users.is_empty() {
+                tg.extra.insert(
+                    "group_allow_from".to_string(),
+                    serde_json::Value::Array(
+                        group_users
+                            .iter()
+                            .cloned()
+                            .map(serde_json::Value::String)
+                            .collect(),
+                    ),
+                );
+            }
+
+            let group_chats = prompt_line(
+                "Telegram allowed group chat IDs (comma-separated, optional): ",
+            )
+            .await?;
+            let group_chat_ids = parse_csv_list(&group_chats);
+            if !group_chat_ids.is_empty() {
+                tg.extra.insert(
+                    "group_allowed_chats".to_string(),
+                    serde_json::Value::Array(
+                        group_chat_ids
+                            .iter()
+                            .cloned()
+                            .map(serde_json::Value::String)
+                            .collect(),
+                    ),
+                );
+            }
+
             let polling = prompt_yes_no("Telegram use polling mode?", true).await?;
             tg.extra
                 .insert("polling".to_string(), serde_json::Value::Bool(polling));
             if !polling {
-                let webhook_url = prompt_line("Telegram webhook URL: ").await?;
-                if !webhook_url.trim().is_empty() {
-                    tg.webhook_url = Some(webhook_url.trim().to_string());
+                println!("Webhook mode: Telegram pushes updates to your HTTPS endpoint (HTTP API).");
+                let webhook_url = prompt_line(
+                    "Telegram webhook URL (HTTPS, e.g. https://my-app.example.com/telegram): ",
+                )
+                .await?;
+                let webhook_url = webhook_url.trim();
+                if webhook_url.is_empty() {
+                    return Err(AgentError::Config(
+                        "Telegram webhook URL is required when polling is disabled".into(),
+                    ));
+                }
+                tg.webhook_url = Some(webhook_url.to_string());
+
+                let mut webhook_secret = String::new();
+                while webhook_secret.trim().is_empty() {
+                    webhook_secret = prompt_line(
+                        "Telegram webhook secret (required; generate with: openssl rand -hex 32): ",
+                    )
+                    .await?;
+                    if webhook_secret.trim().is_empty() {
+                        println!("Webhook secret is required for Telegram HTTP API mode.");
+                    }
+                }
+                tg.extra.insert(
+                    "webhook_secret".to_string(),
+                    serde_json::json!(webhook_secret.trim()),
+                );
+
+                let port = prompt_line("Telegram webhook listen port (default 8443): ").await?;
+                if let Ok(v) = port.trim().parse::<u16>() {
+                    tg.extra
+                        .insert("webhook_port".to_string(), serde_json::Value::from(v));
                 }
             }
             let home = prompt_line("Telegram home channel (optional): ").await?;
             if !home.trim().is_empty() {
                 tg.home_channel = Some(home.trim().to_string());
             }
+        }
+        "whatsapp" => {
+            hermes_cli::whatsapp_wizard::configure_whatsapp_for_gateway(disk).await?;
         }
         other => configure_platform_basic_prompts(disk, other).await?,
     }
@@ -4394,6 +4561,14 @@ fn build_gateway_platform_access_policies(
             .unwrap_or_else(|| platform.eq_ignore_ascii_case("discord") && has_allowlist);
 
         let mut dm_mode = parse_dm_access_mode(platform, platform_cfg);
+        if platform.eq_ignore_ascii_case("whatsapp") {
+            let wa_cfg = hermes_gateway::platforms::whatsapp::WhatsAppConfig::from_platform_config(
+                platform_cfg,
+            );
+            if wa_cfg.self_chat_dm_policy_open() {
+                dm_mode = DmAccessMode::Open;
+            }
+        }
         if dm_mode == DmAccessMode::Pairing
             && platform.eq_ignore_ascii_case("discord")
             && extra_string(platform_cfg, "dm_policy").is_none()
@@ -4522,19 +4697,32 @@ async fn run_webhook_inbound_loop(gateway: Arc<Gateway>, mut rx: mpsc::Receiver<
     }
 }
 
+/// Route one inbound message. Spawned per message so clarify replies can hit the
+/// fast-path while another route for the same chat is blocked in `wait_for`.
+fn spawn_gateway_route(gateway: Arc<Gateway>, incoming: GatewayIncomingMessage, platform: &str) {
+    let platform = platform.to_string();
+    tokio::spawn(async move {
+        if let Err(err) = gateway.route_message(&incoming).await {
+            tracing::warn!(
+                platform = %platform,
+                error = %err,
+                "Failed to route inbound gateway message"
+            );
+            let err_text = format!("⚠️ 请求处理失败，请稍后重试。({})", err);
+            let _ = gateway
+                .send_message(&incoming.platform, &incoming.chat_id, &err_text, None)
+                .await;
+        }
+    });
+}
+
 async fn run_gateway_incoming_loop(
     gateway: Arc<Gateway>,
     mut rx: mpsc::Receiver<GatewayIncomingMessage>,
     platform: &'static str,
 ) {
     while let Some(incoming) = rx.recv().await {
-        if let Err(err) = gateway.route_message(&incoming).await {
-            tracing::warn!("Failed to route {} message: {}", platform, err);
-            let err_text = format!("⚠️ 请求处理失败，请稍后重试。({})", err);
-            let _ = gateway
-                .send_message(&incoming.platform, &incoming.chat_id, &err_text, None)
-                .await;
-        }
+        spawn_gateway_route(gateway.clone(), incoming, platform);
     }
 }
 
@@ -4733,24 +4921,19 @@ async fn register_gateway_adapters(
 
     if let Some(platform_cfg) = config.platforms.get("whatsapp") {
         if platform_cfg.enabled {
-            if let Some(token) = platform_token_or_extra(platform_cfg) {
-                let wa_cfg = WhatsAppConfig {
-                    token,
-                    phone_number_id: extra_string(platform_cfg, "phone_number_id"),
-                    business_account_id: extra_string(platform_cfg, "business_account_id"),
-                    verify_token: extra_string(platform_cfg, "verify_token"),
-                    proxy: Default::default(),
-                };
-                match WhatsAppAdapter::new(wa_cfg) {
-                    Ok(adapter) => {
-                        gateway
-                            .register_adapter("whatsapp", Arc::new(adapter))
-                            .await
-                    }
-                    Err(e) => println!("WhatsApp enabled but failed to initialize: {}", e),
+            let wa_cfg = WhatsAppConfig::from_platform_config(platform_cfg);
+            match WhatsAppAdapter::new(wa_cfg) {
+                Ok(adapter) => {
+                    let adapter = Arc::new(adapter);
+                    let (tx, rx) = mpsc::channel::<GatewayIncomingMessage>(512);
+                    adapter.set_inbound_sender(tx).await;
+                    gateway.register_adapter("whatsapp", adapter).await;
+                    let gw_clone = gateway.clone();
+                    sidecar_tasks.push(tokio::spawn(async move {
+                        run_gateway_incoming_loop(gw_clone, rx, "whatsapp").await;
+                    }));
                 }
-            } else {
-                println!("WhatsApp is enabled but token is missing; skipping whatsapp adapter.");
+                Err(e) => println!("WhatsApp enabled but failed to initialize: {}", e),
             }
         }
     }
@@ -4874,12 +5057,7 @@ async fn register_gateway_adapters(
                         let gw_clone = gateway.clone();
                         sidecar_tasks.push(tokio::spawn(async move {
                             while let Some(incoming) = rx.recv().await {
-                                if let Err(err) = gw_clone.route_message(&incoming).await {
-                                    tracing::warn!(
-                                        "Failed to route wecom_callback message: {}",
-                                        err
-                                    );
-                                }
+                                spawn_gateway_route(gw_clone.clone(), incoming, "wecom_callback");
                             }
                         }));
                     }
@@ -6111,6 +6289,151 @@ async fn qqbot_qr_login_flow(
     Err(AgentError::Timeout(
         "qqbot qr login exhausted refresh retries".to_string(),
     ))
+}
+
+const WECOM_QR_GENERATE_URL: &str = "https://work.weixin.qq.com/ai/qc/generate";
+const WECOM_QR_QUERY_URL: &str = "https://work.weixin.qq.com/ai/qc/query_result";
+const WECOM_QR_CODE_PAGE: &str = "https://work.weixin.qq.com/ai/qc/gen?source=hermes&scode=";
+
+fn wecom_qr_page_url(scode: &str) -> String {
+    format!(
+        "{}{}",
+        WECOM_QR_CODE_PAGE,
+        urlencoding::encode(scode.trim())
+    )
+}
+
+async fn wecom_bot_id_from_env_or_prompt(existing: Option<&str>) -> Result<String, AgentError> {
+    if let Some(v) = existing.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(v.to_string());
+    }
+    if let Ok(v) = std::env::var("WECOM_BOT_ID") {
+        let s = v.trim();
+        if !s.is_empty() {
+            return Ok(s.to_string());
+        }
+    }
+    let v = prompt_line("WeCom AI Bot bot_id (WECOM_BOT_ID): ").await?;
+    let s = v.trim();
+    if s.is_empty() {
+        return Err(AgentError::Config(
+            "WeCom bot_id is required (set WECOM_BOT_ID or enter at prompt)".to_string(),
+        ));
+    }
+    Ok(s.to_string())
+}
+
+async fn wecom_secret_from_env_or_prompt(existing: Option<&str>) -> Result<String, AgentError> {
+    if let Some(v) = existing.map(str::trim).filter(|s| !s.is_empty()) {
+        return Ok(v.to_string());
+    }
+    if let Ok(v) = std::env::var("WECOM_SECRET") {
+        let s = v.trim();
+        if !s.is_empty() {
+            return Ok(s.to_string());
+        }
+    }
+    let v = prompt_line("WeCom AI Bot secret (WECOM_SECRET): ").await?;
+    let s = v.trim();
+    if s.is_empty() {
+        return Err(AgentError::Config(
+            "WeCom secret is required (set WECOM_SECRET or enter at prompt)".to_string(),
+        ));
+    }
+    Ok(s.to_string())
+}
+
+async fn wecom_qr_login_flow(timeout_seconds: u64) -> Result<(String, String), AgentError> {
+    const WECOM_QR_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| AgentError::Io(format!("wecom qr client init failed: {e}")))?;
+
+    print!("  Connecting to WeCom...");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let generate_url = format!("{WECOM_QR_GENERATE_URL}?source=hermes");
+    let raw = client
+        .get(&generate_url)
+        .header("User-Agent", "HermesAgent/1.0")
+        .send()
+        .await
+        .map_err(|e| {
+            println!(" failed: {e}");
+            AgentError::Io(format!("wecom qr generate request: {e}"))
+        })?
+        .json::<serde_json::Value>()
+        .await
+        .map_err(|e| {
+            println!(" failed: {e}");
+            AgentError::Io(format!("wecom qr generate parse: {e}"))
+        })?;
+
+    let data = raw.get("data").cloned().unwrap_or_default();
+    let scode = weixin_extract_string(&data, &["scode"]).ok_or_else(|| {
+        println!(" failed: unexpected response format");
+        AgentError::Config("wecom qr response missing scode".to_string())
+    })?;
+    let auth_url = weixin_extract_string(&data, &["auth_url"]).ok_or_else(|| {
+        println!(" failed: unexpected response format");
+        AgentError::Config("wecom qr response missing auth_url".to_string())
+    })?;
+
+    println!(" done.");
+    println!();
+    render_qr_to_terminal(&auth_url);
+    let page_url = wecom_qr_page_url(&scode);
+    println!("\n  Scan the QR code above, or open this URL directly:\n  {page_url}");
+    println!();
+    print!("  Fetching configuration results...");
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(timeout_seconds);
+    let query_url = format!(
+        "{WECOM_QR_QUERY_URL}?scode={}",
+        urlencoding::encode(scode.trim())
+    );
+
+    while std::time::Instant::now() < deadline {
+        if let Ok(resp) = client
+            .get(&query_url)
+            .header("User-Agent", "HermesAgent/1.0")
+            .send()
+            .await
+        {
+            if let Ok(result) = resp.json::<serde_json::Value>().await {
+                let result_data = result.get("data").cloned().unwrap_or_default();
+                let status = weixin_extract_string(&result_data, &["status"])
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                print!(".");
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                if status == "success" {
+                    println!();
+                    let bot_info = result_data.get("bot_info").cloned().unwrap_or_default();
+                    let bot_id =
+                        weixin_extract_string(&bot_info, &["botid", "bot_id"]).unwrap_or_default();
+                    let secret = weixin_extract_string(&bot_info, &["secret"]).unwrap_or_default();
+                    if !bot_id.is_empty() && !secret.is_empty() {
+                        return Ok((bot_id, secret));
+                    }
+                    return Err(AgentError::Config(
+                        "wecom qr scan reported success but bot credentials were incomplete"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+        tokio::time::sleep(WECOM_QR_POLL_INTERVAL).await;
+    }
+
+    println!();
+    Err(AgentError::Timeout(format!(
+        "wecom qr login timed out after {timeout_seconds}s"
+    )))
 }
 
 fn weixin_login_base_url_from_disk(disk: &hermes_config::GatewayConfig) -> String {
@@ -7709,6 +8032,67 @@ async fn run_auth(
                     .map_err(|e| AgentError::Config(e.to_string()))?;
                 println!(
                     "QQBot: app_id/client_secret saved and platform enabled in {}",
+                    cfg_path.display()
+                );
+                return Ok(());
+            }
+            if provider == "wecom" {
+                let cfg_path = hermes_state_root(&cli).join("config.yaml");
+                let mut disk = load_user_config_file(&cfg_path)
+                    .map_err(|e| AgentError::Config(e.to_string()))?;
+                let qr_preferred = qr
+                    || std::env::var("HERMES_WECOM_QR_LOGIN")
+                        .ok()
+                        .map(|v| is_truthy(&v))
+                        .unwrap_or(false);
+
+                let existing_bot_id = disk
+                    .platforms
+                    .get("wecom")
+                    .and_then(|p| p.extra.get("bot_id"))
+                    .and_then(|v| v.as_str());
+                let existing_secret = disk
+                    .platforms
+                    .get("wecom")
+                    .and_then(|p| p.extra.get("secret"))
+                    .and_then(|v| v.as_str());
+
+                let (bot_id, secret) = if qr_preferred {
+                    match wecom_qr_login_flow(300).await {
+                        Ok(pair) => pair,
+                        Err(e) => {
+                            println!("WeCom QR login failed, falling back to manual input: {e}");
+                            let bot_id =
+                                wecom_bot_id_from_env_or_prompt(existing_bot_id).await?;
+                            let secret =
+                                wecom_secret_from_env_or_prompt(existing_secret).await?;
+                            (bot_id, secret)
+                        }
+                    }
+                } else {
+                    let bot_id = wecom_bot_id_from_env_or_prompt(existing_bot_id).await?;
+                    let secret = wecom_secret_from_env_or_prompt(existing_secret).await?;
+                    (bot_id, secret)
+                };
+
+                let wecom = disk
+                    .platforms
+                    .entry("wecom".to_string())
+                    .or_insert_with(PlatformConfig::default);
+                wecom.enabled = true;
+                wecom.extra.insert(
+                    "bot_id".to_string(),
+                    serde_json::Value::String(bot_id.clone()),
+                );
+                wecom.extra.insert(
+                    "secret".to_string(),
+                    serde_json::Value::String(secret.clone()),
+                );
+                validate_config(&disk).map_err(|e| AgentError::Config(e.to_string()))?;
+                save_config_yaml(&cfg_path, &disk)
+                    .map_err(|e| AgentError::Config(e.to_string()))?;
+                println!(
+                    "WeCom: bot_id/secret saved and platform enabled in {}",
                     cfg_path.display()
                 );
                 return Ok(());
@@ -13929,13 +14313,35 @@ mod tests {
         let entry = &GATEWAY_PLATFORM_CATALOG[0];
         assert_eq!(entry.key, "telegram");
         let mut configured = make_platform(true, Some("tg-token"));
+        configured.allowed_users = vec!["123456789".to_string()];
         let label = gateway_platform_menu_label(entry, Some(&configured));
         assert!(label.contains("Telegram"));
         assert!(label.contains("(configured)"));
 
+        configured.allowed_users.clear();
+        let label = gateway_platform_menu_label(entry, Some(&configured));
+        assert!(label.contains("(not configured)"));
+
         configured.token = None;
         let label = gateway_platform_menu_label(entry, Some(&configured));
         assert!(label.contains("(not configured)"));
+    }
+
+    #[test]
+    fn apply_telegram_allowlists_sets_policy_fields() {
+        let mut platform = PlatformConfig::default();
+        apply_telegram_allowlists(&mut platform, &["111".into(), "222".into()]);
+        assert_eq!(platform.allowed_users, vec!["111", "222"]);
+        assert_eq!(
+            platform.extra.get("dm_policy").and_then(|v| v.as_str()),
+            Some("allowlist")
+        );
+        let allow_from = platform
+            .extra
+            .get("allow_from")
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+            .unwrap_or_default();
+        assert_eq!(allow_from, vec!["111", "222"]);
     }
 
     fn cli_for_temp_state_root(temp_root: &std::path::Path) -> Cli {
@@ -14837,6 +15243,15 @@ max_turns: 50
             err.to_string().contains("target path is a directory"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn wecom_qr_page_url_encodes_scode() {
+        let url = wecom_qr_page_url("abc/def");
+        assert!(url.contains("abc%2Fdef"));
+        assert!(url.starts_with(
+            "https://work.weixin.qq.com/ai/qc/gen?source=hermes&scode="
+        ));
     }
 
     #[test]

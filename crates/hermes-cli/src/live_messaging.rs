@@ -244,23 +244,15 @@ async fn register_outbound_adapters(config: &GatewayConfig, gateway: &Arc<Gatewa
 
     if let Some(platform_cfg) = config.platforms.get("whatsapp") {
         if platform_cfg.enabled && !fatal_platforms.contains("whatsapp") {
-            if let Some(token) = platform_token_or_extra(platform_cfg) {
-                let wa_cfg = WhatsAppConfig {
-                    token,
-                    phone_number_id: extra_string(platform_cfg, "phone_number_id"),
-                    business_account_id: extra_string(platform_cfg, "business_account_id"),
-                    verify_token: extra_string(platform_cfg, "verify_token"),
-                    proxy: Default::default(),
-                };
-                match WhatsAppAdapter::new(wa_cfg) {
-                    Ok(adapter) => {
-                        gateway
-                            .register_adapter("whatsapp", Arc::new(adapter))
-                            .await;
-                        registered.push("whatsapp".to_string());
-                    }
-                    Err(e) => tracing::warn!("whatsapp adapter init failed: {}", e),
+            let wa_cfg = WhatsAppConfig::from_platform_config(platform_cfg);
+            match WhatsAppAdapter::new(wa_cfg) {
+                Ok(adapter) => {
+                    gateway
+                        .register_adapter("whatsapp", Arc::new(adapter))
+                        .await;
+                    registered.push("whatsapp".to_string());
                 }
+                Err(e) => tracing::warn!("whatsapp adapter init failed: {}", e),
             }
         }
     }

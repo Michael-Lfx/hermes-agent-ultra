@@ -11,7 +11,15 @@ default = []
 telegram = []
 discord = ["dep:hermes-skills"]
 slack = []
-whatsapp = []
+whatsapp = [
+    "dep:wa-rs",
+    "dep:wa-rs-core",
+    "dep:wa-rs-proto",
+    "dep:wa-rs-tokio-transport",
+    "dep:wa-rs-ureq-http",
+    "dep:qrcode",
+]
+whatsapp-cloud = []
 signal = []
 matrix = ["dep:matrix-sdk-crypto", "dep:ruma"]
 mattermost = []
@@ -61,6 +69,13 @@ ruma = { version = "=0.15.1", features = ["client-api-c", "rand"], optional = tr
 aes = { version = "0.9", optional = true }
 rand = { version = "0.10", optional = true }
 prost = "0.14.3"
+which = { workspace = true }
+wa-rs = { version = "0.2", default-features = false, features = ["sqlite-storage", "tokio-transport", "ureq-client", "tokio-native"], optional = true }
+wa-rs-core = { version = "0.2", optional = true }
+wa-rs-proto = { version = "0.2", optional = true }
+wa-rs-tokio-transport = { version = "0.2", optional = true }
+wa-rs-ureq-http = { version = "0.2", optional = true }
+qrcode = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"

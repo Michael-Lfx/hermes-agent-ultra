@@ -15,6 +15,9 @@ pub mod slack;
 #[cfg(feature = "whatsapp")]
 pub mod whatsapp;
 
+#[cfg(feature = "whatsapp-cloud")]
+pub mod whatsapp_cloud;
+
 #[cfg(feature = "signal")]
 pub mod signal;
 

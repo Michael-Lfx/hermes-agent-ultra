@@ -124,6 +124,7 @@ pub fn gateway_status_message_visible(event_type: &str, message: &str) -> bool {
         "Detected intermediate ack",
         "Truncated tool arguments",
         "Parsed textual tool-call markup",
+        "Starting conversation",
     ];
     !suppressed.iter().any(|needle| message.contains(needle))
 }
@@ -136,6 +137,7 @@ pub fn make_gateway_status_callback(
     user_id: String,
     session_id: String,
 ) -> Arc<dyn Fn(&str, &str) + Send + Sync> {
+    let progress_message_id: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
     Arc::new(move |event_type: &str, message: &str| {
         if !gateway_status_message_visible(event_type, message) {
             return;
@@ -152,7 +154,34 @@ pub fn make_gateway_status_callback(
         let platform_msg = platform.clone();
         let chat_id_msg = chat_id.clone();
         let msg = outbound;
+        let progress_mode = hermes_gateway::display_config::resolve_display_setting(
+            None,
+            &platform_msg,
+            "tool_progress",
+            None,
+        );
+        let reuse_progress = event_type == "tool_progress" && progress_mode.as_deref() == Some("new");
+        let progress_id = progress_message_id.clone();
         tokio::spawn(async move {
+            if reuse_progress {
+                let existing = progress_id.lock().unwrap().clone();
+                if let Some(mid) = existing {
+                    if gw
+                        .edit_message(&platform_msg, &chat_id_msg, &mid, &msg)
+                        .await
+                        .is_ok()
+                    {
+                        return;
+                    }
+                }
+                if let Ok(Some(mid)) = gw
+                    .send_message_with_id(&platform_msg, &chat_id_msg, &msg, None)
+                    .await
+                {
+                    *progress_id.lock().unwrap() = Some(mid);
+                    return;
+                }
+            }
             let _ = gw
                 .send_message(&platform_msg, &chat_id_msg, &msg, None)
                 .await;

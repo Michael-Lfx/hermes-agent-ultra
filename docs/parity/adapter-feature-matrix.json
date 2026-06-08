@@ -167,6 +167,7 @@
       "category": "platform_adapter",
       "feature": "whatsapp",
       "name": "whatsapp",
+      "note": "wa-rs in-process Rust client (QR pairing, ~/.hermes/whatsapp/session/)",
       "status": "rust-native"
     }
   ],

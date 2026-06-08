@@ -405,6 +405,33 @@ impl SessionManager {
         user_id: &str,
         is_dm: Option<bool>,
     ) -> String {
+        if platform.eq_ignore_ascii_case("whatsapp") {
+            let session_root = hermes_config::hermes_home().join("whatsapp").join("session");
+            let canonical_chat =
+                crate::whatsapp_identity::canonical_whatsapp_identifier(chat_id, Some(&session_root));
+            let canonical_user = if user_id.trim().is_empty() {
+                String::new()
+            } else {
+                crate::whatsapp_identity::canonical_whatsapp_identifier(user_id, Some(&session_root))
+            };
+            let session_type = match is_dm {
+                Some(true) => SessionType::Dm,
+                Some(false) => SessionType::Group,
+                None => Self::infer_session_type(chat_id),
+            };
+            if session_type == SessionType::Group {
+                if self.group_sessions_per_user && !canonical_user.is_empty() {
+                    return format!("whatsapp:{}:{}", chat_id, canonical_user);
+                }
+                return format!("whatsapp:{}", chat_id);
+            }
+            let dm_id = if !canonical_chat.is_empty() {
+                canonical_chat
+            } else {
+                chat_id.to_string()
+            };
+            return format!("whatsapp:{}", dm_id);
+        }
         if is_slack_shared_channel(platform, chat_id) && !user_id.trim().is_empty() {
             return format!("{}:{}:{}", platform, chat_id, user_id);
         }

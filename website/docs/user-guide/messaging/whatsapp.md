@@ -1,15 +1,19 @@
 ---
 sidebar_position: 5
 title: "WhatsApp"
-description: "Set up Hermes Agent as a WhatsApp bot via the built-in Baileys bridge"
+description: "Set up Hermes Agent as a WhatsApp bot via the built-in Rust client (wa-rs)"
 ---
 
 # WhatsApp Setup
 
-Hermes connects to WhatsApp through a built-in bridge based on **Baileys**. This works by emulating a WhatsApp Web session — **not** through the official WhatsApp Business API. No Meta developer account or Business verification is required.
+Hermes connects to WhatsApp through a **native Rust client** ([wa-rs](https://github.com/homunbot/wa-rs)) that speaks the WhatsApp Web protocol — **not** through the official WhatsApp Business API. No Meta developer account or Business verification is required. **Node.js is not required** for WhatsApp; pairing and messaging run inside the Hermes gateway process.
+
+:::info Official Cloud API
+For Meta's official HTTP API (no QR pairing, Business verification required), use `hermes whatsapp cloud` and enable the `whatsapp-cloud` gateway feature instead of the default Web client.
+:::
 
 :::warning Unofficial API — Ban Risk
-WhatsApp does **not** officially support third-party bots outside the Business API. Using a third-party bridge carries a small risk of account restrictions. To minimize risk:
+WhatsApp does **not** officially support third-party bots outside the Business API. Using a third-party client carries a small risk of account restrictions. To minimize risk:
 - **Use a dedicated phone number** for the bot (not your personal number)
 - **Don't send bulk/spam messages** — keep usage conversational
 - **Don't automate outbound messaging** to people who haven't messaged first
@@ -17,7 +21,7 @@ WhatsApp does **not** officially support third-party bots outside the Business A
 
 :::warning WhatsApp Web Protocol Updates
 WhatsApp periodically updates their Web protocol, which can temporarily break compatibility
-with third-party bridges. When this happens, Hermes will update the bridge dependency. If the
+with third-party clients. When this happens, Hermes will update the wa-rs dependency. If the
 bot stops working after a WhatsApp update, pull the latest Hermes version and re-pair.
 :::
 
@@ -32,10 +36,10 @@ bot stops working after a WhatsApp update, pull the latest Hermes version and re
 
 ## Prerequisites
 
-- **Node.js v18+** and **npm** — the WhatsApp bridge runs as a Node.js process
 - **A phone with WhatsApp** installed (for scanning the QR code)
+- **Hermes gateway** built with the `whatsapp` feature (included in default CLI builds)
 
-Unlike older browser-driven bridges, the current Baileys-based bridge does **not** require a local Chromium or Puppeteer dependency stack.
+No Chromium, Puppeteer, npm, or Node.js is needed for the WhatsApp Web client.
 
 ---
 
@@ -48,9 +52,8 @@ hermes whatsapp
 The wizard will:
 
 1. Ask which mode you want (**bot** or **self-chat**)
-2. Install bridge dependencies if needed
-3. Display a **QR code** in your terminal
-4. Wait for you to scan it
+2. Start the Rust pairing client and print a **QR code** in your terminal (via gateway logs / stdout)
+3. Wait for you to scan it
 
 **To scan the QR code:**
 
@@ -61,10 +64,22 @@ The wizard will:
 
 Once paired, the wizard confirms the connection and exits. Your session is saved automatically.
 
+:::tip Migrating from an older Hermes install
+If you previously used the removed Node/Baileys bridge (`scripts/whatsapp-bridge/`), your old
+`creds.json` is **not** reused. The wizard detects legacy sessions and asks you to re-pair.
+The new session lives under `~/.hermes/whatsapp/session/` (SQLite + a `.paired` marker).
+:::
+
 :::tip
 If the QR code looks garbled, make sure your terminal is at least 60 columns wide and supports
 Unicode. You can also try a different terminal emulator.
 :::
+
+Check status anytime:
+
+```bash
+hermes whatsapp status
+```
 
 ---
 
@@ -128,17 +143,33 @@ hermes gateway install      # Install as a user service
 sudo hermes gateway install --system   # Linux only: boot-time system service
 ```
 
-The gateway starts the WhatsApp bridge automatically using the saved session.
+The gateway connects to WhatsApp in-process using the saved session — there is no separate bridge subprocess or HTTP port.
 
 ---
 
 ## Session Persistence
 
-The Baileys bridge saves its session under `~/.hermes/platforms/whatsapp/session`. This means:
+The Rust client stores its session under `~/.hermes/whatsapp/session/`:
+
+| File | Purpose |
+|------|---------|
+| `whatsapp.db` | SQLite store (encryption keys, device state) |
+| `.paired` | Marker written after successful QR pairing |
+
+This means:
 
 - **Sessions survive restarts** — you don't need to re-scan the QR code every time
 - The session data includes encryption keys and device credentials
-- **Do not share or commit this session directory** — it grants full access to the WhatsApp account
+- **Do not share or commit this directory** — it grants full access to the WhatsApp account
+
+Optional override in `~/.hermes/config.yaml`:
+
+```yaml
+platforms:
+  whatsapp:
+    extra:
+      session_path: /path/to/custom/session
+```
 
 ---
 
@@ -151,9 +182,9 @@ errors in the gateway logs. To fix it:
 hermes whatsapp
 ```
 
-This generates a fresh QR code. Scan it again and the session is re-established. The gateway
-handles **temporary** disconnections (network blips, phone going offline briefly) automatically
-with reconnection logic.
+This generates a fresh QR code. Scan it again and the session is re-established. The client
+handles **temporary** disconnections (network blips, phone going offline briefly) with automatic
+reconnection when possible.
 
 ---
 
@@ -206,13 +237,13 @@ When the agent calls tools (web search, file operations, etc.), WhatsApp display
 | Problem | Solution |
 |---------|----------|
 | **QR code not scanning** | Ensure terminal is wide enough (60+ columns). Try a different terminal. Make sure you're scanning from the correct WhatsApp account (bot number, not personal). |
-| **QR code expires** | QR codes refresh every ~20 seconds. If it times out, restart `hermes whatsapp`. |
-| **Session not persisting** | Check that `~/.hermes/platforms/whatsapp/session` exists and is writable. If containerized, mount it as a persistent volume. |
+| **QR code expires** | QR codes refresh periodically. If pairing times out, restart `hermes whatsapp`. |
+| **Session not persisting** | Check that `~/.hermes/whatsapp/session/` exists, contains `whatsapp.db` and `.paired`, and is writable. If containerized, mount `~/.hermes` as a persistent volume. |
+| **Legacy Baileys session** | Delete or ignore old `creds.json` under the session dir and run `hermes whatsapp` to re-pair with the Rust client. |
 | **Logged out unexpectedly** | WhatsApp unlinks devices after long inactivity. Keep the phone on and connected to the network, then re-pair with `hermes whatsapp` if needed. |
-| **Bridge crashes or reconnect loops** | Restart the gateway, update Hermes, and re-pair if the session was invalidated by a WhatsApp protocol change. |
-| **Bot stops working after WhatsApp update** | Update Hermes to get the latest bridge version, then re-pair. |
-| **macOS: "Node.js not installed" but node works in terminal** | launchd services don't inherit your shell PATH. Run `hermes gateway install` to re-snapshot your current PATH into the plist, then `hermes gateway start`. See the [Gateway Service docs](./index.md#macos-launchd) for details. |
-| **Messages not being received** | Verify `WHATSAPP_ALLOWED_USERS` includes the sender's number (with country code, no `+` or spaces), or set it to `*` to allow everyone. Set `WHATSAPP_DEBUG=true` in `.env` and restart the gateway to see raw message events in `bridge.log`. |
+| **Reconnect loops / disconnects** | Restart the gateway, update Hermes, and re-pair if WhatsApp invalidated the session or after a protocol update. |
+| **Bot stops working after WhatsApp update** | Update Hermes to get the latest wa-rs version, then re-pair. |
+| **Messages not being received** | Verify `WHATSAPP_ALLOWED_USERS` includes the sender's number (with country code, no `+` or spaces), or set it to `*` to allow everyone. Check `~/.hermes/logs/gateway.log` for connection or policy drops. |
 | **Bot replies to strangers with a pairing code** | Set `whatsapp.unauthorized_dm_behavior: ignore` in `~/.hermes/config.yaml` if you want unauthorized DMs to be silently ignored instead. |
 
 ---
@@ -233,8 +264,8 @@ whatsapp:
   unauthorized_dm_behavior: ignore
 ```
 
-- The `~/.hermes/platforms/whatsapp/session` directory contains full session credentials — protect it like a password
-- Set file permissions: `chmod 700 ~/.hermes/platforms/whatsapp/session`
+- The `~/.hermes/whatsapp/session/` directory contains full session credentials — protect it like a password
+- Set file permissions: `chmod 700 ~/.hermes/whatsapp/session`
 - Use a **dedicated phone number** for the bot to isolate risk from your personal account
 - If you suspect compromise, unlink the device from WhatsApp → Settings → Linked Devices
 - Phone numbers in logs are partially redacted, but review your log retention policy

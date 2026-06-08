@@ -1,4 +1,4 @@
-"""Tests for WhatsApp connect() error handling.
+"""Tests for WhatsApp connect() error handling (ported to Rust).
 
 Regression tests for two bugs in WhatsAppAdapter.connect():
 
@@ -11,6 +11,10 @@ Regression tests for two bugs in WhatsAppAdapter.connect():
    the health-check loop but never closed when ``connect()`` returned False.
    Repeated connection failures accumulated open file descriptors.
 """
+
+import pytest
+
+pytestmark = pytest.mark.skip(reason="ported to Rust (hermes-gateway whatsapp_connect tests)")
 
 import asyncio
 from pathlib import Path

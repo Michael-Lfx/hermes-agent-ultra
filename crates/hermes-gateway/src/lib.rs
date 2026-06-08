@@ -15,8 +15,10 @@ pub mod adapter;
 pub mod attachment_inference;
 pub mod background;
 pub mod channel_directory;
+pub mod clarify_session;
 pub mod commands;
 pub mod delivery;
+pub mod display_config;
 pub mod dm;
 pub mod format;
 pub mod gateway;
@@ -40,6 +42,7 @@ mod test_env;
 pub mod tool_backends;
 pub mod voice;
 pub mod voice_config;
+pub mod whatsapp_identity;
 pub mod ws_proxy;
 
 // Re-export core types from hermes-core
@@ -94,7 +97,10 @@ pub use platforms::discord::DiscordAdapter;
 pub use platforms::slack::SlackAdapter;
 
 #[cfg(feature = "whatsapp")]
-pub use platforms::whatsapp::WhatsAppAdapter;
+pub use platforms::whatsapp::{WhatsAppAdapter, WhatsAppConfig, WhatsAppRustClient};
+
+#[cfg(feature = "whatsapp-cloud")]
+pub use platforms::whatsapp_cloud::{WhatsAppCloudAdapter, WhatsAppCloudConfig};
 
 #[cfg(feature = "signal")]
 pub use platforms::signal::SignalAdapter;
