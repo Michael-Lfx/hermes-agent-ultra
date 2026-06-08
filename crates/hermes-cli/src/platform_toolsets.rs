@@ -31,26 +31,51 @@ pub fn default_platform_toolsets() -> HashMap<String, Vec<String>> {
     map
 }
 
+fn is_interactive_im_platform(platform: &str) -> bool {
+    matches!(
+        platform,
+        "wecom" | "weixin" | "feishu" | "telegram" | "discord" | "slack" | "whatsapp"
+    )
+}
+
 /// Optional system hint when entry platform differs from available exec backends.
 /// Mirrors Python: cross-platform work uses `send_message` + platform toolsets, not SessionProfile.
 pub fn cross_platform_system_hint(platform: &str, allowed_tools: &[String]) -> Option<String> {
     let platform = platform.trim().to_ascii_lowercase();
     let has_feishu = allowed_tools.iter().any(|t| t.starts_with("feishu_"));
     let has_send = allowed_tools.iter().any(|t| t == "send_message");
+    let has_clarify = allowed_tools.iter().any(|t| t == "clarify");
+
+    let mut parts = Vec::new();
     match platform.as_str() {
-        "weixin" | "wecom" if has_feishu || has_send => Some(
-            "You are replying on a WeChat-class channel. Feishu/Lark calendar, docs, and tasks \
-             are available via feishu_* tools when enabled. To notify another platform, use \
-             send_message with an explicit platform and chat_id. Cron reminders auto-deliver to \
-             the current chat when deliver is omitted."
-                .to_string(),
-        ),
-        "feishu" if has_send => Some(
-            "You are in Feishu/Lark. Use feishu_* tools for workspace data. To reach users on other \
-             channels, use send_message with platform and chat_id."
-                .to_string(),
-        ),
-        _ => None,
+        "weixin" | "wecom" if has_feishu || has_send => {
+            parts.push(
+                "You are replying on a WeChat-class channel. Feishu/Lark calendar, docs, and tasks \
+                 are available via feishu_* tools when enabled. To notify another platform, use \
+                 send_message with an explicit platform and chat_id. Cron reminders auto-deliver to \
+                 the current chat when deliver is omitted.",
+            );
+        }
+        "feishu" if has_send => {
+            parts.push(
+                "You are in Feishu/Lark. Use feishu_* tools for workspace data. To reach users on other \
+                 channels, use send_message with platform and chat_id.",
+            );
+        }
+        _ => {}
+    }
+    if has_clarify && is_interactive_im_platform(&platform) {
+        parts.push(
+            "Interactive IM channel: when the user must pick among options or you need a structured \
+             answer, call the `clarify` tool (`question` plus up to 4 `choices`) in the same turn. \
+             Do not stop after prose like \"let me ask you\" — numbered choices only appear when \
+             `clarify` runs. If the user asks you to use clarify, you must invoke it before ending.",
+        );
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
     }
 }
 
@@ -258,6 +283,15 @@ mod tests {
         let hint = cross_platform_system_hint("weixin", &tools);
         assert!(hint.is_some());
         assert!(hint.unwrap().contains("feishu_*"));
+    }
+
+    #[test]
+    fn cross_platform_hint_for_wecom_with_clarify() {
+        let tools = vec!["clarify".to_string(), "terminal".to_string()];
+        let hint = cross_platform_system_hint("wecom", &tools)
+            .expect("expected clarify IM hint");
+        assert!(hint.contains("`clarify` tool"));
+        assert!(hint.contains("same turn"));
     }
 
     #[test]
