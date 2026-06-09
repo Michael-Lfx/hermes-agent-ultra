@@ -2488,7 +2488,7 @@ impl OpenRouterProvider {
         hasher.update(model.as_bytes());
         hasher.update(b"\n");
         hasher.update(encoded);
-        Some(format!("{:x}", hasher.finalize()))
+        Some(hex::encode(hasher.finalize()))
     }
 
     fn response_cache_get(key: &str) -> Option<LlmResponse> {

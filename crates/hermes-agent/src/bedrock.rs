@@ -12,7 +12,7 @@ use hmac::{Hmac, Mac};
 use reqwest::Client;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-
+use hmac::KeyInit;
 use hermes_core::{
     AgentError, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message, MessageRole,
     StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolSchema, UsageStats,
