@@ -19,7 +19,6 @@ use chrono::Utc;
 use futures::StreamExt;
 use hermes_auth::{OAuth2Endpoints, exchange_refresh_token};
 use hermes_intelligence::get_model_context_length;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -55,6 +54,9 @@ use crate::provider::{AnthropicProvider, GenericProvider, OpenAiProvider, OpenRo
 use crate::providers_extra::{
     CopilotProvider, KimiProvider, MiniMaxProvider, NousProvider, QwenProvider,
 };
+use crate::replay::{
+    RouteLearningState, RouteLearningStats, short_sha256_hex, truncate_hook_preview,
+};
 use crate::session_persistence::{SessionFlushCursor, SessionPersistence};
 use crate::skill_orchestrator::SkillOrchestrator;
 pub use crate::smart_model_routing::{ApiMode, CheapModelRouteConfig, SmartModelRoutingConfig};
@@ -76,7 +78,9 @@ use hermes_intelligence::auxiliary::AuxiliaryClient;
 // ToolRegistry (re-exported from `tool_registry` module)
 // ---------------------------------------------------------------------------
 
-pub use crate::agent_config::{AgentConfig, ErrorClass, RetryConfig, TurnMetrics};
+pub use crate::agent_config::{
+    AgentConfig, ErrorClass, RetryConfig, RuntimeProviderConfig, TurnMetrics,
+};
 use crate::agent_config::{
     CompactionGovernanceMode, EvolutionCounters, FinalizationSignals, OAuthStoreCredential,
     compaction_governance_mode_runtime, contextlattice_orchestration_script_path,
@@ -84,6 +88,21 @@ use crate::agent_config::{
     is_transient_stream_error, rand_u64_range, should_inject_tool_enforcement_for_model,
 };
 pub use crate::tool_registry::{ToolEntry, ToolRegistry};
+
+// ---------------------------------------------------------------------------
+// Governor (extracted to `governor` module)
+// ---------------------------------------------------------------------------
+
+pub(crate) use crate::governor::{
+    governor_for_turn, governor_runtime_state, governor_window_size,
+    should_apply_turn_reliability_guard, should_trip_tool_loop_guard,
+};
+
+// ---------------------------------------------------------------------------
+// Replay recorder (extracted to `replay` module)
+// ---------------------------------------------------------------------------
+
+pub(crate) use crate::replay::ReplayRecorder;
 
 pub(crate) const CONVERSATIONAL_SUPPORT_GUIDANCE: &str = "# Conversational support protocol\nWhen users share personal stress, emotions, or difficult decisions, start with a brief non-judgmental acknowledgment, ask one clarifying question if context is missing, then offer practical options with trade-offs. Keep factual or technical requests direct and do not force emotional language where it does not fit. Do not present yourself as a therapist or crisis service; when safety risk appears, urge the user to seek immediate professional or emergency help.";
 const OAUTH_REFRESH_BACKOFF_SECS: u64 = 60;
@@ -508,344 +527,12 @@ pub(crate) enum StreamCollectOutcome {
     Interrupted(LlmResponse),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TurnGovernor {
-    pub(crate) max_tokens: Option<u32>,
-    pub(crate) tool_concurrency: usize,
-    pub(crate) pressure: f64,
-    pub(crate) latency_degraded: bool,
-    pub(crate) error_degraded: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct GovernorRuntimeState {
-    pub(crate) avg_llm_latency_ms: Option<f64>,
-    pub(crate) avg_tool_error_rate: f64,
-    pub(crate) consecutive_error_turns: u32,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RepoReviewBudgetState {
     pub(crate) last_discovery_signature: Option<String>,
     pub(crate) repeat_streak: u32,
     pub(crate) low_signal_streak: u32,
     pub(crate) last_signal_score: f64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RouteLearningStats {
-    samples: u32,
-    success_rate: f64,
-    avg_latency_ms: f64,
-    consecutive_failures: u32,
-    updated_at_unix_ms: i64,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct RouteLearningState {
-    schema_version: u32,
-    saved_at_unix_ms: i64,
-    entries: HashMap<String, RouteLearningStats>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct ReplayRecorder {
-    path: Option<PathBuf>,
-    state: Option<Arc<Mutex<ReplayState>>>,
-}
-
-#[derive(Debug, Clone)]
-struct ReplayState {
-    seq: u64,
-    prev_hash: String,
-    trace_root: String,
-}
-
-impl ReplayRecorder {
-    pub(crate) fn for_session(config: &AgentConfig, session_id: &str) -> Self {
-        let enabled = std::env::var("HERMES_REPLAY_ENABLED")
-            .map(|v| {
-                matches!(
-                    v.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(false);
-        if !enabled {
-            return Self {
-                path: None,
-                state: None,
-            };
-        }
-        let root = config
-            .hermes_home
-            .as_deref()
-            .map(PathBuf::from)
-            .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|home| PathBuf::from(home).join(".hermes-agent-ultra"))
-            })
-            .unwrap_or_else(|| PathBuf::from(".hermes-agent-ultra"));
-        let dir = root.join("logs").join("replay");
-        if std::fs::create_dir_all(&dir).is_err() {
-            return Self {
-                path: None,
-                state: None,
-            };
-        }
-        let sid = if session_id.trim().is_empty() {
-            format!("session-{}", chrono::Utc::now().format("%Y%m%dT%H%M%SZ"))
-        } else {
-            session_id
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect::<String>()
-        };
-        let initial_prev_hash = short_sha256_hex(&format!("session:{sid}:v1"));
-        let trace_root = short_sha256_hex(&format!("trace:{sid}:v1"));
-        Self {
-            path: Some(dir.join(format!("{sid}.jsonl"))),
-            state: Some(Arc::new(Mutex::new(ReplayState {
-                seq: 0,
-                prev_hash: initial_prev_hash,
-                trace_root,
-            }))),
-        }
-    }
-
-    pub(crate) fn record(&self, event: &str, payload: Value) {
-        let Some(path) = self.path.as_ref() else {
-            return;
-        };
-        let Some(state) = self.state.as_ref() else {
-            return;
-        };
-        let mut redacted = payload;
-        redact_json_value(&mut redacted);
-        let canonical_payload =
-            serde_json::to_string(&redacted).unwrap_or_else(|_| "{}".to_string());
-        let (seq, prev_hash, event_hash, trace_id) = {
-            let mut guard = state.lock().unwrap();
-            guard.seq = guard.seq.saturating_add(1);
-            let seq = guard.seq;
-            let prev_hash = guard.prev_hash.clone();
-            let event_hash =
-                short_sha256_hex(&format!("{seq}|{event}|{prev_hash}|{canonical_payload}"));
-            let trace_id = format!("{}-{:08x}", guard.trace_root, seq);
-            guard.prev_hash = event_hash.clone();
-            (seq, prev_hash, event_hash, trace_id)
-        };
-        let line = serde_json::json!({
-            "ts": chrono::Utc::now().to_rfc3339(),
-            "seq": seq,
-            "trace_id": trace_id,
-            "event": event,
-            "prev_hash": prev_hash,
-            "event_hash": event_hash,
-            "payload": redacted,
-        })
-        .to_string();
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            let _ = writeln!(f, "{line}");
-        }
-    }
-}
-
-fn replay_sensitive_key(key: &str) -> bool {
-    let k = key.to_ascii_lowercase();
-    k.contains("api_key")
-        || k.contains("token")
-        || k.contains("secret")
-        || k.contains("password")
-        || k.contains("authorization")
-        || k.contains("cookie")
-        || k.contains("session")
-}
-
-fn short_sha256_hex(input: &str) -> String {
-    let digest = Sha256::digest(input.as_bytes());
-    let mut out = String::with_capacity(16);
-    for b in digest.iter().take(8) {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "{:02x}", b);
-    }
-    out
-}
-
-fn redact_sensitive_text(value: &str) -> Option<String> {
-    lazy_static::lazy_static! {
-        static ref SECRET_PATTERNS: Vec<regex::Regex> = vec![
-            regex::Regex::new(r"(?i)bearer\\s+[A-Za-z0-9._\\-]{8,}").unwrap(),
-            regex::Regex::new(r"sk-[A-Za-z0-9]{8,}").unwrap(),
-            regex::Regex::new(r"gh[pousr]_[A-Za-z0-9]{12,}").unwrap(),
-            regex::Regex::new(r"xox[baprs]-[A-Za-z0-9\\-]{10,}").unwrap(),
-            regex::Regex::new(r"(?i)(api[_-]?key|token|secret|password)\\s*[:=]\\s*[A-Za-z0-9._\\-]{6,}").unwrap(),
-        ];
-    }
-    let mut redacted = value.to_string();
-    let mut changed = false;
-    for pattern in SECRET_PATTERNS.iter() {
-        let next = pattern.replace_all(&redacted, "[redacted]").to_string();
-        if next != redacted {
-            changed = true;
-            redacted = next;
-        }
-    }
-    if changed { Some(redacted) } else { None }
-}
-
-fn truncate_hook_preview(text: &str, max_chars: usize) -> String {
-    let total = text.chars().count();
-    if total <= max_chars.max(1) {
-        return text.to_string();
-    }
-    let keep_head = max_chars.saturating_sub(96).max(64);
-    let head: String = text.chars().take(keep_head).collect();
-    let omitted = total.saturating_sub(keep_head);
-    format!("{head}\n...[truncated {omitted} chars]...")
-}
-
-fn redact_json_value(value: &mut Value) {
-    match value {
-        Value::Object(map) => {
-            for (k, v) in map.iter_mut() {
-                if replay_sensitive_key(k) {
-                    *v = Value::String("[redacted]".to_string());
-                } else {
-                    redact_json_value(v);
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for v in arr {
-                redact_json_value(v);
-            }
-        }
-        Value::String(raw) => {
-            if let Some(redacted) = redact_sensitive_text(raw) {
-                *raw = redacted;
-            }
-        }
-        _ => {}
-    }
-}
-
-fn governor_enabled() -> bool {
-    std::env::var("HERMES_PERFORMANCE_GOVERNOR")
-        .map(|v| {
-            !matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off"
-            )
-        })
-        .unwrap_or(true)
-}
-
-fn governor_tool_concurrency_base() -> usize {
-    std::env::var("HERMES_TOOL_CALL_MAX_CONCURRENCY")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(8)
-}
-
-pub(crate) fn governor_window_size() -> usize {
-    std::env::var("HERMES_PERF_GOV_WINDOW")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(8)
-}
-
-fn governor_latency_warn_ms() -> f64 {
-    std::env::var("HERMES_PERF_GOV_LATENCY_WARN_MS")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| *v > 0.0)
-        .unwrap_or(3500.0)
-}
-
-fn governor_latency_critical_ms() -> f64 {
-    std::env::var("HERMES_PERF_GOV_LATENCY_CRITICAL_MS")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| *v > 0.0)
-        .unwrap_or(6500.0)
-}
-
-fn governor_error_warn_rate() -> f64 {
-    std::env::var("HERMES_PERF_GOV_ERROR_WARN_RATE")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| (0.0..=1.0).contains(v))
-        .unwrap_or(0.20)
-}
-
-fn governor_error_critical_rate() -> f64 {
-    std::env::var("HERMES_PERF_GOV_ERROR_CRITICAL_RATE")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| (0.0..=1.0).contains(v))
-        .unwrap_or(0.50)
-}
-
-fn governor_tool_loop_guard_enabled() -> bool {
-    std::env::var("HERMES_TOOL_LOOP_GUARD_ENABLED")
-        .map(|v| {
-            !matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "0" | "false" | "off"
-            )
-        })
-        .unwrap_or(true)
-}
-
-fn governor_tool_loop_guard_max_consecutive_error_turns() -> u32 {
-    std::env::var("HERMES_TOOL_LOOP_GUARD_MAX_CONSEC_ERROR_TURNS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(4)
-}
-
-fn governor_tool_loop_guard_min_failed_calls() -> u32 {
-    std::env::var("HERMES_TOOL_LOOP_GUARD_MIN_FAILED_CALLS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u32>().ok())
-        .filter(|v| *v > 0)
-        .unwrap_or(1)
-}
-
-pub(crate) fn should_trip_tool_loop_guard(
-    consecutive_error_turns: u32,
-    turn_tool_count: usize,
-    turn_tool_error_count: u32,
-) -> bool {
-    if !governor_tool_loop_guard_enabled() {
-        return false;
-    }
-    if turn_tool_count == 0 {
-        return false;
-    }
-    if turn_tool_error_count < governor_tool_loop_guard_min_failed_calls() {
-        return false;
-    }
-    if turn_tool_error_count != turn_tool_count as u32 {
-        return false;
-    }
-    consecutive_error_turns >= governor_tool_loop_guard_max_consecutive_error_turns()
 }
 
 fn web_tool_budget_max_calls() -> u32 {
@@ -1199,131 +886,6 @@ pub(crate) fn push_window_f64(window: &mut VecDeque<f64>, value: f64, limit: usi
     window.push_back(value);
     while window.len() > limit {
         let _ = window.pop_front();
-    }
-}
-
-fn avg_u64(window: &VecDeque<u64>) -> Option<f64> {
-    if window.is_empty() {
-        return None;
-    }
-    Some(window.iter().copied().map(|v| v as f64).sum::<f64>() / window.len() as f64)
-}
-
-fn avg_f64(window: &VecDeque<f64>) -> f64 {
-    if window.is_empty() {
-        return 0.0;
-    }
-    window.iter().copied().sum::<f64>() / window.len() as f64
-}
-
-pub(crate) fn governor_runtime_state(
-    llm_latency_window: &VecDeque<u64>,
-    tool_error_window: &VecDeque<f64>,
-    consecutive_error_turns: u32,
-) -> GovernorRuntimeState {
-    GovernorRuntimeState {
-        avg_llm_latency_ms: avg_u64(llm_latency_window),
-        avg_tool_error_rate: avg_f64(tool_error_window),
-        consecutive_error_turns,
-    }
-}
-
-/// Whether to force a reliability-guard runtime route this turn.
-///
-/// Tool-error degradation needs sustained failures (`consecutive_error_turns >= 2`).
-/// Latency degradation needs multiple samples so one slow LLM call cannot hop providers.
-pub(crate) fn should_apply_turn_reliability_guard(
-    runtime: &GovernorRuntimeState,
-    llm_governor: &TurnGovernor,
-    llm_latency_window_len: usize,
-) -> bool {
-    if !llm_governor.error_degraded && !llm_governor.latency_degraded {
-        return false;
-    }
-    if runtime.consecutive_error_turns >= 2 {
-        return true;
-    }
-    llm_governor.latency_degraded
-        && llm_latency_window_len >= 2
-        && runtime
-            .avg_llm_latency_ms
-            .map(|v| v >= governor_latency_warn_ms())
-            .unwrap_or(false)
-}
-
-pub(crate) fn governor_for_turn(
-    config: &AgentConfig,
-    ctx: &ContextManager,
-    requested_tools: usize,
-    runtime: Option<&GovernorRuntimeState>,
-) -> TurnGovernor {
-    let threshold = ((ctx.max_context_chars().max(1) as f64) * 0.8).max(1.0);
-    let mut pressure = (ctx.total_chars() as f64 / threshold).max(0.0);
-    let enabled = governor_enabled();
-    let mut latency_degraded = false;
-    let mut error_degraded = false;
-
-    if enabled {
-        if let Some(runtime) = runtime {
-            if let Some(lat_ms) = runtime.avg_llm_latency_ms {
-                if lat_ms >= governor_latency_critical_ms() {
-                    pressure = pressure.max(0.97);
-                    latency_degraded = true;
-                } else if lat_ms >= governor_latency_warn_ms() {
-                    pressure = pressure.max(0.88);
-                    latency_degraded = true;
-                }
-            }
-            if runtime.avg_tool_error_rate >= governor_error_critical_rate()
-                || runtime.consecutive_error_turns >= 3
-            {
-                pressure = pressure.max(0.97);
-                error_degraded = true;
-            } else if runtime.avg_tool_error_rate >= governor_error_warn_rate()
-                || runtime.consecutive_error_turns >= 1
-            {
-                pressure = pressure.max(0.88);
-                error_degraded = true;
-            }
-        }
-    }
-
-    let max_tokens = if enabled {
-        config.max_tokens.map(|base| {
-            if pressure >= 0.95 {
-                base.saturating_div(4).max(64)
-            } else if pressure >= 0.85 {
-                base.saturating_div(2).max(128)
-            } else {
-                base
-            }
-        })
-    } else {
-        config.max_tokens
-    };
-
-    let base_concurrency = governor_tool_concurrency_base();
-    let mut tool_concurrency = if enabled {
-        if pressure >= 0.95 {
-            base_concurrency.min(2)
-        } else if pressure >= 0.85 {
-            base_concurrency.min(4)
-        } else {
-            base_concurrency
-        }
-    } else {
-        base_concurrency
-    };
-    if requested_tools > 0 {
-        tool_concurrency = tool_concurrency.min(requested_tools).max(1);
-    }
-
-    TurnGovernor {
-        max_tokens,
-        tool_concurrency,
-        pressure,
-        latency_degraded,
-        error_degraded,
     }
 }
 
@@ -7853,7 +7415,9 @@ pub(crate) fn merge_usage(existing: Option<UsageStats>, new: &UsageStats) -> Usa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::governor::{GovernorRuntimeState, TurnGovernor};
     use crate::message_sanitization::budget_pressure_text;
+    use crate::replay::{ReplayState, redact_json_value};
     use futures::stream::BoxStream;
     use hermes_core::JsonSchema;
     use std::sync::{Mutex, MutexGuard, OnceLock};
