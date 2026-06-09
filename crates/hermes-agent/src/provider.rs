@@ -33,7 +33,6 @@ use crate::credential_pool::CredentialPool;
 use crate::provider_serialize_cache::ProviderSerializeCache;
 use crate::provider_profiles;
 use crate::rate_limit::RateLimitTracker;
-use crate::usage_parse::usage_stats_from_raw;
 use crate::tool_call_args::arguments_value_to_string;
 
 struct ChatRequestParams<'a> {

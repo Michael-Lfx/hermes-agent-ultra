@@ -19,18 +19,16 @@ pub mod claw_migrate;
 pub mod cli;
 pub mod commands;
 pub mod config_env;
-pub mod cron_delivery;
 pub mod copilot_auth;
-pub mod doctor;
+pub mod cron_delivery;
 pub mod dep_ensure;
+pub mod doctor;
 pub mod env_loader;
 pub mod env_vars;
 pub mod gateway_cmd;
 pub mod gateway_inbound_wiring;
 pub mod gateway_runtime_defaults;
 pub mod kanban;
-pub mod systems;
-pub mod teams_pipeline_cli;
 pub mod live_messaging;
 pub mod lumio;
 pub mod mcp_config;
@@ -43,6 +41,9 @@ pub mod runtime_tool_wiring;
 pub mod setup;
 pub mod skills_config;
 pub mod skin_engine;
+pub mod startup_metrics;
+pub mod systems;
+pub mod teams_pipeline_cli;
 pub mod terminal_backend;
 pub mod theme;
 pub mod tool_preview;
@@ -58,12 +59,11 @@ pub(crate) mod test_env_lock;
 // Re-export primary types
 pub use app::App;
 pub use checklist::{
-    curses_checklist, curses_select, curses_select_embedded, key_event_is_actionable,
-    prefer_plain_checklist, prompt_choice,
-    ChecklistResult, SelectResult,
+    ChecklistResult, SelectResult, curses_checklist, curses_select, curses_select_embedded,
+    key_event_is_actionable, prefer_plain_checklist, prompt_choice,
 };
-pub use claw_migrate::{run_migration, MigrateOptions, MigrationResult};
-pub use cli::{completion_command, Cli, CliCommand};
+pub use claw_migrate::{MigrateOptions, MigrationResult, run_migration};
+pub use cli::{Cli, CliCommand, completion_command};
 pub use commands::CommandResult;
 pub use theme::Theme;
 pub use tui::{Event, InputMode, ToolOutputSection, Tui};

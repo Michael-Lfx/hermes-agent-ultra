@@ -3387,7 +3387,7 @@ impl AgentLoop {
         if !workspace_root.exists() {
             return None;
         }
-        let mut index = CodeIndex::default_for_workspace(workspace_root);
+        let index = CodeIndex::default_for_workspace(workspace_root);
         // let _ = index.ensure_fresh(); // high time comsumption, should be called in a separate thread
         Some(Arc::new(Mutex::new(index)))
     }
