@@ -1,4 +1,4 @@
-//! Tool Registry (Requirement 4)
+//! Tool Registry
 //!
 //! Central registry for all tool definitions and handlers. Supports:
 //! - Dynamic registration/deregistration with availability checks
