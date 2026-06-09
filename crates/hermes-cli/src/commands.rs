@@ -20,6 +20,7 @@ use hermes_agent::{
 };
 use hermes_core::AgentError;
 use hermes_intelligence::model_metadata::{get_model_context_length, get_model_info};
+use hermes_skills;
 use hermes_intelligence::models_dev::default_client;
 use hermes_intelligence::{SwarmExecutionMode, build_swarm_execution_plan, swarm_runtime_status};
 use hermes_tools::ToolPolicyEngine;
@@ -3195,6 +3196,10 @@ fn command_subcommand_overrides(cmd: &str) -> &'static [&'static str] {
         "/autocompact" => &["status", "now", "governance"],
         "/qos" => &["status", "health", "autotune"],
         "/claims" => &["status", "on", "off"],
+        "/curator" => &[
+            "status", "run", "pause", "resume", "pin", "unpin", "restore",
+            "list-archived",
+        ],
         _ => &[],
     }
 }
@@ -3315,7 +3320,6 @@ fn canonical_command(cmd: &str) -> &str {
         "/reset" => "/new",
         "/compact" => "/compress",
         "/skill" => "/skills",
-        "/curator" => "/skills",
         "/agent" => "/status",
         "/tasks" => "/kanban",
         "/busy" => "/status",
@@ -3481,6 +3485,7 @@ pub async fn handle_slash_command(
         }
         "/pet" => handle_pet_command(app, args),
         "/skills" => handle_skills_command(app, args).await,
+        "/curator" => handle_curator_command(app, args).await,
         "/tools" => handle_tools_command(app, args),
         "/toolcards" => handle_toolcards_command(app, args),
         "/toolsets" => handle_toolsets_command(app),
@@ -5106,6 +5111,165 @@ async fn handle_skills_command(app: &mut App, args: &[&str]) -> Result<CommandRe
         out.push_str("\nUse `/skills quality` for score + fallback recommendations.");
         emit_command_output(app, out.trim_end());
     }
+    Ok(CommandResult::Handled)
+}
+
+async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+    let skills_dir = hermes_config::hermes_home().join("skills");
+
+    let sub = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
+
+    match sub.as_str() {
+        "status" | "" => {
+            let rows = hermes_skills::agent_created_report(&skills_dir);
+            if rows.is_empty() {
+                emit_command_output(app, "No agent-created skills found.\n\nSkills created by the agent during background review will appear here.");
+            } else {
+                let mut out = format!("## Agent-created skills ({})\n\n", rows.len());
+                for row in &rows {
+                    let pin_mark = if row.pinned { "📌 " } else { "   " };
+                    let state_tag = match row.state.as_str() {
+                        "archived" => " [archived]",
+                        "stale" => " [stale]",
+                        _ => "",
+                    };
+                    out.push_str(&format!(
+                        "{pin_mark}`{name}`{state_tag} — activity: {activity}\n",
+                        pin_mark = pin_mark,
+                        name = row.name,
+                        state_tag = state_tag,
+                        activity = row.activity_count,
+                    ));
+                }
+                let pinned_count = rows.iter().filter(|r| r.pinned).count();
+                if pinned_count > 0 {
+                    out.push_str(&format!("\n📌 {pinned_count} pinned (exempt from automatic curation)"));
+                }
+                emit_command_output(app, out.trim_end());
+            }
+        }
+        "pin" | "unpin" => {
+            let skill_name = args.get(1).map(|s| s.trim()).unwrap_or("");
+            if skill_name.is_empty() {
+                emit_command_output(
+                    app,
+                    format!("Usage: /curator {} <skill-name>", sub),
+                );
+                return Ok(CommandResult::Handled);
+            }
+            let pinned = sub == "pin";
+            match hermes_skills::set_pinned(&skills_dir, skill_name, pinned) {
+                Ok(()) => {
+                    let action = if pinned { "📌 Pinned" } else { "Unpinned" };
+                    emit_command_output(app, format!("{action} skill `{skill_name}`."));
+                }
+                Err(e) => {
+                    emit_command_output(app, format!("Failed: {e}"));
+                }
+            }
+        }
+        "restore" => {
+            let skill_name = args.get(1).map(|s| s.trim()).unwrap_or("");
+            if skill_name.is_empty() {
+                emit_command_output(app, "Usage: /curator restore <skill-name>");
+                return Ok(CommandResult::Handled);
+            }
+            match hermes_skills::restore_skill(&skills_dir, skill_name) {
+                Ok((true, msg)) => {
+                    emit_command_output(app, format!("✅ {msg}"));
+                }
+                Ok((false, msg)) => {
+                    emit_command_output(app, format!("❌ {msg}"));
+                }
+                Err(e) => {
+                    emit_command_output(app, format!("Failed: {e}"));
+                }
+            }
+        }
+        "archive" => {
+            let skill_name = args.get(1).map(|s| s.trim()).unwrap_or("");
+            if skill_name.is_empty() {
+                emit_command_output(app, "Usage: /curator archive <skill-name>");
+                return Ok(CommandResult::Handled);
+            }
+            match hermes_skills::archive_skill(&skills_dir, skill_name) {
+                Ok((true, msg)) => {
+                    emit_command_output(app, format!("✅ {msg}"));
+                }
+                Ok((false, msg)) => {
+                    emit_command_output(app, format!("❌ {msg}"));
+                }
+                Err(e) => {
+                    emit_command_output(app, format!("Failed: {e}"));
+                }
+            }
+        }
+        "list-archived" => {
+            let archive_dir = skills_dir.join(".archive");
+            if !archive_dir.exists() {
+                emit_command_output(app, "No archived skills found.");
+                return Ok(CommandResult::Handled);
+            }
+            match std::fs::read_dir(&archive_dir) {
+                Ok(entries) => {
+                    let mut names: Vec<String> = entries
+                        .flatten()
+                        .filter_map(|e| {
+                            if e.path().is_dir() {
+                                Some(e.file_name().to_string_lossy().to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    names.sort();
+                    if names.is_empty() {
+                        emit_command_output(app, "No archived skills found.");
+                    } else {
+                        let mut out = format!("## Archived skills ({})\n\n", names.len());
+                        for name in &names {
+                            out.push_str(&format!("  - `{name}`\n"));
+                        }
+                        out.push_str("\nUse `/curator restore <name>` to restore a skill.");
+                        emit_command_output(app, out.trim_end());
+                    }
+                }
+                Err(e) => {
+                    emit_command_output(app, format!("Failed to read archive directory: {e}"));
+                }
+            }
+        }
+        "run" | "pause" | "resume" => {
+            emit_command_output(
+                app,
+                format!(
+                    "⚠️  The curator background engine has not been ported to Rust yet.\n\
+                     `/curator {sub}` is a placeholder.\n\
+                     Please use the Python CLI for this operation."
+                ),
+            );
+        }
+        _ => {
+            let help = format!(
+                "## /curator — Background skill maintenance\n\n\
+                 Subcommands:\n\
+                   `/curator status`      — Show agent-created skills report\n\
+                   `/curator pin <name>`   — Pin a skill (exempt from auto-curation)\n\
+                   `/curator unpin <name>` — Unpin a skill\n\
+                   `/curator archive <name>` — Archive a skill to .archive/\n\
+                   `/curator restore <name>` — Restore an archived skill\n\
+                   `/curator list-archived` — List archived skills\n\
+                   `/curator run`          — Trigger curator review (⚠️ not yet ported)\n\
+                   `/curator pause`        — Pause curator (⚠️ not yet ported)\n\
+                   `/curator resume`       — Resume curator (⚠️ not yet ported)\n\
+                 \nUnknown subcommand: `{unknown}`\n\
+                 Try `/curator` (no args) for status overview.",
+                unknown = sub,
+            );
+            emit_command_output(app, help);
+        }
+    }
+
     Ok(CommandResult::Handled)
 }
 
@@ -26064,7 +26228,7 @@ mod tests {
         assert_eq!(canonical_command("/kanban"), "/kanban");
         assert_eq!(canonical_command("/busy"), "/status");
         assert_eq!(canonical_command("/bg"), "/background");
-        assert_eq!(canonical_command("/curator"), "/skills");
+        assert_eq!(canonical_command("/curator"), "/curator");
         assert_eq!(canonical_command("/tt"), "/timetravel");
         assert_eq!(canonical_command("/rb"), "/runbook");
     }
