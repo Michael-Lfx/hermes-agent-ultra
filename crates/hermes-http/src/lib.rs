@@ -918,35 +918,6 @@ pub fn build_agent_config(config: &GatewayConfig, model: &str) -> AgentConfig {
         lsp_context_enabled: config.agent.lsp_context_enabled,
         lsp_context_max_chars: config.agent.lsp_context_max_chars,
         max_delegate_depth,
-        delegation_model: config
-            .delegation
-            .model
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        delegation_provider: config
-            .delegation
-            .provider
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        delegation_base_url: config
-            .delegation
-            .base_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        delegation_api_key: config
-            .delegation
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string),
-        prefill_messages: hermes_config::load_prefill_messages(config),
         ..AgentConfig::default()
     }
 }
