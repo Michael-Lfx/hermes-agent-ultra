@@ -62,6 +62,10 @@ pub fn spawn_session_end_ingest(
     if !config.enabled {
         return;
     }
+    if tokio::runtime::Handle::try_current().is_err() {
+        tracing::debug!("interest: skip session-end ingest without tokio runtime");
+        return;
+    }
     tokio::spawn(async move {
         let mut all_signals = buffered;
         if config.uses_rules() {

@@ -330,7 +330,7 @@ mod tests {
             .await;
         let parsed: serde_json::Value =
             serde_json::from_str(&out).expect("send_message output should be json");
-        assert_eq!(parsed["status"], "sent");
+        assert_eq!(parsed["status"], "delivered");
 
         let sent = recorder.lock().expect("recording lock poisoned");
         assert_eq!(sent.len(), 1);

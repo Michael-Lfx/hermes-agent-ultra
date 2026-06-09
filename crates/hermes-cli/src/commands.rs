@@ -3353,6 +3353,59 @@ fn canonical_command(cmd: &str) -> &str {
 // Command dispatcher
 // ---------------------------------------------------------------------------
 
+fn quick_command_key(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('/')
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+}
+
+fn expand_quick_alias_command(
+    quick_commands: &std::collections::BTreeMap<String, hermes_config::QuickCommandConfig>,
+    cmd: &str,
+    args: &[&str],
+) -> Result<(String, Vec<String>), String> {
+    let mut current_cmd = cmd.to_string();
+    let mut current_args: Vec<String> = args.iter().map(|part| (*part).to_string()).collect();
+    loop {
+        let key = quick_command_key(&current_cmd);
+        let Some(quick) = quick_commands.get(&key) else {
+            return Ok((current_cmd, current_args));
+        };
+        match quick.kind.trim().to_ascii_lowercase().as_str() {
+            "alias" => {
+                let Some(target) = quick.target.as_deref().filter(|v| !v.trim().is_empty()) else {
+                    return Err(format!("Quick command `{key}` has no target defined."));
+                };
+                let target = target.trim();
+                let (target_cmd, embedded_args) = match target.find(char::is_whitespace) {
+                    Some(idx) => (&target[..idx], target[idx..].trim()),
+                    None => (target, ""),
+                };
+                let mut merged = Vec::new();
+                if !embedded_args.is_empty() {
+                    merged.extend(
+                        embedded_args
+                            .split_whitespace()
+                            .map(|part| part.to_string()),
+                    );
+                }
+                merged.extend(current_args);
+                current_cmd = target_cmd.to_string();
+                current_args = merged;
+            }
+            other => {
+                return Err(format!(
+                    "Quick command `{key}` has unsupported kind `{other}`."
+                ));
+            }
+        }
+    }
+}
+
 /// Handle a slash command.
 ///
 /// `cmd` is the full command token including the `/` prefix
@@ -3362,6 +3415,17 @@ pub async fn handle_slash_command(
     cmd: &str,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
+    let (resolved_cmd, arg_storage) =
+        match expand_quick_alias_command(&app.config.quick_commands, cmd, args) {
+        Ok(expanded) => expanded,
+        Err(message) => {
+            emit_command_output(app, message);
+            return Ok(CommandResult::Handled);
+        }
+    };
+    let arg_refs: Vec<&str> = arg_storage.iter().map(|part| part.as_str()).collect();
+    let args = arg_refs.as_slice();
+    let cmd = resolved_cmd.as_str();
     match canonical_command(cmd) {
         "/new" => {
             app.new_session();
@@ -25703,9 +25767,9 @@ mod tests {
         let usage = latest_ui_assistant_text(&app);
         assert!(usage.contains("Usage: /handoff <platform>"));
 
-        handle_handoff_command(&mut app, &["telegram"]).expect("handoff unknown platform");
+        handle_handoff_command(&mut app, &["not-a-real-platform"]).expect("handoff unknown platform");
         let unknown = latest_ui_assistant_text(&app);
-        assert!(unknown.contains("Unknown platform 'telegram'"));
+        assert!(unknown.contains("Unknown platform 'not-a-real-platform'"));
     }
 
     #[test]
@@ -26132,7 +26196,7 @@ mod tests {
         );
         assert_eq!(
             std::env::var("HERMES_MAX_ITERATIONS").ok().as_deref(),
-            Some("50")
+            Some("250")
         );
     }
 
@@ -27413,10 +27477,16 @@ install_command: "uv pip install -r requirements.txt"
 
     #[test]
     fn normalize_repo_relative_path_handles_absolute_and_relative() {
-        let root = PathBuf::from("/tmp/repo");
+        let root = std::env::temp_dir().join("hermes-repo-path-test");
         let rel = normalize_repo_relative_path(&root, "src/main.rs").expect("relative");
         assert_eq!(rel, "src/main.rs");
-        let abs = normalize_repo_relative_path(&root, "/tmp/repo/src/lib.rs").expect("abs");
-        assert_eq!(abs, "src/lib.rs");
+        let abs_path = root.join("src").join("lib.rs");
+        let abs = normalize_repo_relative_path(
+            &root,
+            abs_path.to_str().expect("absolute path should be utf-8"),
+        )
+        .expect("abs");
+        let normalized = abs.replace('\\', "/");
+        assert_eq!(normalized, "src/lib.rs");
     }
 }

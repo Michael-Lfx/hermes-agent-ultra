@@ -26,6 +26,7 @@ pub const KNOWN_PROVIDERS: &[&str] = &[
     "huggingface",
     "kilocode",
     "nvidia",
+    "novita",
     "ollama-cloud",
     "ollama-local",
     "llama-cpp",

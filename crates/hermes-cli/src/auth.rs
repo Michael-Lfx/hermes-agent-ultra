@@ -431,6 +431,12 @@ pub struct AnthropicOAuthStatus {
 }
 
 fn auth_json_path() -> PathBuf {
+    if let Ok(path) = std::env::var("HERMES_AUTH_FILE") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
     hermes_config::paths::auth_json_path()
 }
 
@@ -3288,10 +3294,12 @@ mod tests {
         let _guard = test_env_lock::lock();
         let tmp = tempfile::tempdir().expect("tempdir");
         let prev_home = std::env::var("HOME").ok();
+        let prev_userprofile = std::env::var("USERPROFILE").ok();
         let prev_hermes_home = std::env::var("HERMES_HOME").ok();
         let prev_auth_file = std::env::var("HERMES_AUTH_FILE").ok();
 
         crate::env_vars::set_var("HOME", tmp.path());
+        crate::env_vars::set_var("USERPROFILE", tmp.path());
         crate::env_vars::remove_var("HERMES_HOME");
 
         let primary_store = tmp.path().join("profile-auth.json");
@@ -3311,7 +3319,8 @@ mod tests {
             primary_store.to_string_lossy().to_string(),
         );
 
-        let fallback_store = tmp.path().join(".hermes-agent-ultra").join("auth.json");
+        let home = dirs::home_dir().unwrap_or_else(|| tmp.path().to_path_buf());
+        let fallback_store = home.join(".hermes-agent-ultra").join("auth.json");
         std::fs::create_dir_all(
             fallback_store
                 .parent()
@@ -3354,6 +3363,10 @@ mod tests {
         match prev_home {
             Some(v) => crate::env_vars::set_var("HOME", v),
             None => crate::env_vars::remove_var("HOME"),
+        }
+        match prev_userprofile {
+            Some(v) => crate::env_vars::set_var("USERPROFILE", v),
+            None => crate::env_vars::remove_var("USERPROFILE"),
         }
     }
 
