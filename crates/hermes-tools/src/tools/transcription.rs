@@ -62,7 +62,7 @@ impl ToolHandler for TranscriptionHandler {
         );
         tool_schema(
             "transcription",
-            "Transcribe audio into text. Provider from config stt.provider (openai, groq, mistral, xai, local_command). \
+            "Transcribe audio into text. Provider from config stt.provider (openai, groq, mistral, xai, local_command, bailian). \
              Honors stt.enabled, stt.openai.model/base_url, STT_OPENAI_BASE_URL, and VOICE_TOOLS_OPENAI_KEY.",
             JsonSchema::object(props, vec!["audio_path".into()]),
         )

@@ -19232,6 +19232,314 @@ pub async fn handle_cli_chat(
     Ok(())
 }
 
+pub async fn handle_cli_talk() -> Result<(), hermes_core::AgentError> {
+    use hermes_config::load_config;
+    use hermes_core::{Message, MessageRole, StreamChunk};
+    use hermes_tools::tools::tts::TtsBackend;
+    use std::sync::Arc;
+
+    let config = load_config(None).map_err(|e| hermes_core::AgentError::Config(e.to_string()))?;
+
+    let talk_model = config
+        .talk
+        .as_ref()
+        .and_then(|t| t.model.as_deref())
+        .or(config.model.as_deref())
+        .ok_or_else(|| hermes_core::AgentError::Config("talk.model not configured".into()))?;
+
+    let agent_config = crate::app::build_agent_config(&config, talk_model);
+    let provider = crate::app::build_provider(&config, talk_model);
+    let tool_registry = Arc::new(hermes_agent::ToolRegistry::new());
+    let agent = hermes_agent::AgentLoop::new(agent_config, tool_registry, provider);
+
+    // TTS / STT setup
+    let tts_cfg: Option<hermes_config::voice::TtsConfig> = config
+        .tts
+        .as_object()
+        .map(|_| serde_json::from_value(config.tts.clone()).unwrap_or_default());
+    let stt_cfg: Option<hermes_config::voice::SttConfig> = config
+        .stt
+        .as_object()
+        .map(|_| serde_json::from_value(config.stt.clone()).unwrap_or_default());
+
+    let tts_enabled = tts_cfg
+        .as_ref()
+        .and_then(|t| t.provider.as_deref())
+        .map(|p| p != "edge")
+        .unwrap_or(false);
+    let stt_enabled = stt_cfg
+        .as_ref()
+        .map(|s| s.is_enabled())
+        .unwrap_or(false);
+
+    let tts_backend = if tts_enabled {
+        Some(Arc::new(hermes_tools::MultiTtsBackend::with_config(
+            tts_cfg.clone(),
+        )))
+    } else {
+        None
+    };
+
+    let stt_engine = if stt_enabled {
+        Some(Arc::new(hermes_tools::voice_providers::SttEngine::from_optional(
+            stt_cfg.clone(),
+        )))
+    } else {
+        None
+    };
+
+    println!("Hermes Talk — model: {talk_model}");
+    if tts_enabled {
+        let prov = tts_cfg
+            .as_ref()
+            .and_then(|t| t.provider.as_deref())
+            .unwrap_or("edge");
+        println!("  TTS: {prov}");
+    }
+    if stt_enabled {
+        let prov = stt_cfg
+            .as_ref()
+            .map(|s| s.default_provider().to_string())
+            .unwrap_or_else(|| "openai".into());
+        println!("  STT: {prov}");
+    }
+    println!("Type /exit to quit, /help for help.\n");
+
+    let mut history: Vec<Message> = Vec::new();
+    loop {
+        let input = if stt_enabled {
+            let _stt = stt_engine.as_ref().unwrap();
+            let path = capture_mic_audio().await.map_err(|e| {
+                hermes_core::AgentError::Config(format!("mic capture failed: {e}"))
+            })?;
+            if path.is_empty() {
+                // No speech detected, continue
+                continue;
+            }
+            println!("\r  [transcribing audio...]");
+            let text = _stt.transcribe_file(&path).await.map_err(|e| {
+                hermes_core::AgentError::Config(format!("STT failed: {e}"))
+            })?;
+            let _ = tokio::fs::remove_file(&path).await;
+            if text.trim().is_empty() {
+                println!("  (no speech detected)");
+                continue;
+            }
+            println!("\r  You: {text}");
+            text
+        } else {
+            print!("> ");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+            let mut line = String::new();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("read error: {e}");
+                    break;
+                }
+            }
+            let trimmed = line.trim().to_string();
+            if trimmed.eq_ignore_ascii_case("/exit") || trimmed.eq_ignore_ascii_case("/quit") {
+                break;
+            }
+            if trimmed.eq_ignore_ascii_case("/help") {
+                println!("  /exit    quit talk mode");
+                println!("  /help    show this help");
+                println!("  Type any message to chat with the LLM.");
+                continue;
+            }
+            if trimmed.is_empty() {
+                continue;
+            }
+            trimmed
+        };
+
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let started_anim = started.clone();
+        let started_cb = started.clone();
+
+        let anim_handle = tokio::spawn(async move {
+            let spinner_chars = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            let mut i = 0usize;
+            while !started_anim.load(std::sync::atomic::Ordering::Relaxed) {
+                print!(
+                    "\r{} thinking...",
+                    spinner_chars[i % spinner_chars.len()]
+                );
+                let _ = std::io::Write::flush(&mut std::io::stdout());
+                i += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            }
+        });
+
+        let stream_cb: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |chunk: StreamChunk| {
+            if let Some(delta) = &chunk.delta {
+                if let Some(content) = &delta.content {
+                    if !content.is_empty() {
+                        if !started_cb.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            print!("\r                                        \r");
+                        }
+                        print!("{content}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                }
+            }
+        });
+
+        history.push(Message {
+            role: MessageRole::User,
+            content: Some(input.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+            cache_control: None,
+        });
+
+        let conv_result = agent
+            .run_conversation(hermes_agent::RunConversationParams {
+                user_message: input,
+                conversation_history: history.clone(),
+                task_id: None,
+                stream_callback: Some(stream_cb),
+                persist_user_message: None,
+                tools: None,
+                persist_session: false,
+            })
+            .await;
+
+        if !started.load(std::sync::atomic::Ordering::Relaxed) {
+            started.store(true, std::sync::atomic::Ordering::Relaxed);
+            print!("\r                         \r");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        }
+        let _ = anim_handle.await;
+
+        match conv_result {
+            Ok(conv) => {
+                if let Some(ref final_response) = conv.final_response {
+                    if !final_response.is_empty() {
+                        history.push(Message {
+                            role: MessageRole::Assistant,
+                            content: Some(final_response.clone()),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            name: None,
+                            reasoning_content: None,
+                            cache_control: None,
+                        });
+
+                        // TTS: synthesize response to audio and play
+                        if let Some(ref tts) = tts_backend {
+                            let text: &str = final_response;
+                            let result = tts.synthesize(text, None, None).await;
+                            match result {
+                                Ok(audio_json) => {
+                                    play_audio_file(&audio_json).await;
+                                }
+                                Err(e) => {
+                                    eprintln!("\n  [TTS error: {e}]");
+                                }
+                            }
+                        }
+                    }
+                }
+                println!();
+            }
+            Err(e) => {
+                eprintln!("Error: {e}");
+            }
+        }
+    }
+    println!("\nBye.");
+    Ok(())
+}
+
+/// Capture microphone audio using `arecord`, return path to WAV file.
+async fn capture_mic_audio() -> Result<String, hermes_core::ToolError> {
+    use tokio::process::Command;
+
+    let path = std::env::temp_dir().join(format!(
+        "hermes_talk_mic_{}.wav",
+        uuid::Uuid::new_v4()
+    ));
+
+    // Record up to 10 seconds of audio
+    let output = Command::new("arecord")
+        .args([
+            "-d", "5",
+            "-r", "16000",
+            "-f", "S16_LE",
+            "-c", "1",
+            "-t", "wav",
+        ])
+        .arg(path.to_str().unwrap_or("/dev/null"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| hermes_core::ToolError::ExecutionFailed(format!("arecord not found: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // If no audio device or empty recording, return empty
+        if stderr.contains("No such device")
+            || stderr.contains("capture error")
+            || !path.exists()
+            || tokio::fs::metadata(&path).await.map(|m| m.len()).unwrap_or(0) < 100
+        {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Ok(String::new());
+        }
+        return Err(hermes_core::ToolError::ExecutionFailed(format!(
+            "arecord error: {stderr}"
+        )));
+    }
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Play audio file from TTS result JSON using a system command.
+async fn play_audio_file(audio_json: &str) {
+    use tokio::process::Command;
+
+    let path: String = match serde_json::from_str::<serde_json::Value>(audio_json) {
+        Ok(v) => v
+            .get("file")
+            .and_then(|f| f.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_default(),
+        Err(_) => return,
+    };
+    if path.is_empty() {
+        return;
+    }
+
+    // Try common players in order
+    for player in ["paplay", "ffplay", "aplay", "play"] {
+        let args: &[&str] = match player {
+            "ffplay" => &["-nodisp", "-autoexit", "-loglevel", "quiet"],
+            "play" => &["-q"],
+            _ => &[],
+        };
+        let result = Command::new(player)
+            .args(args)
+            .arg(&path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
+        if let Ok(status) = result {
+            if status.success() {
+                return;
+            }
+        }
+    }
+    // Fallback: print the audio file path so user can play it manually
+    println!("\n  [Audio saved: {path}]");
+}
+
 /// Handle `hermes skills [action] [name] [--extra ...]`.
 pub async fn handle_cli_skills(
     action: Option<String>,

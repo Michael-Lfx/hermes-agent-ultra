@@ -118,6 +118,11 @@ pub enum ShallowCommand {
         _rest: Vec<String>,
     },
     #[command(disable_help_flag = true)]
+    Talk    {
+        #[arg(trailing_var_arg = true, hide = true, allow_hyphen_values = true)]
+        _rest: Vec<String>,
+    },
+    #[command(disable_help_flag = true)]
     Skills    {
         #[arg(trailing_var_arg = true, hide = true, allow_hyphen_values = true)]
         _rest: Vec<String>,

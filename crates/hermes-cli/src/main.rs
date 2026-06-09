@@ -548,6 +548,7 @@ async fn run(cli: Cli) {
             )
             .await
         }
+        CliCommand::Talk => run_talk_command(cli).await,
         CliCommand::Model { provider_model } => run_model(cli, provider_model).await,
         CliCommand::Tools {
             action,
@@ -952,6 +953,10 @@ async fn run(cli: Cli) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}
+
+async fn run_talk_command(_cli: Cli) -> Result<(), AgentError> {
+    hermes_cli::commands::handle_cli_talk().await
 }
 
 async fn run_chat_command(

@@ -15,8 +15,8 @@ use hermes_config::managed_gateway::{
 use crate::tools::tts::TtsBackend;
 use crate::tts_streaming::minimax::MiniMaxTtsBackend;
 use crate::voice_providers::{
-    edge_tts_synthesize, gemini_tts_synthesize, mistral_tts_synthesize, tts_result_json,
-    TtsSettings, xai_tts_synthesize,
+    bailian_tts_synthesize, edge_tts_synthesize, gemini_tts_synthesize, mistral_tts_synthesize,
+    tts_result_json, TtsSettings, xai_tts_synthesize,
 };
 use hermes_core::ToolError;
 
@@ -343,9 +343,22 @@ impl TtsBackend for MultiTtsBackend {
                 let bytes = xai_tts_synthesize(&self.client, text, &self.settings.config).await?;
                 tts_result_json("xai", voice.unwrap_or("default"), &bytes, "mp3").await
             }
+            "bailian" => {
+                let bytes =
+                    bailian_tts_synthesize(&self.client, text, &self.settings.config).await?;
+                let fmt = self
+                    .settings
+                    .config
+                    .bailian
+                    .as_ref()
+                    .and_then(|c| c.format.as_deref())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("wav");
+                tts_result_json("bailian", voice.unwrap_or("longanyang"), &bytes, fmt).await
+            }
             other => Err(ToolError::InvalidParams(format!(
                 "Unknown TTS provider: '{other}'. Supported: edge, openai, elevenlabs, minimax, \
-                 piper, mistral, gemini, xai."
+                 piper, mistral, gemini, xai, bailian."
             ))),
         }
     }

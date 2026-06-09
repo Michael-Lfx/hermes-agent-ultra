@@ -204,6 +204,7 @@ pub enum CliCommand {
         preload_skill: Option<String>,
         yolo: bool,
     },
+    Talk,
     Skills {
         action: Option<String>,
         name: Option<String>,

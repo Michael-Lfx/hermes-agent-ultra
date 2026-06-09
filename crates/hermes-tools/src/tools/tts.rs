@@ -74,14 +74,14 @@ impl ToolHandler for TextToSpeechHandler {
             json!({
                 "type": "string",
                 "description": "TTS provider to use",
-                "enum": ["edge", "openai", "elevenlabs", "minimax", "piper", "mistral", "gemini", "xai"],
+                "enum": ["edge", "openai", "elevenlabs", "minimax", "piper", "mistral", "gemini", "xai", "bailian"],
                 "default": "edge"
             }),
         );
 
         tool_schema(
             "text_to_speech",
-            "Convert text to speech. Providers: edge (free), openai, elevenlabs, minimax, piper, mistral, gemini, xai. \
+            "Convert text to speech. Providers: edge (free), openai, elevenlabs, minimax, piper, mistral, gemini, xai, bailian. \
              Default provider from config tts.provider.",
             JsonSchema::object(props, vec!["text".into()]),
         )

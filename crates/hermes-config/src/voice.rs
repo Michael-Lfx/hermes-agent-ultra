@@ -89,6 +89,22 @@ pub struct TtsPiperConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TtsBailianConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voice: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_rate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TtsProviderEntry {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub type_: Option<String>,
@@ -118,6 +134,8 @@ pub struct TtsConfig {
     pub edge: Option<TtsEdgeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub piper: Option<TtsPiperConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bailian: Option<TtsBailianConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<HashMap<String, TtsProviderEntry>>,
 }
@@ -176,6 +194,18 @@ pub struct SttXaiConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SttBailianConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SttConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -191,6 +221,8 @@ pub struct SttConfig {
     pub mistral: Option<SttMistralConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xai: Option<SttXaiConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bailian: Option<SttBailianConfig>,
 }
 
 impl SttConfig {

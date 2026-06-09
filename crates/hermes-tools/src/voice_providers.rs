@@ -18,6 +18,8 @@ const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const MISTRAL_API_BASE: &str = "https://api.mistral.ai/v1";
 const GEMINI_TTS_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
 const XAI_DEFAULT_BASE: &str = "https://api.x.ai/v1";
+const BAILIAN_TTS_ENDPOINT: &str = "https://dashscope.aliyuncs.com/api/v1/services/audio/tts/SpeechSynthesizer";
+const BAILIAN_ASR_ENDPOINT: &str = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
 
 fn env_nonempty(key: &str) -> Option<String> {
     std::env::var(key)
@@ -114,6 +116,7 @@ impl SttEngine {
             "mistral" => self.transcribe_mistral(path).await,
             "xai" => self.transcribe_xai(path).await,
             "local_command" => self.transcribe_local_command(path).await,
+            "bailian" => self.transcribe_bailian(path).await,
             "openai" | _ => self.transcribe_openai(path).await,
         }
     }
@@ -379,6 +382,85 @@ impl SttEngine {
             "local STT command produced no .txt transcript".into(),
         ))
     }
+
+    async fn transcribe_bailian(&self, path: &str) -> Result<String, ToolError> {
+        let b = self.config.bailian.as_ref();
+        let api_key = b
+            .and_then(|c| c.api_key.as_deref())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+            .or_else(|| env_nonempty("DASHSCOPE_API_KEY"))
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "Bailian STT requires stt.bailian.api_key or DASHSCOPE_API_KEY env var"
+                        .into(),
+                )
+            })?;
+        let model = b
+            .and_then(|c| c.model.as_deref())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("qwen3-asr-flash");
+        let base = b
+            .and_then(|c| c.base_url.as_deref())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(BAILIAN_ASR_ENDPOINT);
+
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Cannot read audio: {e}")))?;
+        let fmt = audio_extension_format(path);
+        let mime = format!("audio/{fmt}");
+        let b64 = B64.encode(&bytes);
+        let data_uri = format!("data:{mime};base64,{b64}");
+
+        let body = json!({
+            "model": model,
+            "input": {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"audio": data_uri}
+                        ]
+                    }
+                ]
+            },
+            "parameters": {
+                "asr_options": {
+                    "enable_itn": false
+                }
+            }
+        });
+
+        let resp = self
+            .client
+            .post(base)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Bailian STT: {e}")))?;
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            return Err(ToolError::ExecutionFailed(format!(
+                "Bailian STT error: {err}"
+            )));
+        }
+        let data: Value = resp
+            .json()
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+        let text = data
+            .pointer("/output/choices/0/message/content/0/text")
+            .and_then(|v| v.as_str())
+            .or_else(|| {
+                data.pointer("/output/text").and_then(|v| v.as_str())
+            })
+            .unwrap_or("")
+            .to_string();
+        Ok(text)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -642,6 +724,70 @@ pub async fn xai_tts_synthesize(
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
         .to_vec())
+}
+
+pub async fn bailian_tts_synthesize(
+    client: &Client,
+    text: &str,
+    cfg: &TtsConfig,
+) -> Result<Vec<u8>, ToolError> {
+    let b = cfg.bailian.as_ref();
+    let api_key = b
+        .and_then(|c| c.api_key.as_deref())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| env_nonempty("DASHSCOPE_API_KEY"))
+        .ok_or_else(|| {
+            ToolError::ExecutionFailed(
+                "Bailian TTS requires tts.bailian.api_key or DASHSCOPE_API_KEY env var".into(),
+            )
+        })?;
+    let model = b
+        .and_then(|c| c.model.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("cosyvoice-v3-flash");
+    let voice = b
+        .and_then(|c| c.voice.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("longanyang");
+    let format = b
+        .and_then(|c| c.format.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("wav");
+    let sample_rate = b.and_then(|c| c.sample_rate).unwrap_or(24000);
+    let base = b
+        .and_then(|c| c.base_url.as_deref())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(BAILIAN_TTS_ENDPOINT);
+
+    let body = json!({
+        "model": model,
+        "input": {
+            "text": text,
+            "voice": voice,
+            "format": format,
+            "sample_rate": sample_rate,
+        }
+    });
+
+    let resp = client
+        .post(base)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Bailian TTS: {e}")))?;
+    if !resp.status().is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        return Err(ToolError::ExecutionFailed(format!("Bailian TTS error: {err}")));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+        .to_vec();
+    Ok(bytes)
 }
 
 pub async fn tts_result_json(

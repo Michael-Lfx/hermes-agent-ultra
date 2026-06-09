@@ -181,6 +181,10 @@ pub struct GatewayConfig {
     /// IANA timezone for user-facing wall clock (e.g. `Asia/Shanghai`). Overridden by `HERMES_TIMEZONE`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timezone: Option<String>,
+
+    /// Talk mode configuration (hermes talk command).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub talk: Option<TalkConfig>,
 }
 
 impl Default for GatewayConfig {
@@ -225,6 +229,7 @@ impl Default for GatewayConfig {
             prompt_caching: PromptCachingConfig::default(),
             home_dir: None,
             timezone: None,
+            talk: None,
         }
     }
 }
@@ -1453,6 +1458,32 @@ pub struct WebConfig {
         skip_serializing_if = "String::is_empty"
     )]
     pub crawl_backend: String,
+}
+
+// ---------------------------------------------------------------------------
+// TalkConfig
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TalkConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+}
+
+impl Default for TalkConfig {
+    fn default() -> Self {
+        Self {
+            model: None,
+            max_tokens: None,
+            temperature: None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

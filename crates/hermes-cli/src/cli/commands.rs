@@ -705,6 +705,14 @@ pub fn parse_chat(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 }
 
 #[derive(Parser, Debug, Clone)]
+#[command(name = "talk", about = "start talk chat")]
+struct TalkArgs {}
+
+pub fn parse_talk(args: &[OsString]) -> Result<CliCommand, clap::Error> {
+    parse_subcommand::<TalkArgs, _>(args, |_| CliCommand::Talk)
+}
+
+#[derive(Parser, Debug, Clone)]
 #[command(name = "skills", about = "skills command")]
 struct SkillsArgs {
     action: Option<String>,
@@ -1090,6 +1098,7 @@ pub fn all_subcommand_commands() -> Vec<clap::Command> {
         CronArgs,
         WebhookArgs,
         ChatArgs,
+        TalkArgs,
         SkillsArgs,
         PluginsArgs,
         MemoryArgs,

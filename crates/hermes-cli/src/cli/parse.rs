@@ -87,6 +87,7 @@ fn parse_shallow_command(
         ShallowCommand::Cron { .. } => commands::parse_cron(args),
         ShallowCommand::Webhook { .. } => commands::parse_webhook(args),
         ShallowCommand::Chat { .. } => commands::parse_chat(args),
+        ShallowCommand::Talk { .. } => commands::parse_talk(args),
         ShallowCommand::Skills { .. } => commands::parse_skills(args),
         ShallowCommand::Plugins { .. } => commands::parse_plugins(args),
         ShallowCommand::Memory { .. } => commands::parse_memory(args),
