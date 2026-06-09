@@ -3,11 +3,10 @@
 //! Maps ACP sessions to Hermes agent instances with persistence support.
 //! Mirrors the Python `acp_adapter/session.py` implementation.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hermes_agent::session_persistence::SessionPersistence;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -151,29 +150,6 @@ impl SessionManager {
             on_delete: None,
             on_list: None,
         }
-    }
-
-    /// Create a session manager with ACP session persistence enabled.
-    ///
-    /// This mirrors Python ACP behavior: session state survives process restart.
-    pub fn new_with_default_persistence() -> Self {
-        let sp = Arc::new(SessionPersistence::default_home());
-        if let Err(err) = sp.ensure_db() {
-            tracing::warn!("ACP session persistence initialization failed: {}", err);
-        }
-
-        let persist_sp = sp.clone();
-        let restore_sp = sp.clone();
-        let list_sp = sp.clone();
-        let delete_sp = sp;
-
-        Self::new()
-            .with_persist_callback(move |state| {
-                persist_session_state(&persist_sp, state);
-            })
-            .with_restore_callback(move |session_id| restore_session_state(&restore_sp, session_id))
-            .with_list_callback(move || list_persisted_sessions(&list_sp))
-            .with_delete_callback(move |session_id| delete_persisted_session(&delete_sp, session_id))
     }
 
     /// Set a callback invoked whenever a session is persisted.
@@ -410,159 +386,10 @@ impl Default for SessionManager {
     }
 }
 
-const ACP_SESSION_INDEX_KEY: &str = "acp:sessions:index";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct PersistedSessionState {
-    session_id: String,
-    cwd: String,
-    model: Option<String>,
-    provider: Option<String>,
-    api_mode: Option<String>,
-    base_url: Option<String>,
-    phase: SessionPhase,
-    history: Vec<Value>,
-    mode: Option<String>,
-    config_options: HashMap<String, String>,
-    created_at: u64,
-    updated_at: u64,
-    total_prompt_tokens: u64,
-    total_completion_tokens: u64,
-}
-
-impl From<&SessionState> for PersistedSessionState {
-    fn from(s: &SessionState) -> Self {
-        Self {
-            session_id: s.session_id.clone(),
-            cwd: s.cwd.clone(),
-            model: s.model.clone(),
-            provider: s.provider.clone(),
-            api_mode: s.api_mode.clone(),
-            base_url: s.base_url.clone(),
-            phase: s.phase,
-            history: s.history.clone(),
-            mode: s.mode.clone(),
-            config_options: s.config_options.clone(),
-            created_at: s.created_at,
-            updated_at: s.updated_at,
-            total_prompt_tokens: s.total_prompt_tokens,
-            total_completion_tokens: s.total_completion_tokens,
-        }
-    }
-}
-
-impl From<PersistedSessionState> for SessionState {
-    fn from(s: PersistedSessionState) -> Self {
-        Self {
-            session_id: s.session_id,
-            cwd: s.cwd,
-            model: s.model,
-            provider: s.provider,
-            api_mode: s.api_mode,
-            base_url: s.base_url,
-            phase: s.phase,
-            history: s.history,
-            mode: s.mode,
-            config_options: s.config_options,
-            created_at: s.created_at,
-            updated_at: s.updated_at,
-            total_prompt_tokens: s.total_prompt_tokens,
-            total_completion_tokens: s.total_completion_tokens,
-        }
-    }
-}
-
-fn session_state_meta_key(session_id: &str) -> String {
-    format!("acp:session:{}", session_id)
-}
-
-fn read_persisted_session_ids(sp: &SessionPersistence) -> HashSet<String> {
-    match sp.get_meta(ACP_SESSION_INDEX_KEY) {
-        Ok(Some(raw)) => serde_json::from_str::<Vec<String>>(&raw)
-            .unwrap_or_default()
-            .into_iter()
-            .collect(),
-        _ => HashSet::new(),
-    }
-}
-
-fn write_persisted_session_ids(sp: &SessionPersistence, ids: HashSet<String>) {
-    let mut list: Vec<String> = ids.into_iter().collect();
-    list.sort();
-    if let Ok(raw) = serde_json::to_string(&list) {
-        if let Err(err) = sp.set_meta(ACP_SESSION_INDEX_KEY, &raw) {
-            tracing::warn!("Failed writing ACP session index: {}", err);
-        }
-    }
-}
-
-fn persist_session_state(sp: &SessionPersistence, state: &SessionState) {
-    let persisted = PersistedSessionState::from(state);
-    let key = session_state_meta_key(&state.session_id);
-    let raw = match serde_json::to_string(&persisted) {
-        Ok(v) => v,
-        Err(err) => {
-            tracing::warn!(
-                session_id = %state.session_id,
-                "Failed serializing ACP session state: {}",
-                err
-            );
-            return;
-        }
-    };
-    if let Err(err) = sp.set_meta(&key, &raw) {
-        tracing::warn!(
-            session_id = %state.session_id,
-            "Failed persisting ACP session state: {}",
-            err
-        );
-        return;
-    }
-    let mut ids = read_persisted_session_ids(sp);
-    ids.insert(state.session_id.clone());
-    write_persisted_session_ids(sp, ids);
-}
-
-fn restore_session_state(sp: &SessionPersistence, session_id: &str) -> Option<SessionState> {
-    let key = session_state_meta_key(session_id);
-    let raw = sp.get_meta(&key).ok().flatten()?;
-    let parsed = serde_json::from_str::<PersistedSessionState>(&raw).ok()?;
-    Some(parsed.into())
-}
-
-fn delete_persisted_session(sp: &SessionPersistence, session_id: &str) -> bool {
-    let key = session_state_meta_key(session_id);
-    let existed = sp
-        .get_meta(&key)
-        .ok()
-        .flatten()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false);
-    if existed {
-        let _ = sp.set_meta(&key, "");
-    }
-    let mut ids = read_persisted_session_ids(sp);
-    let removed_id = ids.remove(session_id);
-    if removed_id {
-        write_persisted_session_ids(sp, ids);
-    }
-    existed || removed_id
-}
-
-fn list_persisted_sessions(sp: &SessionPersistence) -> Vec<SessionInfo> {
-    let mut infos = Vec::new();
-    for session_id in read_persisted_session_ids(sp) {
-        if let Some(state) = restore_session_state(sp, &session_id) {
-            infos.push(SessionInfo::from(&state));
-        }
-    }
-    infos
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     #[derive(Default)]
     struct InMemoryPersistStore {

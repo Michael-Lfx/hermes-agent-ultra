@@ -2254,13 +2254,30 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
- "hermes-agent",
  "hermes-core",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "hermes-acp-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dirs",
+ "futures",
+ "hermes-acp",
+ "reqwest 0.13.3",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -2361,6 +2378,7 @@ dependencies = [
  "flate2",
  "futures",
  "hermes-acp",
+ "hermes-acp-server",
  "hermes-agent",
  "hermes-auth",
  "hermes-config",

@@ -382,6 +382,7 @@ pub const SLASH_COMMANDS: &[(&str, &str)] = &[
         "Runtime policy profiles (`status|list|strict|standard|dev`) + live counters",
     ),
     ("/help", "Show help for available commands"),
+    ("/acp_server", "ACP server (auto-start if not running; or start|stop|status|restart|connections)"),
     ("/quit", "Quit the application"),
     ("/exit", "Alias for /quit"),
     ("/onboard", "Alias for /walkthrough"),
@@ -3483,6 +3484,7 @@ pub async fn handle_slash_command(
             print_help(app);
             Ok(CommandResult::Handled)
         }
+        "/acp_server" => crate::acp_command::handle_acp_command(app, args).await,
         "/quit" | "/exit" => {
             emit_command_output(app, "Goodbye!");
             Ok(CommandResult::Quit)
@@ -4781,7 +4783,7 @@ async fn handle_model_command(app: &mut App, args: &[&str]) -> Result<CommandRes
     Ok(CommandResult::Handled)
 }
 
-fn emit_command_output(app: &mut App, text: impl Into<String>) {
+pub(crate) fn emit_command_output(app: &mut App, text: impl Into<String>) {
     let rendered = text.into();
     if app.stream_handle.is_some() {
         app.push_ui_assistant(rendered);

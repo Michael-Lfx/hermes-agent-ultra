@@ -33,6 +33,8 @@ use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::tools::messaging::MessagingSessionContext;
 use hermes_tools::ToolRegistry;
 
+use hermes_acp_server::server::AcpPipeServer;
+
 use crate::alpha_runtime::{
     canonical_objective_behavior_mode, load_objective_contract, load_quorum_policy,
     objective_lifecycle_is_active, ObjectiveContract, QuorumPolicy,
@@ -299,6 +301,8 @@ pub struct App {
     pub quorum_armed_once: bool,
     /// Animated companion pet settings.
     pub pet_settings: PetSettings,
+    /// Background ACP Pipe Server (started via /acp_server).
+    pub acp_server: Option<Arc<AcpPipeServer>>,
 }
 
 impl std::fmt::Debug for App {
@@ -345,6 +349,7 @@ impl Clone for App {
             session_objective: self.session_objective.clone(),
             quorum_armed_once: self.quorum_armed_once,
             pet_settings: self.pet_settings.clone(),
+            acp_server: self.acp_server.clone(),
         }
     }
 }
@@ -2128,6 +2133,7 @@ impl App {
             session_objective: None,
             quorum_armed_once: false,
             pet_settings: load_pet_settings(),
+            acp_server: None,
         };
         app.ensure_session_stub_snapshot();
         Ok(app)
@@ -3815,6 +3821,7 @@ mod tests {
             session_objective: None,
             quorum_armed_once: false,
             pet_settings: PetSettings::default(),
+            acp_server: None,
         }
     }
 

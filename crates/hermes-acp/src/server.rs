@@ -30,7 +30,7 @@ impl AcpServer {
         Self {
             handler,
             event_sink: Arc::new(EventSink::default()),
-            session_manager: Arc::new(SessionManager::new_with_default_persistence()),
+            session_manager: Arc::new(SessionManager::new()),
             permission_store: Arc::new(PermissionStore::new()),
         }
     }

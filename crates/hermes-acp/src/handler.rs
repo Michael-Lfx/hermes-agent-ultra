@@ -1260,7 +1260,7 @@ impl DefaultAcpHandler {
     pub fn new() -> Self {
         Self {
             inner: HermesAcpHandler::new(
-                Arc::new(SessionManager::new_with_default_persistence()),
+                Arc::new(SessionManager::new()),
                 Arc::new(EventSink::default()),
                 Arc::new(PermissionStore::new()),
             ),
