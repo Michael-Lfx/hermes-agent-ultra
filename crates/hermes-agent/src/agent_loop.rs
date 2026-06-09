@@ -1978,6 +1978,22 @@ impl AgentLoop {
         let max_turns = effective_max_turns(self.config().max_turns)
             .map(|m| m.to_string())
             .unwrap_or_else(|| "unlimited".into());
+        let last_assistant_tail = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Assistant)
+            .and_then(|m| m.content.as_deref())
+            .map(|text| {
+                let trimmed = text.trim();
+                let count = trimmed.chars().count();
+                if count <= 120 {
+                    trimmed.replace('\n', " ")
+                } else {
+                    let tail: String = trimmed.chars().skip(count.saturating_sub(120)).collect();
+                    format!("…{}", tail.replace('\n', " "))
+                }
+            })
+            .unwrap_or_default();
         tracing::info!(
             session_id = %crate::session_log::current_session_tag(),
             turn_exit_reason = %loop_result.turn_exit_reason,
@@ -1990,6 +2006,7 @@ impl AgentLoop {
             finished_naturally = loop_result.finished_naturally,
             last_msg_role = %last_role,
             pending_tool_assistant_msgs = pending_tool_assistant,
+            last_assistant_tail = %last_assistant_tail,
             "conversation turn exit"
         );
     }
@@ -3919,6 +3936,18 @@ pub(crate) fn latest_user_content(messages: &[Message]) -> Option<&str> {
         .and_then(|m| m.content.as_deref())
 }
 
+fn session_search_has_query(tc: &ToolCall) -> bool {
+    serde_json::from_str::<Value>(&tc.function.arguments)
+        .ok()
+        .and_then(|v| {
+            v.get("query")
+                .and_then(|q| q.as_str())
+                .map(str::trim)
+                .map(str::to_string)
+        })
+        .is_some_and(|q| !q.is_empty())
+}
+
 pub(crate) fn inject_runtime_tool_params(
     tool_name: &str,
     params: &mut Value,
@@ -5396,6 +5425,34 @@ impl AgentLoop {
     ) -> (String, bool) {
         crate::conversation_loop::resolve_initial_system_prompt(self, task_hint, tool_schemas)
     }
+
+    pub(crate) fn guard_session_search_without_query(
+        &self,
+        tool_calls: &mut Vec<ToolCall>,
+    ) -> Vec<ToolResult> {
+        let web_hint = if self.tool_registry.get("web_search").is_some() {
+            " If current external facts are needed, use web_search with a specific query instead."
+        } else {
+            ""
+        };
+        let mut blocked = Vec::new();
+        tool_calls.retain(|tc| {
+            let should_block =
+                tc.function.name == "session_search" && !session_search_has_query(tc);
+            if should_block {
+                blocked.push(ToolResult::err(
+                    tc.id.clone(),
+                    format!(
+                        "Blocked: session_search was called without a concrete query. In normal agent turns, session_search must include a query describing the past conversation context to recall.{web_hint}"
+                    ),
+                ));
+                false
+            } else {
+                true
+            }
+        });
+        blocked
+    }
 }
 
 #[cfg(test)]
@@ -5423,6 +5480,32 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("env test lock poisoned")
+    }
+
+    fn session_search_call(args: &str) -> ToolCall {
+        ToolCall {
+            id: "call_session".into(),
+            function: hermes_core::FunctionCall {
+                name: "session_search".into(),
+                arguments: args.into(),
+            },
+            extra_content: None,
+        }
+    }
+
+    #[test]
+    fn session_search_query_guard_detects_missing_query() {
+        assert!(!session_search_has_query(&session_search_call("{}")));
+        assert!(!session_search_has_query(&session_search_call(
+            r#"{"query":"   "}"#
+        )));
+    }
+
+    #[test]
+    fn session_search_query_guard_allows_concrete_query() {
+        assert!(session_search_has_query(&session_search_call(
+            r#"{"query":"上次的项目进展"}"#
+        )));
     }
 
     #[test]

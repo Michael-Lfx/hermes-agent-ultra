@@ -831,6 +831,18 @@ pub fn extract_last_reasoning_current_turn(messages: &[Message]) -> Option<Strin
     None
 }
 
+pub(crate) const TOOL_RESULT_EMPTY_CONTINUATION_USER_MESSAGE: &str = "[System: Tool results are available above. Use them to answer the user's original request now. Do not send a transition or acknowledgement only. If the results are insufficient, state that clearly.]";
+pub(crate) const TOOL_RESULT_EMPTY_FAILURE_MESSAGE: &str =
+    "工具已经返回结果，但模型没有生成最终答复。请重试一次。";
+
+pub(crate) fn last_non_system_message_is_tool_result(messages: &[Message]) -> bool {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.role != MessageRole::System)
+        .is_some_and(|m| m.role == MessageRole::Tool)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

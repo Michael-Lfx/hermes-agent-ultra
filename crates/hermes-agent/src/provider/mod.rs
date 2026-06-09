@@ -834,6 +834,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_openai_response_with_reasoning_details() {
+        let json = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "reasoning_details": [
+                        {"type": "text", "text": "Step 1"},
+                        {"type": "thinking", "thinking": "Step 2"}
+                    ]
+                },
+                "finish_reason": "stop"
+            }],
+            "model": "deepseek-compatible"
+        });
+        let resp = parse_openai_response(&json).unwrap();
+        let reasoning = resp.message.reasoning_content.as_deref().unwrap();
+        assert!(reasoning.contains("Step 1"));
+        assert!(reasoning.contains("Step 2"));
+    }
+
+    #[test]
     fn test_parse_sse_chunk_content() {
         let json = serde_json::json!({
             "choices": [{
@@ -849,6 +871,28 @@ mod tests {
             Some("Hello")
         );
         assert!(chunk.finish_reason.is_none());
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_reasoning_content() {
+        let json = serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "checking weather source"
+                },
+                "finish_reason": null
+            }]
+        });
+        let chunk = parse_sse_chunk(&json).unwrap();
+        assert_eq!(
+            chunk
+                .delta
+                .as_ref()
+                .and_then(|d| d.extra.as_ref())
+                .and_then(|e| e.get("thinking"))
+                .and_then(|v| v.as_str()),
+            Some("checking weather source")
+        );
     }
 
     #[test]

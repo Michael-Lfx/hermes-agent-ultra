@@ -592,6 +592,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     // --- Streaming first attempt + semantic empty/thinking recovery ---
     let api_start = Instant::now();
     let mut inner_empty = 0u32;
+    let mut tool_result_empty_continuation_requested = false;
     let mut inner_thinking = 0u32;
     let mut turn_usage_acc: Option<UsageStats> = None;
     let mut inner_attempt: u32 = 0;
@@ -716,6 +717,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             .as_ref()
             .map_or(false, |tc| !tc.is_empty());
         if has_tools {
+            tool_result_empty_continuation_requested = false;
             break r;
         }
         if AgentLoop::assistant_visible_text(&r.message) {
@@ -734,15 +736,34 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             tc.ctx.add_message(r.message.clone());
             continue;
         }
-        // Accept explicit stop/end-turn responses even when assistant text is empty
-        if !AgentLoop::assistant_has_reasoning(&r.message)
-            && r.finish_reason.as_deref() == Some("stop")
-        {
+        let empty_without_reasoning = !AgentLoop::assistant_has_reasoning(&r.message);
+        let awaiting_tool_result_final = tool_result_empty_continuation_requested
+            || crate::conversation_loop::last_non_system_message_is_tool_result(tc.ctx.get_messages());
+        if empty_without_reasoning && awaiting_tool_result_final {
+            if !tool_result_empty_continuation_requested {
+                tool_result_empty_continuation_requested = true;
+                hooks::emit_status(
+                    agent,
+                    "lifecycle",
+                    "Tool result received but assistant returned empty stop; requesting final answer.",
+                );
+                tc.ctx.add_message(Message::user(
+                    crate::conversation_loop::TOOL_RESULT_EMPTY_CONTINUATION_USER_MESSAGE,
+                ));
+                continue;
+            }
+            let mut response = r;
+            response.message.content = Some(
+                crate::conversation_loop::TOOL_RESULT_EMPTY_FAILURE_MESSAGE.to_string(),
+            );
+            response.finish_reason = Some("empty_after_tool_result".to_string());
+            break response;
+        }
+        // Accept explicit stop/end-turn responses even when assistant text is empty.
+        if empty_without_reasoning && r.finish_reason.as_deref() == Some("stop") {
             break r;
         }
-        if !AgentLoop::assistant_has_reasoning(&r.message)
-            && inner_empty < agent.config().empty_content_max_retries
-        {
+        if empty_without_reasoning && inner_empty < agent.config().empty_content_max_retries {
             inner_empty += 1;
             tracing::warn!(
                 "empty assistant response (stream path) - retrying ({}/{})",
@@ -1310,6 +1331,13 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         crate::tool_executor::repair_tool_call(agent, tc_);
         crate::tool_executor::hydrate_session_search_args(agent, tc_);
     }
+    let mut guarded_tool_results = agent.guard_session_search_without_query(&mut tool_calls);
+    if !guarded_tool_results.is_empty() {
+        tracing::info!(
+            blocked = guarded_tool_results.len(),
+            "session_search query guard blocked tool call(s)"
+        );
+    }
 
     if let Some(note) =
         apply_repo_review_tool_profile_narrowing(&mut tool_calls, tc.ctx.get_messages())
@@ -1335,6 +1363,13 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     }
 
     if tool_calls.is_empty() {
+        if !guarded_tool_results.is_empty() {
+            for result in guarded_tool_results.drain(..) {
+                tc.ctx
+                    .add_message(Message::tool_result(&result.tool_call_id, &result.content));
+            }
+            return TurnState::CallLlm;
+        }
         tc.ctx.add_message(Message::system(
             "[SYSTEM] Tool profile/budget policy filtered this turn's calls. Propose refined, scoped code-inspection calls next.",
         ));
@@ -1682,6 +1717,9 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
                 .into_iter()
                 .map(|(_, result)| result),
         );
+    }
+    if !guarded_tool_results.is_empty() {
+        results.extend(guarded_tool_results);
     }
 
     let tool_elapsed = tool_start.elapsed().as_millis() as u64;

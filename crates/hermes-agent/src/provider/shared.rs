@@ -508,6 +508,7 @@ pub(crate) fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
         .get("content")
         .and_then(|c| c.as_str())
         .map(|s| s.to_string());
+    let thinking = parse_sse_delta_reasoning(delta_obj);
 
     let tool_calls = delta_obj
         .get("tool_calls")
@@ -536,11 +537,11 @@ pub(crate) fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
                 .collect::<Vec<_>>()
         });
 
-    let delta = if content.is_some() || tool_calls.is_some() {
+    let delta = if content.is_some() || tool_calls.is_some() || thinking.is_some() {
         Some(StreamDelta {
             content,
             tool_calls,
-            extra: None,
+            extra: thinking.map(|text| serde_json::json!({ "thinking": text })),
         })
     } else {
         None
@@ -570,6 +571,28 @@ pub(crate) fn parse_sse_chunk(json: &Value) -> Option<StreamChunk> {
         finish_reason,
         usage,
     })
+}
+
+fn parse_sse_delta_reasoning(delta_obj: &Value) -> Option<String> {
+    for key in ["reasoning_content", "reasoning", "thinking"] {
+        if let Some(text) = delta_obj
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(text.to_string());
+        }
+    }
+    let details = delta_obj
+        .get("reasoning_details")
+        .and_then(|v| v.as_array())?;
+    let text = crate::reasoning::extract_reasoning_details(details);
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 /// Parse an OpenAI-style chat completion response.
@@ -640,11 +663,15 @@ pub(crate) fn parse_openai_response(json: &Value) -> Result<LlmResponse, AgentEr
         .and_then(|r| r.as_str())
         .unwrap_or("assistant");
 
-    // Extract reasoning content
-    let reasoning_content = message_obj
-        .get("reasoning_content")
-        .and_then(|r| r.as_str())
-        .map(|s| s.to_string());
+    // Extract provider-specific reasoning content from the full response.
+    let reasoning_content = crate::reasoning::parse_reasoning(json).or_else(|| {
+        message_obj
+            .get("thinking")
+            .and_then(|r| r.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    });
 
     let message = Message {
         role: match role {

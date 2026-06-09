@@ -128,6 +128,8 @@ pub fn gateway_status_message_visible(event_type: &str, message: &str) -> bool {
         "Compaction governance",
         "Assistant response incomplete",
         "Continuation retries exhausted",
+        "Empty assistant response - retrying",
+        "Tool result received but assistant returned empty stop",
         "requesting continuation",
         "Detected intermediate ack",
         "Truncated tool arguments",
@@ -291,6 +293,14 @@ mod tests {
         assert!(!gateway_status_message_visible(
             "lifecycle",
             "Assistant response incomplete (Some(\"tool_calls\")) - requesting continuation (1/3)"
+        ));
+        assert!(!gateway_status_message_visible(
+            "lifecycle",
+            "Empty assistant response - retrying (1/3)"
+        ));
+        assert!(!gateway_status_message_visible(
+            "lifecycle",
+            "Tool result received but assistant returned empty stop; requesting final answer."
         ));
         assert!(!gateway_status_message_visible(
             "lifecycle",
