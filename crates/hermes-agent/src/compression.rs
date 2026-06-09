@@ -55,7 +55,6 @@ pub const PRUNED_TOOL_PLACEHOLDER: &str = "[Old tool output cleared to save cont
 const MIN_SUMMARY_TOKENS: u64 = 2_000;
 const SUMMARY_RATIO: f64 = 0.20;
 const SUMMARY_TOKENS_CEILING: u64 = 12_000;
-const CHARS_PER_TOKEN: usize = 4;
 const SUMMARY_FAILURE_COOLDOWN: Duration = Duration::from_secs(600);
 
 // Truncation limits for the summariser input (per Python class constants).
@@ -305,7 +304,8 @@ impl ContextCompressor {
         self.config.context_length = context_length;
         self.threshold_tokens = (context_length as f64 * self.config.threshold_percent) as u64;
         self.tail_token_budget = (self.threshold_tokens as f64 * summary_ratio) as u64;
-        self.max_summary_tokens = ((context_length as f64 * 0.05) as u64).min(SUMMARY_TOKENS_CEILING);
+        self.max_summary_tokens =
+            ((context_length as f64 * 0.05) as u64).min(SUMMARY_TOKENS_CEILING);
     }
 
     /// Compression trigger predicate.
@@ -383,10 +383,13 @@ impl ContextCompressor {
             let min_protect = protect_tail_count.min(n.saturating_sub(1));
             for i in (0..n).rev() {
                 let msg = &result[i];
-                let mut msg_tokens = chars_to_tokens(content_len(msg)) + 10;
+                let mut msg_tokens =
+                    hermes_core::token_estimator::estimate(msg.content.as_deref().unwrap_or(""))
+                        + 10;
                 if let Some(tcs) = msg.tool_calls.as_ref() {
                     for tc in tcs {
-                        msg_tokens += chars_to_tokens(tc.function.arguments.len());
+                        msg_tokens +=
+                            hermes_core::token_estimator::estimate(&tc.function.arguments);
                     }
                 }
                 if accumulated + msg_tokens > budget && (n - i) >= min_protect {
@@ -488,9 +491,7 @@ impl ContextCompressor {
             .map(str::trim)
             .filter(|h| !h.is_empty())
             .map(|h| {
-                format!(
-                    "MEMORY PROVIDER NOTES (preserve these facts in the summary):\n{h}\n\n"
-                )
+                format!("MEMORY PROVIDER NOTES (preserve these facts in the summary):\n{h}\n\n")
             })
             .unwrap_or_default();
         if let Some(prev) = self.previous_summary.as_ref() {
@@ -758,10 +759,11 @@ Write only the summary body. Do not include any preamble or prefix."
 
         for i in (head_end..n).rev() {
             let msg = &messages[i];
-            let mut msg_tokens = chars_to_tokens(content_len(msg)) + 10;
+            let mut msg_tokens =
+                hermes_core::token_estimator::estimate(msg.content.as_deref().unwrap_or("")) + 10;
             if let Some(tcs) = msg.tool_calls.as_ref() {
                 for tc in tcs {
-                    msg_tokens += chars_to_tokens(tc.function.arguments.len());
+                    msg_tokens += hermes_core::token_estimator::estimate(&tc.function.arguments);
                 }
             }
             if accumulated + msg_tokens > soft_ceiling && (n - i) >= min_tail {
@@ -865,8 +867,10 @@ Write only the summary body. Do not include any preamble or prefix."
         }
 
         // Phase 3: generate structured summary.
-        let summary_opt: Option<String> =
-            match self.generate_summary(&turns_to_summarize, memory_provider_hint).await {
+        let summary_opt: Option<String> = match self
+            .generate_summary(&turns_to_summarize, memory_provider_hint)
+            .await
+        {
             Ok(s) => s,
             Err(err) => {
                 if !self.config.quiet_mode {
@@ -1052,14 +1056,6 @@ fn redact_sensitive_summary_text(raw: &str) -> String {
     out
 }
 
-fn content_len(msg: &Message) -> usize {
-    msg.content.as_deref().map(str::len).unwrap_or(0)
-}
-
-fn chars_to_tokens(chars: usize) -> u64 {
-    (chars / CHARS_PER_TOKEN) as u64
-}
-
 fn truncate_middle(text: &str, max: usize, head: usize, tail: usize) -> String {
     if text.len() <= max {
         return text.to_string();
@@ -1093,16 +1089,22 @@ fn take_chars_back(s: &str, n: usize) -> String {
 
 /// Rough token estimate for compression trigger checks (Python `estimate_tokens` parity).
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    let mut total: usize = 0;
+    use hermes_core::token_estimator::estimate;
+    let mut total: u64 = 0;
     for msg in messages {
-        total += content_len(msg) + 10;
+        // Message overhead: role + structure (~10 tokens per message)
+        total += 10;
+        if let Some(ref content) = msg.content {
+            total += estimate(content);
+        }
         if let Some(tcs) = msg.tool_calls.as_ref() {
             for tc in tcs {
-                total += tc.function.name.len() + tc.function.arguments.len();
+                total += estimate(&tc.function.name);
+                total += estimate(&tc.function.arguments);
             }
         }
     }
-    chars_to_tokens(total)
+    total
 }
 
 /// Rough token estimate for preflight compression (messages + system + tool schemas).
@@ -1111,22 +1113,28 @@ pub fn estimate_request_tokens_for_compression(
     system_prompt: &str,
     tool_schemas: &[hermes_core::ToolSchema],
 ) -> u64 {
-    let mut total = system_prompt.len();
+    use hermes_core::token_estimator::estimate;
+    let mut total = estimate(system_prompt);
     for msg in messages {
-        total += content_len(msg) + 10;
+        total += 10;
+        if let Some(ref content) = msg.content {
+            total += estimate(content);
+        }
         if let Some(tcs) = msg.tool_calls.as_ref() {
             for tc in tcs {
-                total += tc.function.name.len() + tc.function.arguments.len();
+                total += estimate(&tc.function.name);
+                total += estimate(&tc.function.arguments);
             }
         }
     }
     for schema in tool_schemas {
-        total += schema.name.len() + schema.description.len();
+        total += estimate(&schema.name);
+        total += estimate(&schema.description);
         if let Ok(json) = serde_json::to_string(&schema.parameters) {
-            total += json.len();
+            total += estimate(&json);
         }
     }
-    chars_to_tokens(total)
+    total
 }
 
 // ---------------------------------------------------------------------------
@@ -1349,8 +1357,9 @@ mod tests {
                         total_tokens: 2,
                         ..Default::default()
                     }),
-                
-                ..Default::default()}),
+
+                    ..Default::default()
+                }),
                 Err(err) => Err(err),
             }
         }
@@ -1582,8 +1591,10 @@ mod tests {
 
     #[test]
     fn build_summary_prompt_includes_memory_provider_hint() {
-        let compressor =
-            ContextCompressor::new(quiet_config(), aux_with_provider(CannedSummaryProvider::new("x")));
+        let compressor = ContextCompressor::new(
+            quiet_config(),
+            aux_with_provider(CannedSummaryProvider::new("x")),
+        );
         let prompt = compressor.build_summary_prompt(
             "user: deploy to prod-east",
             800,
@@ -1602,13 +1613,21 @@ mod tests {
         let mut compressor = ContextCompressor::new(quiet_config(), aux);
 
         let turns = vec![msg(MessageRole::User, "first turn")];
-        let s1 = compressor.generate_summary(&turns, None).await.unwrap().unwrap();
+        let s1 = compressor
+            .generate_summary(&turns, None)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(s1.starts_with(SUMMARY_PREFIX));
         assert!(s1.ends_with("Goal: build it."));
         assert_eq!(provider.call_count(), 1);
 
         // Second call should reuse the previous summary as context.
-        let s2 = compressor.generate_summary(&turns, None).await.unwrap().unwrap();
+        let s2 = compressor
+            .generate_summary(&turns, None)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(s2.contains("Goal: build it."));
         assert_eq!(provider.call_count(), 2);
     }
@@ -1791,9 +1810,10 @@ mod tests {
             msg(MessageRole::Assistant, "done"),
         ];
         let out = compressor.sanitize_tool_pairs(messages);
-        assert!(!out
-            .iter()
-            .any(|m| m.tool_call_id.as_deref() == Some("orphan")));
+        assert!(
+            !out.iter()
+                .any(|m| m.tool_call_id.as_deref() == Some("orphan"))
+        );
     }
 
     #[test]
@@ -1813,11 +1833,12 @@ mod tests {
             .iter()
             .find(|m| m.tool_call_id.as_deref() == Some("c1") && m.role == MessageRole::Tool)
             .expect("expected stub tool result");
-        assert!(stub
-            .content
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Result from earlier conversation"));
+        assert!(
+            stub.content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Result from earlier conversation")
+        );
     }
 
     // ---------- boundary alignment ----------
@@ -1883,7 +1904,9 @@ mod tests {
             msg(MessageRole::User, "a"),
             msg(MessageRole::Assistant, "b"),
         ];
-        let out = compressor.compress(messages.clone(), Some(50_000), None).await;
+        let out = compressor
+            .compress(messages.clone(), Some(50_000), None)
+            .await;
         assert_eq!(out.len(), messages.len());
         assert_eq!(provider.call_count(), 0);
     }
