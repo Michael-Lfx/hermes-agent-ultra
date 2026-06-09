@@ -4,6 +4,7 @@
 //! context management into a fully autonomous loop that runs until the
 //! model finishes naturally or the turn budget is exhausted.
 
+pub mod agent_callbacks;
 pub mod agent_config;
 pub mod agent_loop;
 pub mod agent_runtime_helpers;
@@ -33,6 +34,7 @@ pub mod honcho_provider;
 pub mod inbound_prepare;
 pub mod interrupt;
 pub mod iteration_budget;
+pub mod loop_exit;
 pub mod lsp_context;
 pub mod memory_manager;
 pub mod memory_plugins;
@@ -76,6 +78,7 @@ pub mod vision_adapter;
 pub mod vision_message_prepare;
 pub mod web_research;
 mod web_tool_budget;
+pub mod window_stats;
 pub mod work_session;
 
 // Re-export primary agent types

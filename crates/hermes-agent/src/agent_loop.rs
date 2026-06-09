@@ -6,7 +6,7 @@
 //! 3. Append results to conversation history
 //! 4. Repeat until the model finishes naturally or the turn budget is exceeded
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -103,6 +103,24 @@ pub(crate) use crate::governor::{
 // ---------------------------------------------------------------------------
 
 pub(crate) use crate::replay::ReplayRecorder;
+
+// ---------------------------------------------------------------------------
+// AgentCallbacks (extracted to `agent_callbacks` module)
+// ---------------------------------------------------------------------------
+
+pub use crate::agent_callbacks::AgentCallbacks;
+
+// ---------------------------------------------------------------------------
+// LoopExit (extracted to `loop_exit` module)
+// ---------------------------------------------------------------------------
+
+pub(crate) use crate::loop_exit::LoopExit;
+
+// ---------------------------------------------------------------------------
+// Sliding window stats (extracted to `window_stats` module)
+// ---------------------------------------------------------------------------
+
+pub(crate) use crate::window_stats::{push_window_f64, push_window_u64};
 
 pub(crate) const CONVERSATIONAL_SUPPORT_GUIDANCE: &str = "# Conversational support protocol\nWhen users share personal stress, emotions, or difficult decisions, start with a brief non-judgmental acknowledgment, ask one clarifying question if context is missing, then offer practical options with trade-offs. Keep factual or technical requests direct and do not force emotional language where it does not fit. Do not present yourself as a therapist or crisis service; when safety risk appears, urge the user to seek immediate professional or emergency help.";
 const OAUTH_REFRESH_BACKOFF_SECS: u64 = 60;
@@ -364,29 +382,6 @@ fn delegation_spawning_paused() -> bool {
 // ---------------------------------------------------------------------------
 // AgentLoop
 // ---------------------------------------------------------------------------
-
-/// Callbacks invoked during tool execution for progress reporting.
-#[derive(Default)]
-pub struct AgentCallbacks {
-    /// Called when the LLM is "thinking" (reasoning tokens).
-    pub on_thinking: Option<Box<dyn Fn(&str) + Send + Sync>>,
-    /// Called when a tool call begins.
-    pub on_tool_start: Option<Box<dyn Fn(&str, &Value) + Send + Sync>>,
-    /// Called when a tool call finishes.
-    pub on_tool_complete: Option<Box<dyn Fn(&str, &str) + Send + Sync>>,
-    /// Called for each stream delta.
-    pub on_stream_delta: Option<Box<dyn Fn(&str) + Send + Sync>>,
-    /// Called after each completed LLM step (full response assembled).
-    pub on_step_complete: Option<Box<dyn Fn(u32) + Send + Sync>>,
-    /// Called when background memory/skill review completes or fails.
-    ///
-    /// Payload is a user-friendly summary string suitable for direct UI output.
-    pub background_review_callback: Option<Arc<dyn Fn(&str) + Send + Sync>>,
-    /// Called for lifecycle/status notices (context pressure, retries, etc.).
-    pub status_callback: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
-    /// Interactive Codex exec/patch approval (Python terminal `approval_callback`).
-    pub codex_approval_callback: Option<Arc<dyn Fn(&str, &str) -> String + Send + Sync>>,
-}
 
 pub(crate) fn maybe_nous_401_diagnostic(
     provider_hint: &str,
@@ -873,30 +868,6 @@ fn route_learning_state_path(config: &AgentConfig) -> PathBuf {
     default_route_learning_home(config)
         .join("logs")
         .join("route-learning.json")
-}
-
-pub(crate) fn push_window_u64(window: &mut VecDeque<u64>, value: u64, limit: usize) {
-    window.push_back(value);
-    while window.len() > limit {
-        let _ = window.pop_front();
-    }
-}
-
-pub(crate) fn push_window_f64(window: &mut VecDeque<f64>, value: f64, limit: usize) {
-    window.push_back(value);
-    while window.len() > limit {
-        let _ = window.pop_front();
-    }
-}
-
-/// Exit metadata for one `run` / `run_stream` invocation (maps to Python loop fields).
-pub(crate) struct LoopExit<'a> {
-    pub(crate) turn_exit_reason: &'a str,
-    pub(crate) api_calls: u32,
-    pub(crate) failed: bool,
-    pub(crate) partial: bool,
-    pub(crate) finished_naturally: bool,
-    pub(crate) interrupted: bool,
 }
 
 /// The main agent loop.
