@@ -4,18 +4,16 @@
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use hermes_agent::{
-    split_messages_for_run_conversation, AgentCallbacks, RunConversationParams,
-};
+use hermes_agent::{AgentCallbacks, RunConversationParams, split_messages_for_run_conversation};
 use hermes_core::{Message, MessageRole, StreamChunk, ToolSchema};
 use hermes_gateway::tool_backends::ClarifyDispatcher;
 use hermes_gateway::{
     Gateway, GatewayError, GatewayRuntimeContext, SessionTeardownContext, SessionTeardownHandler,
 };
+use hermes_tools::ToolRegistry;
+use hermes_tools::tools::clarify::MAX_CHOICES;
 use serde_json::Value;
 use tracing::{debug, warn};
-use hermes_tools::tools::clarify::MAX_CHOICES;
-use hermes_tools::ToolRegistry;
 
 use hermes_cli::app::bridge_tool_registry;
 use hermes_cli::platform_toolsets::{
@@ -24,8 +22,8 @@ use hermes_cli::platform_toolsets::{
 use hermes_cli::tool_preview::{build_tool_preview_from_value, tool_emoji};
 
 use crate::{
-    extract_last_assistant_reply, get_or_build_gateway_cached_agent, resolve_model_for_gateway,
-    truncate_hook_tool_result,     GatewayAgentCache,
+    GatewayAgentCache, extract_last_assistant_reply, get_or_build_gateway_cached_agent,
+    resolve_model_for_gateway, truncate_hook_tool_result,
 };
 
 fn gateway_conversation_reply(conv: &hermes_agent::ConversationResult) -> String {
@@ -258,7 +256,8 @@ pub(crate) async fn gateway_handle_message_non_streaming(
     let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
     let _effective_model =
         resolve_model_for_gateway(config.model.as_deref().unwrap_or("gpt-4o"), &ctx);
-    let tool_schemas = resolve_platform_tool_schemas(config.as_ref(), &ctx.platform, &runtime_tools);
+    let tool_schemas =
+        resolve_platform_tool_schemas(config.as_ref(), &ctx.platform, &runtime_tools);
     let tool_defs = tool_definition_summary(&tool_schemas);
     gateway_for_review
         .emit_hook_event(
@@ -416,9 +415,10 @@ pub(crate) async fn gateway_handle_message_non_streaming(
         runtime_tools.clone(),
     )
     .await;
-    let (history, user_message) = split_messages_for_run_conversation(&messages).ok_or_else(|| {
-        GatewayError::Platform("session has no user message for run_conversation".into())
-    })?;
+    let (history, user_message) =
+        split_messages_for_run_conversation(&messages).ok_or_else(|| {
+            GatewayError::Platform("session has no user message for run_conversation".into())
+        })?;
     let mut history = history;
     prepend_cross_platform_hint(&ctx.platform, &tool_schemas, &mut history);
     prepend_clarify_user_request_hint(&user_message, &tool_schemas, &mut history);
@@ -447,9 +447,7 @@ pub(crate) async fn gateway_handle_message_non_streaming(
 }
 
 /// Agent-layer POI / memory flush before gateway session reset, idle expiry, or shutdown.
-pub fn make_gateway_session_teardown_handler(
-    deps: GatewayHandlerDeps,
-) -> SessionTeardownHandler {
+pub fn make_gateway_session_teardown_handler(deps: GatewayHandlerDeps) -> SessionTeardownHandler {
     Arc::new(move |ctx| {
         let deps = deps.clone();
         Box::pin(async move { gateway_run_session_teardown(ctx, deps).await })
@@ -480,7 +478,8 @@ async fn gateway_run_session_teardown(ctx: SessionTeardownContext, deps: Gateway
     .await;
     let agent = agent.lock().await;
     let interrupted = ctx.reason == "shutdown";
-    agent.session_end_hooks(
+    hermes_agent::hooks::session_end_hooks(
+        &*agent,
         ctx.messages.as_ref(),
         false,
         interrupted,
@@ -507,7 +506,8 @@ pub(crate) async fn gateway_handle_message_streaming(
     let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
     let _effective_model =
         resolve_model_for_gateway(config.model.as_deref().unwrap_or("gpt-4o"), &ctx);
-    let tool_schemas = resolve_platform_tool_schemas(config.as_ref(), &ctx.platform, &runtime_tools);
+    let tool_schemas =
+        resolve_platform_tool_schemas(config.as_ref(), &ctx.platform, &runtime_tools);
     let tool_defs = tool_definition_summary(&tool_schemas);
     gateway_for_review
         .emit_hook_event(
@@ -702,9 +702,10 @@ pub(crate) async fn gateway_handle_message_streaming(
         }
     });
 
-    let (history, user_message) = split_messages_for_run_conversation(&messages).ok_or_else(|| {
-        GatewayError::Platform("session has no user message for run_conversation".into())
-    })?;
+    let (history, user_message) =
+        split_messages_for_run_conversation(&messages).ok_or_else(|| {
+            GatewayError::Platform("session has no user message for run_conversation".into())
+        })?;
     let mut history = history;
     prepend_cross_platform_hint(&ctx.platform, &tool_schemas, &mut history);
     prepend_clarify_user_request_hint(&user_message, &tool_schemas, &mut history);

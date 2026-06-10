@@ -22,28 +22,28 @@ use hermes_agent::providers_extra::{
 };
 use hermes_agent::sub_agent_orchestrator::SubAgentOrchestrator;
 use hermes_agent::{
-    split_messages_for_run_conversation, AgentCallbacks, AgentConfig, AgentLoop,
-    InterruptController, RunConversationParams, SessionPersistence,
+    AgentCallbacks, AgentConfig, AgentLoop, InterruptController, RunConversationParams,
+    SessionPersistence, split_messages_for_run_conversation,
 };
-use hermes_config::{hermes_home as hermes_home_dir, load_config, state_dir, GatewayConfig};
+use hermes_config::{GatewayConfig, hermes_home as hermes_home_dir, load_config, state_dir};
 use hermes_core::ToolSchema;
 use hermes_core::{AgentError, LlmProvider};
 use hermes_cron::cron_scheduler_for_data_dir;
 use hermes_skills::{FileSkillStore, SkillManager};
-use hermes_tools::tools::messaging::MessagingSessionContext;
 use hermes_tools::ToolRegistry;
+use hermes_tools::tools::messaging::MessagingSessionContext;
 
 use hermes_acp_server::server::AcpPipeServer;
 
 use crate::alpha_runtime::{
-    canonical_objective_behavior_mode, load_objective_contract, load_quorum_policy,
-    objective_lifecycle_is_active, ObjectiveContract, QuorumPolicy,
+    ObjectiveContract, QuorumPolicy, canonical_objective_behavior_mode, load_objective_contract,
+    load_quorum_policy, objective_lifecycle_is_active,
 };
 use crate::auth::{
+    DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS, NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+    NousDeviceCodeOptions, NousRuntimeCredentials, QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
     login_nous_device_code, resolve_gemini_oauth_runtime_credentials,
     resolve_nous_runtime_credentials, resolve_qwen_runtime_credentials, save_nous_auth_state,
-    NousDeviceCodeOptions, NousRuntimeCredentials, DEFAULT_NOUS_AGENT_KEY_MIN_TTL_SECONDS,
-    NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS, QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
 };
 use crate::cli::Cli;
 use crate::commands::recover_queued_background_jobs;
@@ -2091,7 +2091,11 @@ impl App {
             .await
             .map_err(|e| AgentError::Config(format!("cron load: {e}")))?;
         cron_scheduler.start().await;
-        wire_cron_scheduler_backend(&tool_registry, cron_scheduler, MessagingSessionContext::new());
+        wire_cron_scheduler_backend(
+            &tool_registry,
+            cron_scheduler,
+            MessagingSessionContext::new(),
+        );
         let agent_tool_registry = Arc::new(bridge_tool_registry(&tool_registry));
         let tool_schemas =
             crate::platform_toolsets::resolve_platform_tool_schemas(&config, "cli", &tool_registry);
@@ -2330,7 +2334,8 @@ impl App {
         if !cfg.interest.enabled && self.messages.is_empty() && cfg.skip_memory {
             return;
         }
-        self.agent.session_end_hooks(
+        hermes_agent::hooks::session_end_hooks(
+            &self.agent,
             &self.messages,
             false,
             interrupted,
@@ -2366,18 +2371,15 @@ impl App {
         reset: bool,
         reason: &str,
     ) {
+        self.agent.set_runtime_session_id(new_session_id);
         self.agent
-            .set_runtime_session_id(new_session_id);
-        self.agent.memory_on_session_switch(
-            new_session_id,
-            parent_session_id,
-            reset,
-            reason,
-        );
+            .memory_on_session_switch(new_session_id, parent_session_id, reset, reason);
     }
 
     /// Run agent-loop context compression on the current CLI transcript.
-    pub async fn compress_conversation_context(&mut self) -> Result<(usize, usize, bool), AgentError> {
+    pub async fn compress_conversation_context(
+        &mut self,
+    ) -> Result<(usize, usize, bool), AgentError> {
         let pre_len = self.messages.len();
         if pre_len <= 2 {
             return Ok((pre_len, pre_len, false));
@@ -4124,15 +4126,18 @@ mod tests {
         app.clear_quorum_system_hints_inplace();
 
         assert_eq!(app.messages.len(), 2);
-        assert!(app.messages.iter().all(|message| !message
-            .content
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("[QUORUM_MODE] ")));
-        assert!(app
-            .messages
-            .iter()
-            .any(|message| message.content.as_deref() == Some("normal system context")));
+        assert!(app.messages.iter().all(|message| {
+            !message
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("[QUORUM_MODE] ")
+        }));
+        assert!(
+            app.messages
+                .iter()
+                .any(|message| message.content.as_deref() == Some("normal system context"))
+        );
     }
 
     #[test]
@@ -4308,10 +4313,7 @@ mod tests {
             hermes_core::Message::system("sys"),
             hermes_core::Message::user("hi"),
         ];
-        let (pre, post, compressed) = app
-            .compress_conversation_context()
-            .await
-            .expect("compress");
+        let (pre, post, compressed) = app.compress_conversation_context().await.expect("compress");
         assert_eq!(pre, 2);
         assert_eq!(post, 2);
         assert!(!compressed);
@@ -6126,7 +6128,11 @@ pub fn build_provider(config: &GatewayConfig, model: &str) -> Arc<dyn LlmProvide
         }
         "openai-codex" | "codex" => {
             let mut p = OpenAiProvider::new(&api_key).with_model(model_name.as_str());
-            p = p.with_base_url(base_url.clone().unwrap_or_else(|| OPENAI_CODEX_BASE_URL.to_string()));
+            p = p.with_base_url(
+                base_url
+                    .clone()
+                    .unwrap_or_else(|| OPENAI_CODEX_BASE_URL.to_string()),
+            );
             Arc::new(p) as Arc<dyn LlmProvider>
         }
         "anthropic" => {
@@ -6162,8 +6168,11 @@ pub fn build_provider(config: &GatewayConfig, model: &str) -> Arc<dyn LlmProvide
             Arc::new(p) as Arc<dyn LlmProvider>
         }
         "stepfun" => {
-            let url = base_url.clone().unwrap_or_else(|| STEPFUN_BASE_URL.to_string());
-            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str())) as Arc<dyn LlmProvider>
+            let url = base_url
+                .clone()
+                .unwrap_or_else(|| STEPFUN_BASE_URL.to_string());
+            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str()))
+                as Arc<dyn LlmProvider>
         }
         "nous" => {
             let mut p = NousProvider::new(&api_key).with_model(model_name.as_str());
@@ -6186,13 +6195,15 @@ pub fn build_provider(config: &GatewayConfig, model: &str) -> Arc<dyn LlmProvide
             let url = base_url
                 .clone()
                 .unwrap_or_else(|| "http://127.0.0.1:11434/v1".to_string());
-            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str())) as Arc<dyn LlmProvider>
+            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str()))
+                as Arc<dyn LlmProvider>
         }
         _ => {
             let url = base_url
                 .clone()
                 .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str())) as Arc<dyn LlmProvider>
+            Arc::new(GenericProvider::new(url, &api_key, model_name.as_str()))
+                as Arc<dyn LlmProvider>
         }
     };
     {
