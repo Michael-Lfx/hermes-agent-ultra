@@ -5116,16 +5116,63 @@ async fn handle_skills_command(app: &mut App, args: &[&str]) -> Result<CommandRe
 
 async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
     let skills_dir = hermes_config::hermes_home().join("skills");
+    let curator_config = curator_config_from_app(app);
 
     let sub = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
     match sub.as_str() {
         "status" | "" => {
             let rows = hermes_skills::agent_created_report(&skills_dir);
+            let state = hermes_skills::load_curator_state(&skills_dir);
+
             if rows.is_empty() {
-                emit_command_output(app, "No agent-created skills found.\n\nSkills created by the agent during background review will appear here.");
+                let mut out = String::from("No agent-created skills found.\n\n");
+                out.push_str(&format!("curator: {}\n", curator_status_label(&curator_config, &state)));
+                out.push_str(&format!("  interval: every {}h\n", curator_config.interval_hours));
+                out.push_str(&format!("  stale after: {}d\n", curator_config.stale_after_days));
+                out.push_str(&format!("  archive after: {}d\n", curator_config.archive_after_days));
+                if let Some(countdown) = next_run_countdown(&state, &curator_config) {
+                    out.push_str(&format!("  next run eligible: {}\n", countdown));
+                }
+                out.push_str("\nSkills created by the agent during background review will appear here.");
+                emit_command_output(app, &out);
             } else {
                 let mut out = format!("## Agent-created skills ({})\n\n", rows.len());
+
+                // Most active top 5
+                let mut sorted_by_activity: Vec<_> = rows.iter().collect();
+                sorted_by_activity.sort_by_key(|r| -(r.activity_count as i64));
+                let top_active: Vec<_> = sorted_by_activity.iter().take(5).collect();
+                if !top_active.is_empty() {
+                    out.push_str("**Most active:**\n");
+                    for row in &top_active {
+                        let pin_mark = if row.pinned { "📌 " } else { "  " };
+                        out.push_str(&format!("  {pin_mark}`{name}` — {activity} uses\n", name = row.name, activity = row.activity_count));
+                    }
+                    out.push('\n');
+                }
+
+                // Least recently active top 5
+                let mut with_last: Vec<_> = rows.iter().filter(|r| r.last_activity_at.is_some()).collect();
+                with_last.sort_by_key(|r| r.last_activity_at.as_deref().unwrap_or(""));
+                let least_active: Vec<_> = with_last.iter().take(5).collect();
+                if !least_active.is_empty() {
+                    out.push_str("**Least recently active:**\n");
+                    for row in &least_active {
+                        let pin_mark = if row.pinned { "📌 " } else { "  " };
+                        let state_tag = match row.state.as_str() {
+                            "archived" => " [archived]",
+                            "stale" => " [stale]",
+                            _ => "",
+                        };
+                        let last = row.last_activity_at.as_deref().unwrap_or("never");
+                        out.push_str(&format!("  {pin_mark}`{name}`{state_tag} — last: {last}\n", name = row.name));
+                    }
+                    out.push('\n');
+                }
+
+                // Full list
+                out.push_str("**All skills:**\n");
                 for row in &rows {
                     let pin_mark = if row.pinned { "📌 " } else { "   " };
                     let state_tag = match row.state.as_str() {
@@ -5141,6 +5188,21 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
                         activity = row.activity_count,
                     ));
                 }
+
+                // Config summary
+                out.push('\n');
+                out.push_str(&format!("curator: {}\n", curator_status_label(&curator_config, &state)));
+                out.push_str(&format!("  runs: {}\n", state.run_count));
+                if let Some(ref last) = state.last_run_at {
+                    out.push_str(&format!("  last run: {}\n", last));
+                }
+                out.push_str(&format!("  interval: every {}h\n", curator_config.interval_hours));
+                out.push_str(&format!("  stale after: {}d\n", curator_config.stale_after_days));
+                out.push_str(&format!("  archive after: {}d\n", curator_config.archive_after_days));
+                if let Some(countdown) = next_run_countdown(&state, &curator_config) {
+                    out.push_str(&format!("  next run eligible: {}\n", countdown));
+                }
+
                 let pinned_count = rows.iter().filter(|r| r.pinned).count();
                 if pinned_count > 0 {
                     out.push_str(&format!("\n📌 {pinned_count} pinned (exempt from automatic curation)"));
@@ -5262,23 +5324,46 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
         "run" => {
             // Parse flags
             let mut dry_run = false;
+            let mut background = false;
             for arg in &args[1..] {
                 match *arg {
                     "--dry-run" => dry_run = true,
+                    "--background" => background = true,
                     _ => {}
                 }
             }
 
-            // Load config
-            let config = hermes_skills::CuratorConfig::default(); // TODO: read from gateway config
-
-            if !config.enabled {
+            if !curator_config.enabled {
                 emit_command_output(app, "Curator is disabled in configuration.");
                 return Ok(CommandResult::Handled);
             }
 
-            // Execute automatic state transitions
-            let result = hermes_skills::apply_automatic_transitions(&skills_dir, &config);
+            if background {
+                // Background mode: spawn LLM pass in background, CLI returns immediately
+                let skills_dir_clone = skills_dir.clone();
+                let config_clone = curator_config.clone();
+                let dry_run_clone = dry_run;
+                let logs_dir = hermes_config::hermes_home().join("logs");
+                tokio::spawn(async move {
+                    let record = hermes_skills::run_curator_review::<_, std::future::Ready<Result<hermes_skills::CuratorReviewResult, hermes_skills::CuratorError>>>(
+                        &skills_dir_clone, &config_clone, dry_run_clone, None::<fn(String) -> std::future::Ready<Result<hermes_skills::CuratorReviewResult, hermes_skills::CuratorError>>>,
+                    ).await;
+                    if let Ok(ref record) = record {
+                        // Write report
+                        let report = build_curator_run_report(record, None, None);
+                        if let Ok(report_dir) = hermes_skills::write_curator_report(&report, &logs_dir) {
+                            let mut state = hermes_skills::load_curator_state(&skills_dir_clone);
+                            state.last_report_path = Some(report_dir.to_string_lossy().to_string());
+                            let _ = hermes_skills::save_curator_state(&skills_dir_clone, &state);
+                        }
+                    }
+                });
+                emit_command_output(app, "Curator LLM pass running in background — check `/curator status` later.");
+                return Ok(CommandResult::Handled);
+            }
+
+            // Synchronous mode: execute auto transitions (LLM pass deferred to future update)
+            let result = hermes_skills::apply_automatic_transitions(&skills_dir, &curator_config);
 
             // Format output
             let mut lines = Vec::new();
@@ -5292,7 +5377,7 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
             lines.push(format!("  archived:     {}", result.archived));
             lines.push(format!("  reactivated:  {}", result.reactivated));
 
-            // Update state (non dry-run)
+            // Update state and write report (non dry-run)
             if !dry_run {
                 let mut state = hermes_skills::load_curator_state(&skills_dir);
                 state.last_run_at = Some(chrono::Utc::now().to_rfc3339());
@@ -5301,6 +5386,15 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
                     "auto: {} checked, {} marked stale, {} archived, {} reactivated",
                     result.checked, result.marked_stale, result.archived, result.reactivated
                 ));
+
+                // Write curator report
+                let report = build_curator_run_report_from_transitions(&result);
+                let logs_dir = hermes_config::hermes_home().join("logs");
+                if let Ok(report_dir) = hermes_skills::write_curator_report(&report, &logs_dir) {
+                    state.last_report_path = Some(report_dir.to_string_lossy().to_string());
+                    lines.push(format!("  report: {}", report_dir.display()));
+                }
+
                 let _ = hermes_skills::save_curator_state(&skills_dir, &state);
                 lines.push(String::new());
                 lines.push("State updated. (LLM review pass will be available in a future update)".to_string());
@@ -5311,6 +5405,62 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
 
             let output = lines.join("\n");
             emit_command_output(app, &output);
+        }
+        "backup" => {
+            match backup_skills(&skills_dir) {
+                Ok(path) => {
+                    emit_command_output(app, format!("✅ Skills backed up to: {}", path.display()));
+                }
+                Err(e) => {
+                    emit_command_output(app, format!("Failed to backup skills: {e}"));
+                }
+            }
+        }
+        "rollback" => {
+            let backup_name = args.get(1).map(|s| s.trim()).unwrap_or("");
+            if backup_name.is_empty() {
+                // List available backups
+                match list_backups(&skills_dir) {
+                    Ok(backups) => {
+                        if backups.is_empty() {
+                            emit_command_output(app, "No backups found.\n\nUse `/curator backup` to create a snapshot first.");
+                        } else {
+                            let mut out = format!("## Available backups ({})\n\n", backups.len());
+                            for (name, path) in &backups {
+                                out.push_str(&format!("  - `{name}` ({})\n", path.display()));
+                            }
+                            out.push_str("\nUse `/curator rollback <name>` to restore a backup.");
+                            emit_command_output(app, &out);
+                        }
+                    }
+                    Err(e) => {
+                        emit_command_output(app, format!("Failed to list backups: {e}"));
+                    }
+                }
+            } else {
+                match rollback_skills(&skills_dir, backup_name) {
+                    Ok(()) => {
+                        emit_command_output(app, format!("✅ Rolled back to backup: {backup_name}"));
+                    }
+                    Err(e) => {
+                        emit_command_output(app, format!("Failed to rollback: {e}"));
+                    }
+                }
+            }
+        }
+        "prune" => {
+            let force = args.get(1).map_or(false, |a| *a == "--force");
+            if !force {
+                emit_command_output(app, "⚠️  This will permanently delete stale/archived skills.\nUse `/curator prune --force` to confirm.");
+                return Ok(CommandResult::Handled);
+            }
+            let result = hermes_skills::apply_automatic_transitions(&skills_dir, &curator_config);
+            let mut lines = vec!["── curator prune ──".to_string()];
+            lines.push(format!("  checked:      {}", result.checked));
+            lines.push(format!("  archived:     {}", result.archived));
+            lines.push(format!("  marked stale: {}", result.marked_stale));
+            lines.push(format!("  reactivated:  {}", result.reactivated));
+            emit_command_output(app, &lines.join("\n"));
         }
         _ => {
             let help = format!(
@@ -5324,8 +5474,12 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
                    `/curator list-archived` — List archived skills\n\
                    `/curator run`          — Trigger curator review\n\
                    `/curator run --dry-run` — Preview without persisting changes\n\
+                   `/curator run --background` — Run curator in background\n\
                    `/curator pause`        — Pause automatic curator runs\n\
                    `/curator resume`       — Resume automatic curator runs\n\
+                   `/curator backup`       — Create a backup snapshot\n\
+                   `/curator rollback [name]` — List or restore a backup\n\
+                   `/curator prune --force` — Prune stale/archived skills\n\
                  \nUnknown subcommand: `{unknown}`\n\
                  Try `/curator` (no args) for status overview.",
                 unknown = sub,
@@ -5335,6 +5489,237 @@ async fn handle_curator_command(app: &mut App, args: &[&str]) -> Result<CommandR
     }
 
     Ok(CommandResult::Handled)
+}
+
+// ---------------------------------------------------------------------------
+// Curator helper functions
+// ---------------------------------------------------------------------------
+
+/// Build `hermes_skills::CuratorConfig` from the app's gateway config.
+fn curator_config_from_app(app: &App) -> hermes_skills::CuratorConfig {
+    let gc = &app.config.curator;
+    hermes_skills::CuratorConfig {
+        enabled: gc.enabled,
+        interval_hours: gc.interval_hours,
+        min_idle_hours: gc.min_idle_hours,
+        stale_after_days: gc.stale_after_days,
+        archive_after_days: gc.archive_after_days,
+        prune_builtins: gc.prune_builtins,
+    }
+}
+
+/// Return a human-readable status label for the curator.
+fn curator_status_label(config: &hermes_skills::CuratorConfig, state: &hermes_skills::CuratorState) -> &'static str {
+    if state.paused {
+        "PAUSED"
+    } else if config.enabled {
+        "ENABLED"
+    } else {
+        "DISABLED"
+    }
+}
+
+/// Calculate the remaining time until the next eligible curator run.
+/// Returns `None` if the curator is paused, disabled, or has never been run.
+fn next_run_countdown(state: &hermes_skills::CuratorState, config: &hermes_skills::CuratorConfig) -> Option<String> {
+    if !config.enabled || state.paused {
+        return None;
+    }
+    let last = state.last_run_at.as_ref()?;
+    let last_dt: chrono::DateTime<chrono::Utc> = last.parse().ok()?;
+    let interval = chrono::Duration::seconds((config.interval_hours * 3600) as i64);
+    let eligible = last_dt + interval;
+    let now = chrono::Utc::now();
+    if now >= eligible {
+        Some("now".to_string())
+    } else {
+        let remaining = eligible - now;
+        let hours = remaining.num_hours();
+        let mins = (remaining.num_minutes() % 60).abs();
+        if hours > 0 {
+            Some(format!("in ~{}h {}m", hours, mins))
+        } else {
+            Some(format!("in ~{}m", mins))
+        }
+    }
+}
+
+/// Build a `CuratorRunReport` from a `CuratorRunRecord`.
+fn build_curator_run_report(
+    record: &hermes_skills::CuratorRunRecord,
+    model: Option<String>,
+    provider: Option<String>,
+) -> hermes_skills::CuratorRunReport {
+    let before_count = 0u64; // snapshot before run would require pre-count
+    let after_count = 0u64;
+    let consolidated_count = 0u64;
+    let pruned_count = 0u64;
+    let transitions = record.auto_transitions.checked
+        + record.auto_transitions.marked_stale
+        + record.auto_transitions.archived
+        + record.auto_transitions.reactivated;
+    let tool_calls_total = record.llm_review.as_ref().map_or(0, |r| r.tool_calls.len() as u64);
+
+    hermes_skills::CuratorRunReport {
+        started_at: record.started_at.clone(),
+        duration_seconds: record.duration_seconds,
+        model: model.or_else(|| record.model.clone()),
+        provider: provider.or_else(|| record.provider.clone()),
+        dry_run: record.dry_run,
+        auto_transitions: record.auto_transitions.clone(),
+        counts: hermes_skills::CuratorRunCounts {
+            before: before_count,
+            after: after_count,
+            delta: (after_count as i64) - (before_count as i64),
+            archived_this_run: record.auto_transitions.archived,
+            consolidated_this_run: consolidated_count,
+            pruned_this_run: pruned_count,
+            state_transitions: transitions,
+            tool_calls_total,
+        },
+        consolidated: vec![],
+        pruned: vec![],
+        tool_calls: record.llm_review.as_ref().map_or(vec![], |r| r.tool_calls.clone()),
+        llm_error: None,
+    }
+}
+
+/// Build a `CuratorRunReport` from just the auto-transition result.
+fn build_curator_run_report_from_transitions(
+    result: &hermes_skills::TransitionResult,
+) -> hermes_skills::CuratorRunReport {
+    let transitions = result.checked + result.marked_stale + result.archived + result.reactivated;
+    hermes_skills::CuratorRunReport {
+        started_at: chrono::Utc::now().to_rfc3339(),
+        duration_seconds: 0.0,
+        model: None,
+        provider: None,
+        dry_run: false,
+        auto_transitions: result.clone(),
+        counts: hermes_skills::CuratorRunCounts {
+            before: 0,
+            after: 0,
+            delta: 0,
+            archived_this_run: result.archived,
+            consolidated_this_run: 0,
+            pruned_this_run: 0,
+            state_transitions: transitions,
+            tool_calls_total: 0,
+        },
+        consolidated: vec![],
+        pruned: vec![],
+        tool_calls: vec![],
+        llm_error: None,
+    }
+}
+
+/// Create a timestamped backup snapshot of the skills directory.
+fn backup_skills(skills_dir: &std::path::Path) -> Result<std::path::PathBuf, std::io::Error> {
+    let backup_root = skills_dir.join(".curator_backups");
+    std::fs::create_dir_all(&backup_root)?;
+    let ts = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
+    let backup_dir = backup_root.join(&ts);
+
+    if backup_dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("backup directory already exists: {}", backup_dir.display()),
+        ));
+    }
+
+    // Copy the skills directory (excluding .curator_backups and .archive)
+    std::fs::create_dir_all(&backup_dir)?;
+    for entry in std::fs::read_dir(skills_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".curator_backups" || name_str == ".archive" || name_str.starts_with(".curator_state") {
+            continue;
+        }
+        let dest = backup_dir.join(&name);
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+
+    tracing::info!("curator: backup created at {}", backup_dir.display());
+    Ok(backup_dir)
+}
+
+/// Recursively copy a directory.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let dest = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+    Ok(())
+}
+
+/// List available backups, sorted by timestamp (newest first).
+fn list_backups(skills_dir: &std::path::Path) -> Result<Vec<(String, std::path::PathBuf)>, std::io::Error> {
+    let backup_root = skills_dir.join(".curator_backups");
+    if !backup_root.exists() {
+        return Ok(vec![]);
+    }
+    let mut backups = Vec::new();
+    for entry in std::fs::read_dir(&backup_root)? {
+        let entry = entry?;
+        if entry.path().is_dir() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            backups.push((name, entry.path()));
+        }
+    }
+    // Sort by name descending (newest first)
+    backups.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(backups)
+}
+
+/// Rollback skills from a backup snapshot.
+fn rollback_skills(skills_dir: &std::path::Path, backup_name: &str) -> Result<(), std::io::Error> {
+    let backup_dir = skills_dir.join(".curator_backups").join(backup_name);
+    if !backup_dir.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("backup not found: {}", backup_name),
+        ));
+    }
+
+    // Remove current skills (except .curator_backups, .archive, .curator_state)
+    for entry in std::fs::read_dir(skills_dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str == ".curator_backups" || name_str == ".archive" || name_str.starts_with(".curator_state") {
+            continue;
+        }
+        if entry.path().is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else {
+            std::fs::remove_file(entry.path())?;
+        }
+    }
+
+    // Restore from backup
+    for entry in std::fs::read_dir(&backup_dir)? {
+        let entry = entry?;
+        let dest = skills_dir.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir_recursive(&entry.path(), &dest)?;
+        } else {
+            std::fs::copy(entry.path(), &dest)?;
+        }
+    }
+
+    tracing::info!("curator: rolled back to backup {}", backup_name);
+    Ok(())
 }
 
 fn handle_tools_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {

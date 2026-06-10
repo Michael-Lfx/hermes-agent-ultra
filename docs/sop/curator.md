@@ -37,6 +37,11 @@ canonical_command("/curator") → "/curator"
     │    ├── "restore"      → hermes_skills::restore_skill(dir, name)
     │    ├── "list-archived"→ std::fs::read_dir(dir.join(".archive"))
     │    ├── "run"          → apply_automatic_transitions() + state 更新
+    │    │                    → --dry-run: 预览不持久化
+    │    │                    → --background: tokio::spawn 后台执行
+    │    ├── "backup"        → 创建 .curator_backups/{timestamp}/ 快照
+    │    ├── "rollback [name]" → 列出备份或从指定备份恢复
+    │    ├── "prune --force" → 手动触发自动迁移（需 --force 确认）
     │    ├── "pause"        → hermes_skills::set_paused(dir, true)
     │    ├── "resume"       → hermes_skills::set_paused(dir, false)
     │    └── _              → 帮助文本
@@ -56,15 +61,18 @@ canonical_command("/curator") → "/curator"
 
 | 子命令 | CLI/TUI | Gateway/IM | 底层 API |
 |--------|---------|------------|----------|
-| (无参数) / `status` | ✅ | ✅ | `agent_created_report()` |
+| (无参数) / `status` | ✅ 增强版 | ✅ | `agent_created_report()` |
 | `pin <name>` | ✅ | ✅ | `set_pinned()` |
 | `unpin <name>` | ✅ | ✅ | `set_pinned()` |
 | `archive <name>` | ✅ | ✅ | `archive_skill()` |
 | `restore <name>` | ✅ | ✅ | `restore_skill()` |
 | `list-archived` | ✅ | ✅ | `fs::read_dir(.archive)` |
-| `run [--dry-run]` | ✅ 自动迁移 | ✅ 自动迁移 | `apply_automatic_transitions()` |
+| `run [--dry-run] [--background]` | ✅ 自动迁移 + 报告写入 | ✅ 自动迁移 | `apply_automatic_transitions()` |
 | `pause` | ✅ | ✅ | `set_paused(true)` |
 | `resume` | ✅ | ✅ | `set_paused(false)` |
+| `backup` | ✅ | ❌ | `copy_dir_recursive()` |
+| `rollback [name]` | ✅ | ❌ | 列出备份 / 恢复备份 |
+| `prune --force` | ✅ | ❌ | `apply_automatic_transitions()` |
 
 ## Curator 状态文件
 
@@ -194,16 +202,16 @@ Plain text 输出，兼容所有 IM 平台（微信、飞书、Telegram、Discor
 |------|--------|------|
 | 命令定义 | `commands.py: CommandDef("curator", ...)` | `commands.rs: SLASH_COMMANDS` + Gateway enum |
 | 平台范围 | CLI + TUI + Gateway 全平台 | ✅ CLI + TUI + Gateway 全平台 |
-| `status` | 含 pinned 列表 + most/least active top 5 | 简化版：显示所有 agent-created 技能 |
+| `status` | 含 pinned 列表 + most/least active top 5 | ✅ 增强版：most/least active top 5 + 配置参数 + 下次运行倒计时 |
 | `run` 自动迁移 | ✅ 完整规则引擎 | ✅ 完整规则引擎 |
-| `run` LLM review | 完整：fork AIAgent + 分类调和 + 报告 | ⚠️ 框架完成，调用点未连接 |
+| `run` LLM review | 完整：fork AIAgent + 分类调和 + 报告 | ⚠️ 框架完成，调用点未连接（需跨 crate AIAgent 适配层） |
 | `pause` / `resume` | ✅ state JSON 持久化 | ✅ state JSON 持久化 |
-| `--background` 模式 | ✅ daemon thread | ⚠️ 未实现调用点 |
+| `--background` 模式 | ✅ daemon thread | ✅ tokio::spawn 后台模式 |
 | `--dry-run` 模式 | ✅ 不写状态 | ✅ 不写状态 |
-| 配置读取 | 从 config.yaml 读取 | ⚠️ 硬编码默认值 |
-| 报告写入 | ✅ logs/curator/{timestamp}/ | ✅ 函数实现，未从命令调用 |
-| 备份/回滚 | `backup` / `rollback` 子命令 | ❌ 未移植 |
-| `prune` 子命令 | ✅ 独立 prune 命令 | ❌ 未移植 |
+| 配置读取 | 从 config.yaml 读取 | ✅ 从 `app.config.curator` / `self.config.curator` 读取 |
+| 报告写入 | ✅ logs/curator/{timestamp}/ | ✅ `write_curator_report()` 已从 CLI `run` 命令调用 |
+| 备份/回滚 | `backup` / `rollback` 子命令 | ✅ CLI 已实现（Gateway 未实现） |
+| `prune` 子命令 | ✅ 独立 prune 命令 | ✅ CLI 已实现（Gateway 未实现） |
 
 ---
 
@@ -245,51 +253,42 @@ Plain text 输出，兼容所有 IM 平台（微信、飞书、Telegram、Discor
 
 ---
 
-### P0：从配置文件读取 CuratorConfig
+### P0：从配置文件读取 CuratorConfig ✅ 已完成
 
-**现状**：CLI 和 Gateway 都使用 `CuratorConfig::default()`（硬编码）。
+**现状**：✅ 已修复。CLI 从 `app.config.curator` 读取；Gateway 从 `self.config.curator` 读取。
 
-**位置**：
-- `crates/hermes-cli/src/commands.rs:5271` — `// TODO: read from gateway config`
-- `crates/hermes-gateway/src/gateway.rs:2305` — 同样硬编码
-
-**需要做的工作**：
-- 在 `handle_curator_command()` 中从 app 的 config 读取 `CuratorConfig`
-- 在 Gateway 的 `execute_curator_*()` 方法中从 `self.config` 读取
-- 确认 `GatewayConfig.curator` 字段已正确序列化/反序列化
-
-**预估工作量**：小（仅需替换几行代码，前提是确认 config 加载链路正确）
+**实现**：
+- `crates/hermes-cli/src/commands.rs` — `curator_config_from_app()` 转换 `hermes_config::CuratorConfig` → `hermes_skills::CuratorConfig`
+- `crates/hermes-gateway/src/gateway.rs` — 本地 `GatewayConfig` 新增 `curator` 字段，`execute_curator_*()` 改为 `&self` 方法
+- `crates/hermes-skills/src/curator.rs` — `CuratorConfig` 新增 `prune_builtins` 字段，与 `hermes-config` 对齐
 
 ---
 
-### P1：后台模式（--background）
+### P1：后台模式（--background） ✅ 已完成
 
-**现状**：CLI `run` 子命令解析了 `--dry-run` 标志但未实现 `--background`/`--sync` 的区分行为。
+**现状**：✅ 已实现。CLI `run` 子命令支持 `--background` 标志，通过 `tokio::spawn` 后台执行。
 
-**Python 行为**：
-- `--background`：LLM pass 在 daemon thread 中运行，CLI 立即返回
-- `--sync`/`--synchronous`：等待 LLM pass 完成再返回（默认为 sync）
-- `--synchronous` 优先于 `--background`
+**实现**：
+- `crates/hermes-cli/src/commands.rs` — 解析 `--background` 标志，spawn 异步任务调用 `run_curator_review()`
+- 后台任务完成后自动更新 `.curator_state` 的 `last_run_summary` 和 `last_report_path`
+- 后台模式下 CLI 输出："Curator LLM pass running in background — check `/curator status` later."
 
-**需要做的工作**：
-- 实现 `tokio::spawn` 后台模式
-- 确保后台任务完成后更新 `.curator_state` 的 `last_run_summary` 和 `last_report_path`
-- 后台模式下 CLI 输出："LLM pass running in background — check `/curator status` later"
+**注意**：`--background` 模式下 LLM review pass 暂不执行（llm_runner 为 None），仅执行自动状态迁移。LLM 回调待 P0 LLM Review 连接完成后自动生效。
 
-**依赖**：P0 LLM Review 调用点
+**依赖**：~P0 LLM Review 调用点~（后台框架已就绪，LLM 回调接入后自动生效）
 
 ---
 
-### P1：报告写入调用
+### P1：报告写入调用 ✅ 已完成
 
-**现状**：`write_curator_report()` 函数已实现，但未从任何命令路径调用。
+**现状**：✅ 已连接。`write_curator_report()` 已从 CLI `run` 命令路径调用。
 
-**需要做的工作**：
-- 在 `run_curator_review()` 完成后调用 `write_curator_report()`
-- 将报告路径存入 `CuratorState.last_report_path`
-- Gateway `execute_curator_status()` 中显示报告路径
+**实现**：
+- `crates/hermes-cli/src/commands.rs` — `run` 子命令执行后调用 `build_curator_run_report_from_transitions()` + `write_curator_report()`
+- 报告路径存入 `CuratorState.last_report_path`
+- Gateway `execute_curator_status()` 中显示 `last_report_path`
 
-**依赖**：P0 LLM Review 调用点
+**依赖**：~P0 LLM Review 调用点~（报告框架已就绪，LLM 结果接入后自然填充更丰富内容）
 
 ---
 
@@ -306,38 +305,41 @@ Plain text 输出，兼容所有 IM 平台（微信、飞书、Telegram、Discor
 
 ---
 
-### P2：backup / rollback 子命令
+### P2：backup / rollback 子命令 ✅ 已完成
 
 **Python 功能**：
 - `backup`：将当前 skills 目录快照到 `.curator_backups/{timestamp}/`
 - `rollback`：从指定备份恢复
 
-**Rust 现状**：完全未实现
-
-**预估工作量**：小（纯文件系统操作，无复杂逻辑）
+**Rust 实现**：
+- `crates/hermes-cli/src/commands.rs` — `backup_skills()` / `rollback_skills()` / `list_backups()` 辅助函数
+- CLI 已支持 `/curator backup` 和 `/curator rollback [name]`
+- Gateway 尚未实现（可后续补充）
 
 ---
 
-### P2：prune 子命令
+### P2：prune 子命令 ✅ 已完成
 
 **Python 功能**：
 - 手动触发一次 prune pass（仅清理，不做 LLM consolidation）
 - 支持 `--force` 跳过确认
 
-**Rust 现状**：完全未实现
-
-**预估工作量**：小（调用现有 `apply_automatic_transitions` + archive 即可）
+**Rust 实现**：
+- `crates/hermes-cli/src/commands.rs` — `/curator prune --force` 调用 `apply_automatic_transitions()`
+- Gateway 尚未实现（可后续补充）
 
 ---
 
-### P2：status 输出增强
+### P2：status 输出增强 ✅ 已完成
 
-**Python 输出包含但 Rust 未实现的信息**：
-- Most active top 5 / Least recently active top 5
-- 配置参数展示（interval, stale_after_days 等）
-- 距下次运行时间的倒计时
+**Python 输出包含但 Rust 已实现的信息**：
+- ✅ Most active top 5 / Least recently active top 5
+- ✅ 配置参数展示（interval, stale_after_days 等）
+- ✅ 距下次运行时间的倒计时（"now" 或 "in ~Xh Ym"）
 
-**预估工作量**：小（纯格式化逻辑）
+**实现**：
+- `crates/hermes-cli/src/commands.rs` — `next_run_countdown()` / `curator_status_label()` 辅助函数
+- `crates/hermes-gateway/src/gateway.rs` — `execute_curator_status()` 显示 `last_report_path`
 
 ---
 

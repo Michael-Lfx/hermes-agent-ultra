@@ -153,6 +153,10 @@ pub struct GatewayConfig {
     /// Whether this gateway process owns Kanban dispatch/notifier duties.
     #[serde(default = "default_true")]
     pub kanban_dispatch_in_gateway: bool,
+
+    /// Curator engine configuration.
+    #[serde(default)]
+    pub curator: hermes_skills::CuratorConfig,
 }
 
 impl Default for GatewayConfig {
@@ -167,6 +171,7 @@ impl Default for GatewayConfig {
             display: DisplayConfig::default(),
             quick_commands: BTreeMap::new(),
             kanban_dispatch_in_gateway: true,
+            curator: hermes_skills::CuratorConfig::default(),
         }
     }
 }
@@ -2247,47 +2252,47 @@ impl Gateway {
                 Ok(true)
             }
             GatewayCommandResult::CuratorStatus => {
-                let reply = Self::execute_curator_status();
+                let reply = self.execute_curator_status();
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorRun { dry_run } => {
-                let reply = Self::execute_curator_run(dry_run);
+                let reply = self.execute_curator_run(dry_run);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorPause => {
-                let reply = Self::execute_curator_pause_resume(true);
+                let reply = self.execute_curator_pause_resume(true);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorResume => {
-                let reply = Self::execute_curator_pause_resume(false);
+                let reply = self.execute_curator_pause_resume(false);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorPin { name } => {
-                let reply = Self::execute_curator_pin_unpin(&name, true);
+                let reply = self.execute_curator_pin_unpin(&name, true);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorUnpin { name } => {
-                let reply = Self::execute_curator_pin_unpin(&name, false);
+                let reply = self.execute_curator_pin_unpin(&name, false);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorArchive { name } => {
-                let reply = Self::execute_curator_archive(&name);
+                let reply = self.execute_curator_archive(&name);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorRestore { name } => {
-                let reply = Self::execute_curator_restore(&name);
+                let reply = self.execute_curator_restore(&name);
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
             GatewayCommandResult::CuratorListArchived => {
-                let reply = Self::execute_curator_list_archived();
+                let reply = self.execute_curator_list_archived();
                 self.send_incoming_reply(incoming, &reply, None).await?;
                 Ok(true)
             }
@@ -2299,10 +2304,10 @@ impl Gateway {
     // Curator helper methods
     // -----------------------------------------------------------------------
 
-    fn execute_curator_status() -> String {
+    fn execute_curator_status(&self) -> String {
         let skills_dir = hermes_config::hermes_home().join("skills");
         let state = hermes_skills::load_curator_state(&skills_dir);
-        let config = hermes_skills::CuratorConfig::default();
+        let config = &self.config.curator;
         let report = hermes_skills::agent_created_report(&skills_dir);
 
         let status = if state.paused {
@@ -2321,6 +2326,9 @@ impl Gateway {
         if let Some(ref summary) = state.last_run_summary {
             lines.push(format!("  last summary: {summary}"));
         }
+        if let Some(ref report_path) = state.last_report_path {
+            lines.push(format!("  last report: {report_path}"));
+        }
         lines.push(format!("  interval: every {}h", config.interval_hours));
         lines.push(format!("  stale after: {}d", config.stale_after_days));
         lines.push(format!("  archive after: {}d", config.archive_after_days));
@@ -2337,10 +2345,10 @@ impl Gateway {
         lines.join("\n")
     }
 
-    fn execute_curator_run(dry_run: bool) -> String {
+    fn execute_curator_run(&self, dry_run: bool) -> String {
         let skills_dir = hermes_config::hermes_home().join("skills");
-        let config = hermes_skills::CuratorConfig::default();
-        let result = hermes_skills::apply_automatic_transitions(&skills_dir, &config);
+        let config = &self.config.curator;
+        let result = hermes_skills::apply_automatic_transitions(&skills_dir, config);
 
         let mut lines = vec![];
         if dry_run {
@@ -2368,7 +2376,7 @@ impl Gateway {
         lines.join("\n")
     }
 
-    fn execute_curator_pause_resume(pause: bool) -> String {
+    fn execute_curator_pause_resume(&self, pause: bool) -> String {
         let skills_dir = hermes_config::hermes_home().join("skills");
         match hermes_skills::set_paused(&skills_dir, pause) {
             Ok(()) => {
@@ -2382,7 +2390,7 @@ impl Gateway {
         }
     }
 
-    fn execute_curator_pin_unpin(name: &str, pin: bool) -> String {
+    fn execute_curator_pin_unpin(&self, name: &str, pin: bool) -> String {
         if name.is_empty() {
             return if pin {
                 "Usage: /curator pin <skill-name>".to_string()
@@ -2403,7 +2411,7 @@ impl Gateway {
         }
     }
 
-    fn execute_curator_archive(name: &str) -> String {
+    fn execute_curator_archive(&self, name: &str) -> String {
         if name.is_empty() {
             return "Usage: /curator archive <skill-name>".to_string();
         }
@@ -2415,7 +2423,7 @@ impl Gateway {
         }
     }
 
-    fn execute_curator_restore(name: &str) -> String {
+    fn execute_curator_restore(&self, name: &str) -> String {
         if name.is_empty() {
             return "Usage: /curator restore <skill-name>".to_string();
         }
@@ -2427,7 +2435,7 @@ impl Gateway {
         }
     }
 
-    fn execute_curator_list_archived() -> String {
+    fn execute_curator_list_archived(&self) -> String {
         let skills_dir = hermes_config::hermes_home().join("skills");
         let archive_dir = skills_dir.join(".archive");
         let mut names = Vec::new();

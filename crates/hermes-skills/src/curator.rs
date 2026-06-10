@@ -128,6 +128,8 @@ pub struct CuratorConfig {
     pub stale_after_days: u64,
     #[serde(default = "default_archive_after_days")]
     pub archive_after_days: u64,
+    #[serde(default = "default_prune_builtins")]
+    pub prune_builtins: bool,
 }
 
 fn default_enabled() -> bool {
@@ -145,6 +147,9 @@ fn default_stale_after_days() -> u64 {
 fn default_archive_after_days() -> u64 {
     90
 }
+fn default_prune_builtins() -> bool {
+    true
+}
 
 impl Default for CuratorConfig {
     fn default() -> Self {
@@ -154,6 +159,7 @@ impl Default for CuratorConfig {
             min_idle_hours: default_min_idle_hours(),
             stale_after_days: default_stale_after_days(),
             archive_after_days: default_archive_after_days(),
+            prune_builtins: default_prune_builtins(),
         }
     }
 }
