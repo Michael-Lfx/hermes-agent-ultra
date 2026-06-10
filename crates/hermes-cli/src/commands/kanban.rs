@@ -14,7 +14,8 @@ use crate::kanban::{
     maybe_checkpoint_to_contextlattice, move_task, save_store, set_blocked,
 };
 
-use super::{CommandResult, emit_command_output, queue_background_job};
+use super::background::queue_background_job;
+use super::{CommandResult, emit_command_output};
 
 // ---------------------------------------------------------------------------
 // Status rendering
@@ -169,7 +170,10 @@ fn parse_kanban_add(args: &[&str]) -> Result<NewKanbanTaskInput, AgentError> {
 // Handler (called from handle_slash_command in parent module)
 // ---------------------------------------------------------------------------
 
-pub(super) fn handle_kanban_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(super) fn handle_kanban_command(
+    app: &mut App,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     emit_command_output(app, run_kanban_command(args)?);
     Ok(CommandResult::Handled)
 }
@@ -559,8 +563,16 @@ mod tests {
 
     #[test]
     fn test_kanban_command_is_registered_and_completable() {
-        assert!(super::super::SLASH_COMMANDS.iter().any(|(name, _)| *name == "/kanban"));
-        assert!(super::super::SLASH_COMMANDS.iter().any(|(name, _)| *name == "/tasks"));
+        assert!(
+            super::super::SLASH_COMMANDS
+                .iter()
+                .any(|(name, _)| *name == "/kanban")
+        );
+        assert!(
+            super::super::SLASH_COMMANDS
+                .iter()
+                .any(|(name, _)| *name == "/tasks")
+        );
         let results = super::super::autocomplete("/kan");
         assert!(results.contains(&"/kanban"));
     }

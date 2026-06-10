@@ -23,7 +23,7 @@ pub(crate) async fn handle_auth_command(
             } else {
                 "missing"
             };
-            let gate_line = super::oauth_runtime_gate_for_provider(&provider)
+            let gate_line = super::policy::oauth_runtime_gate_for_provider(&provider)
                 .map(|(ok, detail)| {
                     format!(
                         "oauth_runtime_gate: {} ({})",
@@ -42,7 +42,7 @@ pub(crate) async fn handle_auth_command(
         }
         "verify" => {
             let provider = app.current_runtime_provider();
-            if let Some((ok, detail)) = super::oauth_runtime_gate_for_provider(&provider) {
+            if let Some((ok, detail)) = super::policy::oauth_runtime_gate_for_provider(&provider) {
                 if !ok {
                     emit_command_output(
                         app,
@@ -65,7 +65,7 @@ pub(crate) async fn handle_auth_command(
         }
         "refresh" | "force" => {
             let provider = app.current_runtime_provider();
-            if let Some((ok, detail)) = super::oauth_runtime_gate_for_provider(&provider) {
+            if let Some((ok, detail)) = super::policy::oauth_runtime_gate_for_provider(&provider) {
                 if !ok {
                     emit_command_output(
                         app,
