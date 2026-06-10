@@ -145,7 +145,7 @@ impl SubAgentOrchestrator {
     pub fn from_parent(parent: &AgentLoop, hermes_home: PathBuf) -> Self {
         Self {
             cfg: SubAgentOrchestratorConfig {
-                parent_config: parent.config_snapshot(),
+                parent_config: (*parent.config_snapshot()).clone(),
                 tool_registry: parent.tool_registry.clone(),
                 llm_provider: parent.llm_provider.clone(),
                 parent_credential_pool: parent.primary_credential_pool.clone(),

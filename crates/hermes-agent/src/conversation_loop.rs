@@ -73,11 +73,13 @@ pub(crate) async fn prepare_turn(
         .unwrap_or_else(|| user_message.clone());
 
     {
-        let mut cfg = agent
+        let mut guard = agent
             .config_runtime
             .write()
             .unwrap_or_else(|e| e.into_inner());
-        cfg.persist_user_message = persist_override;
+        let mut updated = (*guard).as_ref().clone();
+        updated.persist_user_message = persist_override;
+        *guard = Arc::new(updated);
     }
 
     let task_id = params

@@ -810,9 +810,11 @@ pub fn refresh_prompt_cache_policy(
         api_mode,
         &agent.config().model,
     );
-    if let Ok(mut cfg) = agent.config_runtime.write() {
+    if let Ok(mut guard) = agent.config_runtime.write() {
+        let mut cfg = (*guard).as_ref().clone();
         cfg.use_prompt_caching = should_cache;
         cfg.use_native_cache_layout = native;
+        *guard = Arc::new(cfg);
     }
 }
 
@@ -895,5 +897,5 @@ pub(crate) fn active_model(agent: &AgentLoop) -> String {
         .state
         .lock()
         .map(|state| state.active_runtime.model.clone())
-        .unwrap_or_else(|_| agent.config_snapshot().model)
+        .unwrap_or_else(|_| agent.config_snapshot().model.clone())
 }

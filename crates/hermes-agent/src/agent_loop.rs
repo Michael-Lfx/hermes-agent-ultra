@@ -859,7 +859,7 @@ pub(crate) fn looks_like_tool_error_output(output: &str) -> bool {
 /// Owns the configuration, a tool registry, and an LLM provider.
 /// Call `run()` or `run_stream()` to begin an autonomous loop.
 pub struct AgentLoop {
-    pub(crate) config_runtime: std::sync::RwLock<AgentConfig>,
+    pub(crate) config_runtime: std::sync::RwLock<Arc<AgentConfig>>,
     pub tool_registry: Arc<ToolRegistry>,
     pub llm_provider: Arc<dyn LlmProvider>,
     pub interrupt: InterruptController,
@@ -1247,13 +1247,15 @@ impl AgentLoop {
             return;
         };
         let active = &state.active_runtime;
-        let mut cfg = self
+        let mut guard = self
             .config_runtime
             .write()
             .unwrap_or_else(|e| e.into_inner());
+        let mut cfg = (*guard).as_ref().clone();
         cfg.model = active.model.clone();
         cfg.provider = active.provider.clone();
         cfg.api_mode = active.api_mode.clone();
+        *guard = Arc::new(cfg);
     }
 
     fn runtime_provider_api_mode(&self, provider: &str) -> Option<ApiMode> {
@@ -1324,14 +1326,14 @@ impl AgentLoop {
     }
 
     /// Snapshot of agent config (`model` / `provider` / `api_mode` follow active runtime after fallback).
-    pub fn config(&self) -> AgentConfig {
+    pub fn config(&self) -> Arc<AgentConfig> {
         self.config_runtime
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
-    pub fn config_snapshot(&self) -> AgentConfig {
+    pub fn config_snapshot(&self) -> Arc<AgentConfig> {
         self.config()
     }
 
@@ -1349,7 +1351,7 @@ impl AgentLoop {
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
         let context_compressor = build_context_compressor_for_config(&config);
         Self {
-            config_runtime: std::sync::RwLock::new(config),
+            config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
             llm_provider,
             interrupt: InterruptController::new(),
@@ -1574,7 +1576,7 @@ impl AgentLoop {
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
         let context_compressor = build_context_compressor_for_config(&config);
         Self {
-            config_runtime: std::sync::RwLock::new(config),
+            config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
             llm_provider,
             interrupt,
@@ -2123,8 +2125,10 @@ impl AgentLoop {
         if sid.is_empty() {
             return;
         }
-        if let Ok(mut cfg) = self.config_runtime.write() {
-            cfg.session_id = Some(sid.to_string());
+        if let Ok(mut guard) = self.config_runtime.write() {
+            let mut updated = (*guard).as_ref().clone();
+            updated.session_id = Some(sid.to_string());
+            *guard = Arc::new(updated);
         }
     }
 
@@ -2141,10 +2145,12 @@ impl AgentLoop {
         model: &str,
     ) -> (Vec<Message>, bool) {
         self.set_runtime_session_id(session_id);
-        if let Ok(mut cfg) = self.config_runtime.write() {
+        if let Ok(mut guard) = self.config_runtime.write() {
             let m = model.trim();
             if !m.is_empty() {
-                cfg.model = m.to_string();
+                let mut updated = (*guard).as_ref().clone();
+                updated.model = m.to_string();
+                *guard = Arc::new(updated);
             }
         }
         let mut ctx = ContextManager::for_model(model);
@@ -3255,8 +3261,10 @@ impl AgentLoop {
         self.invalidate_turn_api_messages_cache();
 
         let new_session_id = Self::new_compression_session_id();
-        if let Ok(mut cfg) = self.config_runtime.write() {
-            cfg.session_id = Some(new_session_id.clone());
+        if let Ok(mut guard) = self.config_runtime.write() {
+            let mut updated = (*guard).as_ref().clone();
+            updated.session_id = Some(new_session_id.clone());
+            *guard = Arc::new(updated);
         }
         self.memory_on_session_switch(&new_session_id, &old_session_id, false, "compression");
         self.reset_session_db_flush_cursor();
@@ -3823,7 +3831,7 @@ impl AgentLoop {
         };
         let mut hist = ctx.get_messages().to_vec();
         hist.push(Message::user(prompt));
-        let mut cfg = self.config().clone();
+        let mut cfg = (*self.config()).clone();
         cfg.background_review_enabled = false;
         cfg.background_review_metrics_enabled = false;
         cfg.memory_nudge_interval = 0;
