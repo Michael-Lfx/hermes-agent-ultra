@@ -6,8 +6,8 @@
 
 mod security;
 
-pub use security::parse_allowed_ips;
 pub use security::PolicyGuardConfig;
+pub use security::parse_allowed_ips;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -19,9 +19,9 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use axum::extract::{Path, State, WebSocketUpgrade};
-use axum::http::header;
 use axum::http::HeaderMap;
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::middleware;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -38,8 +38,8 @@ use hermes_agent::providers_extra::{
 use hermes_agent::session_persistence::SessionPersistence;
 use hermes_agent::smart_model_routing::ApiMode;
 use hermes_agent::{
-    leading_system_prompt_for_persist, split_messages_for_run_conversation, AgentConfig,
-    AgentLoop, RunConversationParams,
+    AgentConfig, AgentLoop, RunConversationParams, leading_system_prompt_for_persist,
+    split_messages_for_run_conversation,
 };
 use hermes_config::GatewayConfig;
 use hermes_core::errors::GatewayError;
@@ -196,8 +196,8 @@ impl HttpServerState {
                         agent_tools,
                         runtime_tools,
                     );
-                    let (history, user_message) =
-                        split_messages_for_run_conversation(&messages).ok_or_else(|| {
+                    let (history, user_message) = split_messages_for_run_conversation(&messages)
+                        .ok_or_else(|| {
                             GatewayError::Platform(
                                 "session has no user message for run_conversation".into(),
                             )
@@ -281,8 +281,8 @@ impl HttpServerState {
                             }
                         });
 
-                    let (history, user_message) =
-                        split_messages_for_run_conversation(&messages).ok_or_else(|| {
+                    let (history, user_message) = split_messages_for_run_conversation(&messages)
+                        .ok_or_else(|| {
                             GatewayError::Platform(
                                 "session has no user message for run_conversation".into(),
                             )
@@ -312,36 +312,42 @@ impl HttpServerState {
         let config_teardown = config_arc.clone();
         let agent_tools_teardown = agent_tools.clone();
         let runtime_tools_teardown = tool_registry.clone();
-        let teardown_handler: SessionTeardownHandler = Arc::new(move |ctx: SessionTeardownContext| {
-            let config = config_teardown.clone();
-            let agent_tools = agent_tools_teardown.clone();
-            let runtime_tools = runtime_tools_teardown.clone();
-            Box::pin(async move {
-                let gateway_ctx = GatewayRuntimeContext {
-                    session_key: ctx.session_key.clone(),
-                    session_id: ctx.session_id.clone(),
-                    platform: ctx.platform.clone(),
-                    chat_id: ctx.chat_id.clone(),
-                    user_id: ctx.user_id.clone(),
-                    model: ctx.model.clone(),
-                    provider: ctx.provider.clone(),
-                    personality: ctx.personality.clone(),
-                    home: ctx.home.clone(),
-                    ..Default::default()
-                };
-                let agent = build_agent_for_gateway_context(
-                    config.as_ref(),
-                    &gateway_ctx,
-                    agent_tools,
-                    runtime_tools,
-                );
-                let interrupted = ctx.reason == "shutdown";
-                agent.session_end_hooks(ctx.messages.as_ref(), false, interrupted, 0, true);
-            })
-        });
-        gateway
-            .set_session_teardown_handler(teardown_handler)
-            .await;
+        let teardown_handler: SessionTeardownHandler =
+            Arc::new(move |ctx: SessionTeardownContext| {
+                let config = config_teardown.clone();
+                let agent_tools = agent_tools_teardown.clone();
+                let runtime_tools = runtime_tools_teardown.clone();
+                Box::pin(async move {
+                    let gateway_ctx = GatewayRuntimeContext {
+                        session_key: ctx.session_key.clone(),
+                        session_id: ctx.session_id.clone(),
+                        platform: ctx.platform.clone(),
+                        chat_id: ctx.chat_id.clone(),
+                        user_id: ctx.user_id.clone(),
+                        model: ctx.model.clone(),
+                        provider: ctx.provider.clone(),
+                        personality: ctx.personality.clone(),
+                        home: ctx.home.clone(),
+                        ..Default::default()
+                    };
+                    let agent = build_agent_for_gateway_context(
+                        config.as_ref(),
+                        &gateway_ctx,
+                        agent_tools,
+                        runtime_tools,
+                    );
+                    let interrupted = ctx.reason == "shutdown";
+                    hermes_agent::hooks::session_end_hooks(
+                        &agent,
+                        ctx.messages.as_ref(),
+                        false,
+                        interrupted,
+                        0,
+                        true,
+                    );
+                })
+            });
+        gateway.set_session_teardown_handler(teardown_handler).await;
 
         gateway
             .start_all()
