@@ -1766,17 +1766,16 @@ impl AgentLoop {
         let buffered = if interest_enabled {
             self.state
                 .lock()
-                .map(|mut state| state.interest_session_buffer.drain())
+                .map(|mut state| {
+                    let buf = state.interest_session_buffer.drain();
+                    state.interest_synced_user_hashes.clear();
+                    state.interest_synced_message_len = 0;
+                    buf
+                })
                 .unwrap_or_default()
         } else {
             Vec::new()
         };
-        if interest_enabled {
-            if let Ok(mut state) = self.state.lock() {
-                state.interest_synced_user_hashes.clear();
-                state.interest_synced_message_len = 0;
-            }
-        }
         let as_values: Vec<Value> = messages
             .iter()
             .filter_map(|m| serde_json::to_value(m).ok())
