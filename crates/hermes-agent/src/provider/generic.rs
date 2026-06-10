@@ -736,9 +736,11 @@ impl LlmProvider for GenericProvider {
                 return;
             }
 
-            // Read the SSE byte stream line by line
+            // Read the SSE byte stream, using a cursor-based buffer to
+            // avoid O(N²) copies from repeated `buffer[offset..].to_string()`.
             let mut byte_stream = resp.bytes_stream();
-            let mut buffer = String::new();
+            let mut buf: Vec<u8> = Vec::with_capacity(8192);
+            let mut cursor: usize = 0;
 
             while let Some(chunk_result) = byte_stream.next().await {
                 let chunk_bytes = match chunk_result {
@@ -749,15 +751,21 @@ impl LlmProvider for GenericProvider {
                     }
                 };
 
-                buffer.push_str(&String::from_utf8_lossy(&chunk_bytes));
+                buf.extend_from_slice(&chunk_bytes);
 
-                // Process complete SSE events (separated by double newlines)
-                while let Some(event_end) = buffer.find("\n\n") {
-                    let event_block = buffer[..event_end].to_string();
-                    buffer = buffer[event_end + 2..].to_string();
+                // Process complete SSE events (separated by double newlines).
+                // Search forward from cursor, not from the start of buf.
+                while let Some(pos) = buf[cursor..]
+                    .windows(2)
+                    .position(|w| w == b"\n\n")
+                {
+                    let event_end = cursor + pos;
+                    let event_block = &buf[cursor..event_end];
 
-                    for line in event_block.lines() {
-                        let line = line.trim();
+                    for line_bytes in event_block.split(|&b| b == b'\n') {
+                        let line = std::str::from_utf8(line_bytes)
+                            .unwrap_or("")
+                            .trim();
                         if line.is_empty() || line.starts_with(':') {
                             continue;
                         }
@@ -779,12 +787,22 @@ impl LlmProvider for GenericProvider {
                             }
                         }
                     }
+
+                    cursor = event_end + 2; // skip \n\n
+                }
+
+                // Drain processed bytes from the front of the buffer to keep
+                // memory bounded (avoids unbounded growth on long streams).
+                if cursor > 4096 {
+                    buf.drain(..cursor);
+                    cursor = 0;
                 }
             }
 
             // Process any remaining data in the buffer
-            if !buffer.trim().is_empty() {
-                for line in buffer.lines() {
+            let remaining = std::str::from_utf8(&buf[cursor..]).unwrap_or("").trim();
+            if !remaining.is_empty() {
+                for line in remaining.lines() {
                     let line = line.trim();
                     if let Some(data) = line.strip_prefix("data: ") {
                         let data = data.trim();
