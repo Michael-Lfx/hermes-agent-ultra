@@ -35,6 +35,7 @@ use crate::agent_loop::{
 use crate::budget;
 use crate::compression::estimate_request_tokens_for_compression;
 use crate::context::ContextManager;
+use crate::conversation_loop::ConversationLoop;
 use crate::file_mutation_tracker::FileMutationTracker;
 use crate::governor::GovernorRuntimeState;
 use crate::iteration_budget::IterationBudget;
@@ -76,15 +77,19 @@ pub(crate) enum TurnState {
 
 impl TurnState {
     /// Single-step transition: execute current state and return the next state.
-    pub(crate) async fn transition(self, agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+    pub(crate) async fn transition(
+        self,
+        conv: &ConversationLoop<'_>,
+        tc: &mut TurnContext,
+    ) -> TurnState {
         match self {
-            TurnState::Guard => turn_guard(agent, tc).await,
-            TurnState::Prefetch => turn_prefetch(agent, tc).await,
-            TurnState::RouteSelection => turn_route(agent, tc).await,
-            TurnState::CallLlm => turn_call_llm(agent, tc).await,
-            TurnState::ProcessLlmOutput => turn_process_output(agent, tc).await,
-            TurnState::ExecuteTools => turn_execute_tools(agent, tc).await,
-            TurnState::PostTool => turn_post_tool(agent, tc).await,
+            TurnState::Guard => turn_guard(conv, tc).await,
+            TurnState::Prefetch => turn_prefetch(conv, tc).await,
+            TurnState::RouteSelection => turn_route(conv, tc).await,
+            TurnState::CallLlm => turn_call_llm(conv, tc).await,
+            TurnState::ProcessLlmOutput => turn_process_output(conv, tc).await,
+            TurnState::ExecuteTools => turn_execute_tools(conv, tc).await,
+            TurnState::PostTool => turn_post_tool(conv, tc).await,
             TurnState::Done(result) => TurnState::Done(result),
         }
     }
@@ -316,12 +321,12 @@ impl TurnContext {
 // Guard — check interrupt, max turns, iteration budget
 // ---------------------------------------------------------------------------
 
-async fn turn_guard(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+async fn turn_guard(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
     if let Some(scrubber) = tc.stream_scrubber.as_mut() {
         scrubber.reset();
     }
-    if agent.interrupt.take_interrupt_graceful().is_some() {
-        return TurnState::Done(Ok(agent.graceful_interrupt_result(
+    if conv.agent.interrupt.take_interrupt_graceful().is_some() {
+        return TurnState::Done(Ok(conv.agent.graceful_interrupt_result(
             &tc.ctx,
             tc.total_turns,
             std::mem::take(&mut tc.tool_errors),
@@ -334,14 +339,14 @@ async fn turn_guard(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         )));
     }
 
-    let max_turns_limit = effective_max_turns(agent.config().max_turns);
+    let max_turns_limit = effective_max_turns(conv.agent.config().max_turns);
     if let Some(max_turns) = max_turns_limit {
         if tc.iteration_budget.exhausted() || tc.total_turns >= max_turns {
             tracing::warn!(
                 "Max turns ({}) exceeded, requesting final summary",
                 max_turns
             );
-            let summary_msg = agent.handle_max_iterations(&mut tc.ctx).await;
+            let summary_msg = conv.agent.handle_max_iterations(&mut tc.ctx).await;
             let summary_msg = match summary_msg {
                 Ok(msg) => msg,
                 Err(e) => return TurnState::Done(Err(e)),
@@ -349,7 +354,7 @@ async fn turn_guard(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             if let Some(msg) = summary_msg {
                 tc.ctx.add_message(msg);
             }
-            agent.turn_end_plugin_hooks(
+            conv.agent.turn_end_plugin_hooks(
                 tc.ctx.get_messages(),
                 false,
                 false,
@@ -364,7 +369,7 @@ async fn turn_guard(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                     "session_cost_usd": tc.session_cost_usd,
                 }),
             );
-            return TurnState::Done(Ok(agent.seal_loop_result(
+            return TurnState::Done(Ok(conv.agent.seal_loop_result(
                 &tc.ctx,
                 tc.persist_user_idx,
                 tc.prefill_range.clone(),
@@ -392,9 +397,9 @@ async fn turn_guard(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
 // Prefetch — increment turn counter, OAuth refresh, memory sync, checkpoint
 // ---------------------------------------------------------------------------
 
-async fn turn_prefetch(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+async fn turn_prefetch(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
     tc.total_turns = tc.total_turns.saturating_add(1);
-    agent.invalidate_turn_api_messages_cache();
+    conv.agent.invalidate_turn_api_messages_cache();
     tc.checkpoint_mgr.new_turn();
     tc.iteration_budget.consume();
     tracing::debug!("Agent turn {}", tc.total_turns);
@@ -407,33 +412,34 @@ async fn turn_prefetch(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     }
 
     // Refresh oauth-backed runtime credentials before routing/provider selection.
-    agent.refresh_oauth_store_tokens_if_needed().await;
+    conv.agent.refresh_oauth_store_tokens_if_needed().await;
 
     // Skill nudge counter
-    if agent.config().skill_creation_nudge_interval > 0
-        && agent
+    if conv.agent.config().skill_creation_nudge_interval > 0
+        && conv
+            .agent
             .tool_registry
             .names()
             .iter()
             .any(|n| n == "skill_manage")
     {
-        if let Ok(mut state) = agent.state.lock() {
+        if let Ok(mut state) = conv.agent.state.lock() {
             state.evolution_counters.iters_since_skill =
                 state.evolution_counters.iters_since_skill.saturating_add(1);
         }
     }
 
-    if agent.config().checkpoint_interval_turns > 0
-        && (tc.total_turns - 1) % agent.config().checkpoint_interval_turns == 0
+    if conv.agent.config().checkpoint_interval_turns > 0
+        && (tc.total_turns - 1) % conv.agent.config().checkpoint_interval_turns == 0
     {
         tc.last_checkpoint_messages = Some(tc.ctx.get_messages().to_vec());
     }
 
     // Memory sync at flush interval
-    if tc.total_turns % agent.config().memory_flush_interval == 0 && tc.total_turns > 0 {
+    if tc.total_turns % conv.agent.config().memory_flush_interval == 0 && tc.total_turns > 0 {
         let msgs = tc.ctx.get_messages();
         let (u, a) = extract_last_user_assistant(msgs);
-        agent.memory_sync(&u, &a, &tc.session_id);
+        conv.agent.memory_sync(&u, &a, &tc.session_id);
     }
 
     TurnState::RouteSelection
@@ -443,12 +449,12 @@ async fn turn_prefetch(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
 // RouteSelection — smart model routing, reliability guards
 // ---------------------------------------------------------------------------
 
-async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
-    let turn_runtime_route = tc
-        .forced_runtime_route
-        .clone()
-        .or_else(|| agent.resolve_smart_runtime_route(tc.ctx.get_messages()));
-    let turn_default_model = agent.active_model();
+async fn turn_route(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
+    let turn_runtime_route = tc.forced_runtime_route.clone().or_else(|| {
+        conv.agent
+            .resolve_smart_runtime_route(tc.ctx.get_messages())
+    });
+    let turn_default_model = conv.agent.active_model();
     let active_model = turn_runtime_route
         .as_ref()
         .map(|r| r.model.as_str())
@@ -458,7 +464,12 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         &tc.governor_tool_error_window,
         tc.governor_consecutive_error_turns,
     );
-    let llm_governor = governor_for_turn(&agent.config(), &tc.ctx, 0, Some(&turn_governor_runtime));
+    let llm_governor = governor_for_turn(
+        &conv.agent.config(),
+        &tc.ctx,
+        0,
+        Some(&turn_governor_runtime),
+    );
 
     if let Some(ref ctrl) = tc.web_research_ctrl {
         tc.active_tool_schemas = Arc::from(ctrl.filter_tool_schemas(tc.tool_schemas.as_ref()));
@@ -475,21 +486,21 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         &tc.system_content,
         tc.active_tool_schemas.as_ref(),
     ) as u32;
-    let rt_snap = agent.primary_runtime_snapshot();
+    let rt_snap = conv.agent.primary_runtime_snapshot();
     if let Some(err) = crate::message_sanitization::ollama_context_limit_error(
-        agent.config().ollama_num_ctx,
+        conv.agent.config().ollama_num_ctx,
         !tc.active_tool_schemas.is_empty(),
         approx_request_tokens,
         active_model,
         rt_snap.provider.as_deref().unwrap_or("unknown"),
         rt_snap.base_url.as_deref().unwrap_or("unknown"),
         tc.active_tool_schemas.len(),
-        agent.config().session_id.as_deref(),
+        conv.agent.config().session_id.as_deref(),
     ) {
         tc.ctx.add_message(Message::assistant(err));
         tc.iteration_budget.refund(1);
         tc.total_turns = tc.total_turns.saturating_sub(1);
-        return TurnState::Done(Ok(agent.seal_loop_result(
+        return TurnState::Done(Ok(conv.agent.seal_loop_result(
             &tc.ctx,
             tc.persist_user_idx,
             tc.prefill_range.clone(),
@@ -516,8 +527,9 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             tc.governor_llm_latency_window.len(),
         )
     {
-        if let Some(model) =
-            agent.resolve_reliability_degrade_model(active_model, turn_runtime_route.as_ref())
+        if let Some(model) = conv
+            .agent
+            .resolve_reliability_degrade_model(active_model, turn_runtime_route.as_ref())
         {
             tracing::info!(
                 turn = tc.total_turns,
@@ -526,7 +538,7 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 avg_llm_latency_ms = ?turn_governor_runtime.avg_llm_latency_ms,
                 "reliability guard switching runtime route after degradation"
             );
-            tc.forced_runtime_route = Some(agent.turn_route_reliability_guard(model.clone()));
+            tc.forced_runtime_route = Some(conv.agent.turn_route_reliability_guard(model.clone()));
             tc.ctx.add_message(Message::system(format!(
                 "Reliability guard: runtime degradation detected. Switching next turns to `{}`.",
                 model
@@ -564,12 +576,12 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
 // CallLlm — call the LLM with semantic empty/thinking recovery
 // ---------------------------------------------------------------------------
 
-async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
-    let turn_runtime_route = tc
-        .forced_runtime_route
-        .clone()
-        .or_else(|| agent.resolve_smart_runtime_route(tc.ctx.get_messages()));
-    let turn_default_model = agent.active_model();
+async fn turn_call_llm(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
+    let turn_runtime_route = tc.forced_runtime_route.clone().or_else(|| {
+        conv.agent
+            .resolve_smart_runtime_route(tc.ctx.get_messages())
+    });
+    let turn_default_model = conv.agent.active_model();
     let active_model = turn_runtime_route
         .as_ref()
         .map(|r| r.model.as_str())
@@ -579,7 +591,12 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         &tc.governor_tool_error_window,
         tc.governor_consecutive_error_turns,
     );
-    let llm_governor = governor_for_turn(&agent.config(), &tc.ctx, 0, Some(&turn_governor_runtime));
+    let llm_governor = governor_for_turn(
+        &conv.agent.config(),
+        &tc.ctx,
+        0,
+        Some(&turn_governor_runtime),
+    );
 
     // --- Streaming first attempt + semantic empty/thinking recovery ---
     let api_start = Instant::now();
@@ -589,8 +606,8 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     let mut inner_attempt: u32 = 0;
 
     let mut response = loop {
-        if agent.interrupt.take_interrupt_graceful().is_some() {
-            return TurnState::Done(Ok(agent.graceful_interrupt_result(
+        if conv.agent.interrupt.take_interrupt_graceful().is_some() {
+            return TurnState::Done(Ok(conv.agent.graceful_interrupt_result(
                 &tc.ctx,
                 tc.total_turns,
                 std::mem::take(&mut tc.tool_errors),
@@ -602,12 +619,13 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 tc.api_call_count,
             )));
         }
-        let r = if agent.use_streaming_llm_transport(
+        let r = if conv.agent.use_streaming_llm_transport(
             tc.ui_streaming,
             inner_attempt,
             turn_runtime_route.as_ref(),
         ) {
-            match agent
+            match conv
+                .agent
                 .collect_stream_llm_response(
                     &mut tc.ctx,
                     &tc.active_tool_schemas,
@@ -623,16 +641,16 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 Ok(StreamCollectOutcome::Complete(resp)) => resp,
                 Ok(StreamCollectOutcome::Interrupted(partial)) => {
                     if let Some(ref u) = partial.usage {
-                        agent.record_api_usage(u);
+                        conv.agent.record_api_usage(u);
                         tc.accumulated_usage = Some(merge_usage(tc.accumulated_usage.take(), u));
                         if let Some(cost) =
-                            estimate_usage_cost_usd(u, partial.model.as_str(), &agent.config())
+                            estimate_usage_cost_usd(u, partial.model.as_str(), &conv.agent.config())
                         {
                             tc.session_cost_usd += cost;
                         }
                     }
                     tc.ctx.add_message(partial.message);
-                    return TurnState::Done(Ok(agent.graceful_interrupt_result(
+                    return TurnState::Done(Ok(conv.agent.graceful_interrupt_result(
                         &tc.ctx,
                         tc.total_turns,
                         std::mem::take(&mut tc.tool_errors),
@@ -646,7 +664,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 }
                 Err(e) => {
                     let api_elapsed = api_start.elapsed().as_millis() as u64;
-                    agent.update_route_learning(
+                    conv.agent.update_route_learning(
                         turn_runtime_route.as_ref(),
                         Some(active_model),
                         api_elapsed,
@@ -656,7 +674,8 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 }
             }
         } else {
-            match agent
+            match conv
+                .agent
                 .call_llm_with_retry(
                     &mut tc.ctx,
                     &tc.active_tool_schemas,
@@ -668,7 +687,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             {
                 Ok(r) => r,
                 Err(AgentError::Interrupted { .. }) => {
-                    return TurnState::Done(Ok(agent.graceful_interrupt_result(
+                    return TurnState::Done(Ok(conv.agent.graceful_interrupt_result(
                         &tc.ctx,
                         tc.total_turns,
                         std::mem::take(&mut tc.tool_errors),
@@ -682,7 +701,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 }
                 Err(e) => {
                     let api_elapsed = api_start.elapsed().as_millis() as u64;
-                    agent.update_route_learning(
+                    conv.agent.update_route_learning(
                         turn_runtime_route.as_ref(),
                         Some(active_model),
                         api_elapsed,
@@ -695,7 +714,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         inner_attempt = inner_attempt.saturating_add(1);
 
         if let Some(ref u) = r.usage {
-            agent.record_api_usage(u);
+            conv.agent.record_api_usage(u);
             turn_usage_acc = Some(merge_usage(turn_usage_acc, u));
         }
 
@@ -711,13 +730,13 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             break r;
         }
         if AgentLoop::assistant_has_reasoning(&r.message)
-            && inner_thinking < agent.config().thinking_prefill_max_retries
+            && inner_thinking < conv.agent.config().thinking_prefill_max_retries
         {
             inner_thinking += 1;
-            agent.handle_reasoning_only_prefill(
+            conv.agent.handle_reasoning_only_prefill(
                 &r.message,
                 inner_thinking,
-                agent.config().thinking_prefill_max_retries,
+                conv.agent.config().thinking_prefill_max_retries,
             );
             tc.ctx.add_message(r.message.clone());
             continue;
@@ -729,20 +748,20 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             break r;
         }
         if !AgentLoop::assistant_has_reasoning(&r.message)
-            && inner_empty < agent.config().empty_content_max_retries
+            && inner_empty < conv.agent.config().empty_content_max_retries
         {
             inner_empty += 1;
             tracing::warn!(
                 "empty assistant response (stream path) - retrying ({}/{})",
                 inner_empty,
-                agent.config().empty_content_max_retries
+                conv.agent.config().empty_content_max_retries
             );
-            agent.emit_status(
+            conv.agent.emit_status(
                 "lifecycle",
                 &format!(
                     "Empty assistant response - retrying ({}/{})",
                     inner_empty,
-                    agent.config().empty_content_max_retries
+                    conv.agent.config().empty_content_max_retries
                 ),
             );
             continue;
@@ -753,7 +772,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     AgentLoop::upgrade_finish_reason_for_truncated_tool_args(&mut response);
     let _api_elapsed_ms = api_start.elapsed().as_millis() as u64;
     tc._total_api_time_ms += _api_elapsed_ms;
-    agent.update_route_learning(
+    conv.agent.update_route_learning(
         turn_runtime_route.as_ref(),
         Some(response.model.as_str()),
         _api_elapsed_ms,
@@ -774,7 +793,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             "api_time_ms": _api_elapsed_ms,
             "tool_call_count": response.message.tool_calls.as_ref().map(|v| v.len()).unwrap_or(0),
             "has_visible_text": AgentLoop::assistant_visible_text(&response.message),
-            "route_learning": agent.route_learning_snapshot(
+            "route_learning": conv.agent.route_learning_snapshot(
                 turn_runtime_route.as_ref(),
                 Some(response.model.as_str()),
             ),
@@ -795,7 +814,7 @@ async fn turn_call_llm(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
 // ProcessLlmOutput — extract tool calls, finalization gate
 // ---------------------------------------------------------------------------
 
-async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+async fn turn_process_output(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
     let mut response = tc.last_llm_response.take().expect("response available");
     let turn_runtime_route = tc.turn_runtime_route.take();
     let _api_elapsed_ms = tc._api_elapsed_ms;
@@ -807,29 +826,32 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         "api_time_ms": _api_elapsed_ms,
         "has_tool_calls": response.message.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()),
     });
-    let post_results = agent.invoke_hook(HookType::PostLlmCall, &post_ctx);
-    agent.inject_hook_context(&post_results, &mut tc.ctx);
-    agent.apply_hook_output_transforms(&post_results, &mut response.message.content);
-    agent.apply_transform_llm_output_hooks(&mut response.message.content);
+    let post_results = conv.agent.invoke_hook(HookType::PostLlmCall, &post_ctx);
+    conv.agent.inject_hook_context(&post_results, &mut tc.ctx);
+    conv.agent
+        .apply_hook_output_transforms(&post_results, &mut response.message.content);
+    conv.agent
+        .apply_transform_llm_output_hooks(&mut response.message.content);
 
     // Accumulate usage (merged across semantic-retried sub-calls)
     if let Some(ref usage) = turn_usage_acc {
         tc.accumulated_usage = Some(merge_usage(tc.accumulated_usage.take(), usage));
-        if let Some(cost) = estimate_usage_cost_usd(usage, response.model.as_str(), &agent.config())
+        if let Some(cost) =
+            estimate_usage_cost_usd(usage, response.model.as_str(), &conv.agent.config())
         {
             tc.session_cost_usd += cost;
         }
     }
 
     // Cost guard
-    if let Some(limit) = agent.config().max_cost_usd {
+    if let Some(limit) = conv.agent.config().max_cost_usd {
         if !tc.cost_warned
-            && tc.session_cost_usd >= limit * agent.config().cost_guard_degrade_at_ratio
+            && tc.session_cost_usd >= limit * conv.agent.config().cost_guard_degrade_at_ratio
         {
             tc.cost_warned = true;
             if tc.forced_runtime_route.is_none() {
-                if let Some(model) = agent.resolve_cost_degrade_model() {
-                    tc.forced_runtime_route = Some(agent.turn_route_cost_guard(model.clone()));
+                if let Some(model) = conv.agent.resolve_cost_degrade_model() {
+                    tc.forced_runtime_route = Some(conv.agent.turn_route_cost_guard(model.clone()));
                     tc.ctx.add_message(Message::system(format!(
                         "Cost guard: session spend is now ${:.4}/${:.4}. Switching to cheaper model `{}`.",
                         tc.session_cost_usd, limit, model
@@ -847,7 +869,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
                 "Cost guard tripped: session spend ${:.4} exceeded max_cost_usd ${:.4}. Stopping loop.",
                 tc.session_cost_usd, limit
             )));
-            agent.turn_end_plugin_hooks(
+            conv.agent.turn_end_plugin_hooks(
                 tc.ctx.get_messages(),
                 false,
                 false,
@@ -862,7 +884,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
                     "session_cost_usd": tc.session_cost_usd,
                 }),
             );
-            return TurnState::Done(Ok(agent.seal_loop_result(
+            return TurnState::Done(Ok(conv.agent.seal_loop_result(
                 &tc.ctx,
                 tc.persist_user_idx,
                 tc.prefill_range.clone(),
@@ -891,7 +913,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
     let (assistant_msg, parsed_tool_calls, parsed_textual_tool_calls) =
         AgentLoop::coerce_textual_tool_calls(response.message.clone());
     if parsed_textual_tool_calls {
-        agent.emit_status(
+        conv.agent.emit_status(
             "lifecycle",
             "Parsed textual tool-call markup from assistant output; executing parsed calls.",
         );
@@ -918,15 +940,15 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             .tool_calls
             .as_ref()
             .map_or(false, |calls| !calls.is_empty())
-        && tc.truncated_tool_call_retries < agent.config().truncated_tool_call_max_retries
+        && tc.truncated_tool_call_retries < conv.agent.config().truncated_tool_call_max_retries
     {
         tc.truncated_tool_call_retries = tc.truncated_tool_call_retries.saturating_add(1);
-        agent.emit_status(
+        conv.agent.emit_status(
             "lifecycle",
             &format!(
                 "Truncated tool arguments - retrying ({}/{})",
                 tc.truncated_tool_call_retries,
-                agent.config().truncated_tool_call_max_retries
+                conv.agent.config().truncated_tool_call_max_retries
             ),
         );
         let _ = tc.ctx.get_messages_mut().pop();
@@ -934,7 +956,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
     }
     tc.truncated_tool_call_retries = 0;
 
-    if let Some(ref cb) = agent.callbacks.on_step_complete {
+    if let Some(ref cb) = conv.agent.callbacks.on_step_complete {
         cb(tc.total_turns);
     }
 
@@ -945,13 +967,13 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         .collect();
 
     if tool_calls.is_empty() {
-        let effective_finish_reason = agent.effective_finish_reason(
+        let effective_finish_reason = conv.agent.effective_finish_reason(
             &response,
             &assistant_msg,
             history_includes_tool,
             turn_runtime_route.as_ref(),
         );
-        let finalization_signals = agent.build_finalization_signals(
+        let finalization_signals = conv.agent.build_finalization_signals(
             &tc.task_hint,
             tc.ctx.get_messages(),
             &assistant_msg,
@@ -985,16 +1007,16 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             }),
         );
         if finalization_signals.continuation_required {
-            if tc.continuation_retries < agent.config().continuation_max_retries {
+            if tc.continuation_retries < conv.agent.config().continuation_max_retries {
                 tc.continuation_retries = tc.continuation_retries.saturating_add(1);
                 tc.continuation_trigger_count = tc.continuation_trigger_count.saturating_add(1);
-                agent.emit_status(
+                conv.agent.emit_status(
                     "lifecycle",
                     &format!(
                         "Assistant response incomplete ({:?}) - requesting continuation ({}/{})",
                         response.finish_reason,
                         tc.continuation_retries,
-                        agent.config().continuation_max_retries
+                        conv.agent.config().continuation_max_retries
                     ),
                 );
                 tc.ctx
@@ -1003,11 +1025,11 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             }
             tc.premature_finalize_suspected_count =
                 tc.premature_finalize_suspected_count.saturating_add(1);
-            agent.emit_status(
+            conv.agent.emit_status(
                 "lifecycle",
                 &format!(
                     "Continuation retries exhausted ({}) - finalizing with best effort output",
-                    agent.config().continuation_max_retries
+                    conv.agent.config().continuation_max_retries
                 ),
             );
         } else {
@@ -1034,16 +1056,16 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         // Ack detection
         if finalization_signals.ack_detected {
             if !tc.tool_schemas.is_empty()
-                && tc.codex_ack_continuations < agent.config().ack_continuation_max_retries
+                && tc.codex_ack_continuations < conv.agent.config().ack_continuation_max_retries
             {
                 tc.codex_ack_continuations = tc.codex_ack_continuations.saturating_add(1);
                 tc.ack_trigger_count = tc.ack_trigger_count.saturating_add(1);
-                agent.emit_status(
+                conv.agent.emit_status(
                     "lifecycle",
                     &format!(
                         "Detected intermediate ack - requesting continuation ({}/{})",
                         tc.codex_ack_continuations,
-                        agent.config().ack_continuation_max_retries
+                        conv.agent.config().ack_continuation_max_retries
                     ),
                 );
                 tc.ctx
@@ -1093,7 +1115,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         ) {
             tc.finalizer_output_quality_retries =
                 tc.finalizer_output_quality_retries.saturating_add(1);
-            agent.emit_status(
+            conv.agent.emit_status(
                 "lifecycle",
                 "Detected templated/duplicated output; forcing concrete unique rewrite.",
             );
@@ -1118,7 +1140,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         ) {
             tc.finalizer_action_execution_retries =
                 tc.finalizer_action_execution_retries.saturating_add(1);
-            agent.emit_status(
+            conv.agent.emit_status(
                 "lifecycle",
                 "Detected intent narration without execution evidence; forcing action run.",
             );
@@ -1176,12 +1198,12 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
                 }
             }
         }
-        if let Err(err) = agent.append_objective_runtime_ledger(
+        if let Err(err) = conv.agent.append_objective_runtime_ledger(
             tc.ctx.get_messages(),
             assistant_msg.content.as_deref().unwrap_or_default(),
             tc.total_turns,
         ) {
-            agent.emit_status(
+            conv.agent.emit_status(
                 "lifecycle",
                 &format!("Objective runtime ledger append skipped: {}", err),
             );
@@ -1189,9 +1211,10 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
 
         // Final memory sync
         let (u, a) = extract_last_user_assistant(tc.ctx.get_messages());
-        agent.memory_sync(&u, &a, &tc.session_id);
-        agent.spawn_background_review(tc.total_turns, &tc.ctx, tc.review_memory_at_end);
-        agent.turn_end_plugin_hooks(
+        conv.agent.memory_sync(&u, &a, &tc.session_id);
+        conv.agent
+            .spawn_background_review(tc.total_turns, &tc.ctx, tc.review_memory_at_end);
+        conv.agent.turn_end_plugin_hooks(
             tc.ctx.get_messages(),
             true,
             false,
@@ -1214,7 +1237,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             .as_ref()
             .is_some_and(|m| m.swap(false, Ordering::AcqRel))
         {
-            AgentLoop::emit_stream_chunk(
+            ConversationLoop::emit_stream_chunk(
                 Some(tc.stream_chunk_sink.as_ref()),
                 StreamChunk {
                     delta: Some(hermes_core::StreamDelta {
@@ -1230,7 +1253,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
                 },
             );
         }
-        return TurnState::Done(Ok(agent.seal_loop_result(
+        return TurnState::Done(Ok(conv.agent.seal_loop_result(
             &tc.ctx,
             tc.persist_user_idx,
             tc.prefill_range.clone(),
@@ -1264,7 +1287,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
 // ExecuteTools — execute tool calls in parallel, handle web budget, rollback
 // ---------------------------------------------------------------------------
 
-async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+async fn turn_execute_tools(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
     let mut tool_calls = tc
         .tool_calls_to_execute
         .take()
@@ -1281,14 +1304,15 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     // Deduplicate tool calls
     tool_calls = AgentLoop::deduplicate_tool_calls(&tool_calls);
     for tc_ in &mut tool_calls {
-        agent.repair_tool_call(tc_);
-        agent.hydrate_session_search_args(tc_);
+        conv.agent.repair_tool_call(tc_);
+        conv.agent.hydrate_session_search_args(tc_);
     }
 
     if let Some(note) =
         apply_repo_review_tool_profile_narrowing(&mut tool_calls, tc.ctx.get_messages())
     {
-        agent.emit_status("lifecycle", "Applied repo-review tool profile narrowing.");
+        conv.agent
+            .emit_status("lifecycle", "Applied repo-review tool profile narrowing.");
         tc.ctx.add_message(Message::system(note));
     }
     if let Some(note) = apply_repo_review_discovery_budget_policy(
@@ -1296,7 +1320,8 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         tc.ctx.get_messages(),
         &mut tc.repo_review_budget_state,
     ) {
-        agent.emit_status("lifecycle", "Applied repo-review discovery budget policy.");
+        conv.agent
+            .emit_status("lifecycle", "Applied repo-review discovery budget policy.");
         tc.ctx.add_message(Message::system(note));
     }
 
@@ -1321,7 +1346,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .map(|m| m.swap(should_mute_post, Ordering::AcqRel))
         .unwrap_or(false);
     if was_muted != should_mute_post {
-        AgentLoop::emit_stream_chunk(
+        ConversationLoop::emit_stream_chunk(
             Some(tc.stream_chunk_sink.as_ref()),
             StreamChunk {
                 delta: Some(hermes_core::StreamDelta {
@@ -1341,41 +1366,41 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     // Invalid tool call detection
     let invalid_tool_calls: Vec<String> = tool_calls
         .iter()
-        .filter(|tc_| agent.tool_registry.get(&tc_.function.name).is_none())
+        .filter(|tc_| conv.agent.tool_registry.get(&tc_.function.name).is_none())
         .map(|tc_| tc_.function.name.clone())
         .collect();
     if !invalid_tool_calls.is_empty() {
         tc.invalid_tool_retries = tc.invalid_tool_retries.saturating_add(1);
-        agent.emit_status(
+        conv.agent.emit_status(
             "lifecycle",
             &format!(
                 "Invalid tool call detected - retrying ({}/{})",
                 tc.invalid_tool_retries,
-                agent.config().invalid_tool_call_max_retries
+                conv.agent.config().invalid_tool_call_max_retries
             ),
         );
-        let available = agent.tool_registry.names().join(", ");
-        if tc.invalid_tool_retries >= agent.config().invalid_tool_call_max_retries {
-            agent.emit_status(
+        let available = conv.agent.tool_registry.names().join(", ");
+        if tc.invalid_tool_retries >= conv.agent.config().invalid_tool_call_max_retries {
+            conv.agent.emit_status(
                 "lifecycle",
                 &format!(
                     "Max invalid tool retries reached ({})",
-                    agent.config().invalid_tool_call_max_retries
+                    conv.agent.config().invalid_tool_call_max_retries
                 ),
             );
             tc.ctx.add_message(Message::system(format!(
                 "Max invalid tool retries reached ({}). Last invalid tool: {}",
-                agent.config().invalid_tool_call_max_retries,
+                conv.agent.config().invalid_tool_call_max_retries,
                 invalid_tool_calls[0]
             )));
-            agent.turn_end_plugin_hooks(
+            conv.agent.turn_end_plugin_hooks(
                 tc.ctx.get_messages(),
                 false,
                 false,
                 tc.total_turns,
                 tc.session_started_hooks_fired,
             );
-            return TurnState::Done(Ok(agent.seal_loop_result(
+            return TurnState::Done(Ok(conv.agent.seal_loop_result(
                 &tc.ctx,
                 tc.persist_user_idx,
                 tc.prefill_range.clone(),
@@ -1395,7 +1420,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
             )));
         }
         for tc_ in &tool_calls {
-            let content = if agent.tool_registry.get(&tc_.function.name).is_none() {
+            let content = if conv.agent.tool_registry.get(&tc_.function.name).is_none() {
                 format!(
                     "Tool '{}' does not exist. Available tools: {}",
                     tc_.function.name, available
@@ -1419,23 +1444,23 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     }
     if !invalid_json_args.is_empty() {
         tc.invalid_json_retries = tc.invalid_json_retries.saturating_add(1);
-        if tc.invalid_json_retries < agent.config().invalid_tool_json_max_retries {
-            agent.emit_status(
+        if tc.invalid_json_retries < conv.agent.config().invalid_tool_json_max_retries {
+            conv.agent.emit_status(
                 "lifecycle",
                 &format!(
                     "Invalid tool JSON arguments - retrying ({}/{})",
                     tc.invalid_json_retries,
-                    agent.config().invalid_tool_json_max_retries
+                    conv.agent.config().invalid_tool_json_max_retries
                 ),
             );
             let _ = tc.ctx.get_messages_mut().pop();
             return TurnState::CallLlm;
         }
-        agent.emit_status(
+        conv.agent.emit_status(
             "lifecycle",
             &format!(
                 "Max invalid JSON retries reached ({}); returning tool errors",
-                agent.config().invalid_tool_json_max_retries
+                conv.agent.config().invalid_tool_json_max_retries
             ),
         );
         tc.invalid_json_retries = 0;
@@ -1459,7 +1484,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     tc.invalid_json_retries = 0;
 
     for tc_ in &tool_calls {
-        if let Ok(mut state) = agent.state.lock() {
+        if let Ok(mut state) = conv.agent.state.lock() {
             match tc_.function.name.as_str() {
                 "memory" => state.evolution_counters.turns_since_memory = 0,
                 "skill_manage" => state.evolution_counters.iters_since_skill = 0,
@@ -1469,7 +1494,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     }
 
     // Cap concurrent delegate_task calls
-    agent.cap_delegates(&mut tool_calls);
+    conv.agent.cap_delegates(&mut tool_calls);
 
     // Web research
     let deferred_web_budget_results = if let Some(ref mut ctrl) = tc.web_research_ctrl {
@@ -1484,7 +1509,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
             )
             .await;
         for notice in notices {
-            agent.emit_status("tool_failure", &notice);
+            conv.agent.emit_status("tool_failure", &notice);
         }
         blocked
     } else {
@@ -1499,7 +1524,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
             let blocked_by_errors =
                 tc.web_tool_consecutive_error_turns >= web_tool_budget_max_consecutive_errors();
             for (tool_name, _) in &blocked {
-                agent.emit_status(
+                conv.agent.emit_status(
                     "tool_failure",
                     &web_tool_budget_user_notice(tool_name, blocked_by_errors),
                 );
@@ -1531,16 +1556,16 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     );
     for tc_ in &tool_calls {
         let tc_ctx = serde_json::json!({"tool": &tc_.function.name, "turn": tc.total_turns});
-        agent.invoke_hook(HookType::PreToolCall, &tc_ctx);
-        if let Some(ref cb) = agent.callbacks.on_tool_start {
+        conv.agent.invoke_hook(HookType::PreToolCall, &tc_ctx);
+        if let Some(ref cb) = conv.agent.callbacks.on_tool_start {
             let args: Value = serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null);
             cb(&tc_.function.name, &args);
         }
     }
 
     // Interrupt check before tool execution
-    if agent.interrupt.take_interrupt_graceful().is_some() {
-        return TurnState::Done(Ok(agent.graceful_interrupt_result(
+    if conv.agent.interrupt.take_interrupt_graceful().is_some() {
+        return TurnState::Done(Ok(conv.agent.graceful_interrupt_result(
             &tc.ctx,
             tc.total_turns,
             std::mem::take(&mut tc.tool_errors),
@@ -1555,12 +1580,13 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
 
     let _tool_start = Instant::now();
     let _tool_governor = governor_for_turn(
-        &agent.config(),
+        &conv.agent.config(),
         &tc.ctx,
         tool_calls.len(),
         Some(&turn_governor_runtime),
     );
-    let _parent_budget_remaining_usd = agent
+    let _parent_budget_remaining_usd = conv
+        .agent
         .config()
         .max_cost_usd
         .map(|limit| (limit - tc.session_cost_usd).max(0.0));
@@ -1573,7 +1599,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
                 tc.ctx.add_message(Message::assistant(format!(
                     "[Tool guardrail halt] {reason}"
                 )));
-                return TurnState::Done(Ok(agent.seal_loop_result(
+                return TurnState::Done(Ok(conv.agent.seal_loop_result(
                     &tc.ctx,
                     tc.persist_user_idx,
                     tc.prefill_range.clone(),
@@ -1605,23 +1631,24 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .map(|tc_| tc_.function.name.clone())
         .collect();
     let _tool_progress = ToolProgressWatchdog::start(
-        agent.callbacks.status_callback.clone(),
+        conv.agent.callbacks.status_callback.clone(),
         tc.total_turns,
         tool_progress_names,
     );
-    let mut results = agent
+    let mut results = conv
+        .agent
         .execute_tool_calls(
             &tool_calls,
             tc.total_turns,
             governor_for_turn(
-                &agent.config(),
+                &conv.agent.config(),
                 &tc.ctx,
                 tool_calls.len(),
                 Some(&turn_governor_runtime),
             )
             .tool_concurrency,
             contextlattice_connect_intent,
-            agent
+            conv.agent
                 .config()
                 .max_cost_usd
                 .map(|limit| (limit - tc.session_cost_usd).max(0.0)),
@@ -1686,7 +1713,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         streaming = true,
         "agent tool batch finished"
     );
-    agent.emit_tool_failure_notices(&tool_calls, &results);
+    conv.agent.emit_tool_failure_notices(&tool_calls, &results);
 
     let turn_tool_error_rate = if results.is_empty() {
         0.0
@@ -1710,7 +1737,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
             "turn": tc.total_turns,
             "tool_count": tool_calls.len(),
             "tool_concurrency": governor_for_turn(
-                &agent.config(),
+                &conv.agent.config(),
                 &tc.ctx,
                 tool_calls.len(),
                 Some(&turn_governor_runtime),
@@ -1728,8 +1755,8 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     );
 
     // Checkpoint rollback
-    if agent.config().rollback_on_tool_error_threshold > 0
-        && turn_tool_error_count >= agent.config().rollback_on_tool_error_threshold
+    if conv.agent.config().rollback_on_tool_error_threshold > 0
+        && turn_tool_error_count >= conv.agent.config().rollback_on_tool_error_threshold
     {
         if let Some(snapshot) = tc.last_checkpoint_messages.clone() {
             *tc.ctx.get_messages_mut() = snapshot;
@@ -1757,7 +1784,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
 //            tool loop guard, compression
 // ---------------------------------------------------------------------------
 
-async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
+async fn turn_post_tool(conv: &ConversationLoop<'_>, tc: &mut TurnContext) -> TurnState {
     let tool_calls = tc.tool_calls.take().expect("tool calls available");
     let mut results = tc.tool_results.take().expect("tool results available");
     let turn_tool_error_count = tc._turn_tool_error_count;
@@ -1776,8 +1803,8 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             continue;
         };
         let tc_ctx = serde_json::json!({"tool": &tc_.function.name, "is_error": res.is_error, "turn": tc.total_turns});
-        agent.invoke_hook(HookType::PostToolCall, &tc_ctx);
-        if let Some(ref cb) = agent.callbacks.on_tool_complete {
+        conv.agent.invoke_hook(HookType::PostToolCall, &tc_ctx);
+        if let Some(ref cb) = conv.agent.callbacks.on_tool_complete {
             cb(&tc_.function.name, &res.content);
         }
     }
@@ -1790,26 +1817,26 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             .record_tool_result(&tc_.function.name, &args, &res.content, res.is_error);
     }
 
-    agent.notify_memory_writes(&tool_calls, &results);
-    agent.notify_delegations(&tool_calls, &results);
+    conv.agent.notify_memory_writes(&tool_calls, &results);
+    conv.agent.notify_delegations(&tool_calls, &results);
 
     // Enforce budget
-    budget::enforce_budget(&mut results, &agent.config().budget);
+    budget::enforce_budget(&mut results, &conv.agent.config().budget);
 
     if !results.is_empty() {
         let w = budget_pressure_text(
             tc.total_turns,
-            agent.config().max_turns,
-            agent.config().budget_caution_threshold,
-            agent.config().budget_warning_threshold,
-            agent.config().budget_pressure_enabled,
+            conv.agent.config().max_turns,
+            conv.agent.config().budget_caution_threshold,
+            conv.agent.config().budget_warning_threshold,
+            conv.agent.config().budget_pressure_enabled,
         );
         if let Some(ref text) = w {
             tracing::info!("{}", text);
         }
         inject_budget_pressure_into_last_tool_result(&mut results, w.as_deref());
     }
-    let lsp_note = agent.lsp_context_note(&tool_calls, &results);
+    let lsp_note = conv.agent.lsp_context_note(&tool_calls, &results);
 
     let execute_code_refund = !tool_calls.is_empty()
         && tool_calls
@@ -1831,7 +1858,7 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         tc.ctx
             .add_message(Message::tool_result(&result.tool_call_id, &result.content));
     }
-    agent
+    conv.agent
         .pending_steer
         .apply_to_tool_results(tc.ctx.get_messages_mut(), num_tool_msgs);
     if let Some(note) = lsp_note {
@@ -1850,7 +1877,7 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             turn_tool_error_count,
             tool_calls.len()
         );
-        agent.emit_status("lifecycle", &guard_message);
+        conv.agent.emit_status("lifecycle", &guard_message);
         tc.replay.record(
             "tool_loop_guard",
             serde_json::json!({
@@ -1860,7 +1887,8 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 "total_calls": tool_calls.len(),
             }),
         );
-        match agent
+        match conv
+            .agent
             .handle_tool_loop_guard_summary(
                 &mut tc.ctx,
                 tc.governor_consecutive_error_turns,
@@ -1880,7 +1908,7 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             .as_ref()
             .is_some_and(|m| m.swap(false, Ordering::AcqRel))
         {
-            AgentLoop::emit_stream_chunk(
+            ConversationLoop::emit_stream_chunk(
                 Some(tc.stream_chunk_sink.as_ref()),
                 StreamChunk {
                     delta: Some(hermes_core::StreamDelta {
@@ -1896,15 +1924,15 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
                 },
             );
         }
-        agent.turn_end_plugin_hooks(
+        conv.agent.turn_end_plugin_hooks(
             tc.ctx.get_messages(),
             false,
             false,
             tc.total_turns,
             tc.session_started_hooks_fired,
         );
-        return TurnState::Done(Ok(agent.enrich_turn_telemetry(
-            agent.seal_loop_result(
+        return TurnState::Done(Ok(conv.agent.enrich_turn_telemetry(
+            conv.agent.seal_loop_result(
                 &tc.ctx,
                 tc.persist_user_idx,
                 tc.prefill_range.clone(),
@@ -1936,7 +1964,7 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     if let Some(brk) = tc.stream_needs_break.as_ref() {
         brk.store(true, Ordering::Release);
     }
-    AgentLoop::emit_stream_chunk(
+    ConversationLoop::emit_stream_chunk(
         Some(tc.stream_chunk_sink.as_ref()),
         StreamChunk {
             delta: Some(hermes_core::StreamDelta {
@@ -1948,7 +1976,8 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             usage: None,
         },
     );
-    agent.emit_background_review_metrics(tc.total_turns, &tc.ctx);
+    conv.agent
+        .emit_background_review_metrics(tc.total_turns, &tc.ctx);
 
     // Context pressure
     let total_chars = tc.ctx.total_chars();
@@ -1978,7 +2007,9 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         }
     }
 
-    agent.auto_compress_if_over_threshold(&mut tc.ctx).await;
+    conv.agent
+        .auto_compress_if_over_threshold(&mut tc.ctx)
+        .await;
 
     TurnState::Guard
 }
