@@ -298,9 +298,13 @@ pub(crate) async fn collect_stream_llm_response(
     mut stream_scrubber: Option<&mut crate::stream_scrubber::ThinkBlockScrubber>,
 ) -> Result<StreamCollectOutcome, AgentError> {
     let api_messages = build_turn_api_messages(agent, ctx);
-    let (_, active_model_name) = agent.extract_provider_and_model(active_model);
-    let (active_provider, _) = agent.extract_provider_and_model(active_model);
-    let default_api_mode = agent.primary_runtime_snapshot().api_mode.clone();
+    let (_, active_model_name) =
+        crate::route_learning::extract_provider_and_model(agent, active_model);
+    let (active_provider, _) =
+        crate::route_learning::extract_provider_and_model(agent, active_model);
+    let default_api_mode = crate::route_learning::primary_runtime_snapshot(agent)
+        .api_mode
+        .clone();
     let default_extra_body = extra_body_for_api_mode(agent, &default_api_mode);
     let effective_max_tokens = max_tokens_override.or(agent.config().max_tokens);
     let max_stream_retries = std::env::var("HERMES_STREAM_RETRIES")
@@ -321,7 +325,8 @@ pub(crate) async fn collect_stream_llm_response(
             active_provider.as_str(),
             route.and_then(|rt| rt.base_url.as_deref()),
         );
-        agent.invoke_pre_api_request_hook(
+        crate::hooks::invoke_pre_api_request_hook(
+            agent,
             *api_call_count,
             &api_messages,
             tool_schemas.len(),
@@ -332,7 +337,8 @@ pub(crate) async fn collect_stream_llm_response(
             effective_max_tokens,
         );
         let mut stream = if let Some(rt) = route {
-            let (provider_name, model_name) = agent.extract_provider_and_model(active_model);
+            let (provider_name, model_name) =
+                crate::route_learning::extract_provider_and_model(agent, active_model);
             let mode = rt.api_mode.as_ref().unwrap_or(&default_api_mode);
             let extra_body_for_call = extra_body_for_api_mode(agent, mode);
             let pool = crate::runtime_provider::credentials_pool_for_route(agent, rt);
@@ -366,11 +372,11 @@ pub(crate) async fn collect_stream_llm_response(
                         effective_max_tokens,
                         agent.config().temperature,
                         Some(
-                            agent
-                                .extract_provider_and_model(
-                                    crate::runtime_provider::active_model(agent).as_str(),
-                                )
-                                .1,
+                            crate::route_learning::extract_provider_and_model(
+                                agent,
+                                crate::runtime_provider::active_model(agent).as_str(),
+                            )
+                            .1,
                         ),
                         default_extra_body.as_ref(),
                     )
@@ -435,7 +441,8 @@ pub(crate) async fn collect_stream_llm_response(
                                 finish_reason: None,
                                 usage: None,
                             });
-                            agent.emit_status(
+                            crate::hooks::emit_status(
+                                agent,
                                 "lifecycle",
                                 &format!(
                                     "Connection dropped mid tool-call; reconnecting (attempt {}/{})",
@@ -571,7 +578,8 @@ pub(crate) fn effective_finish_reason(
 ) -> Option<String> {
     let finish_reason = response.finish_reason.as_deref();
     let active_model = crate::runtime_provider::active_model(agent);
-    let (provider, model) = agent.extract_provider_and_model(active_model.as_str());
+    let (provider, model) =
+        crate::route_learning::extract_provider_and_model(agent, active_model.as_str());
     let cfg = agent.config();
     let api_mode = route
         .and_then(|rt| rt.api_mode.as_ref())
@@ -590,7 +598,8 @@ pub(crate) fn effective_finish_reason(
         provider.as_str(),
         base_url.as_deref(),
     ) {
-        agent.emit_status(
+        crate::hooks::emit_status(
+            agent,
             "lifecycle",
             "Treating suspicious Ollama/GLM stop response as truncated",
         );
@@ -638,7 +647,7 @@ pub(crate) fn handle_reasoning_only_prefill(
     attempt: u32,
     max_attempts: u32,
 ) {
-    agent.emit_reasoning_from_message(message);
+    crate::hooks::emit_reasoning_from_message(agent, message);
     tracing::debug!(
         "reasoning-only assistant response; prefill continuation ({}/{})",
         attempt,
@@ -662,7 +671,7 @@ fn route_blocks_llm_streaming(route: &TurnRuntimeRoute) -> bool {
 }
 
 pub(crate) fn provider_blocks_llm_streaming(agent: &AgentLoop) -> bool {
-    let rt = agent.primary_runtime_snapshot();
+    let rt = crate::route_learning::primary_runtime_snapshot(agent);
     let cfg = agent.config();
     let prov = rt
         .provider
@@ -710,7 +719,8 @@ pub(crate) fn note_stream_not_supported(agent: &AgentLoop, err: &AgentError) {
     }
     session_disable_streaming(agent);
     if !agent.config().quiet_mode {
-        agent.emit_status(
+        crate::hooks::emit_status(
+            agent,
             "lifecycle",
             "Streaming is not supported for this model/provider. Switching to non-streaming. \
              Set display.streaming: false in config.yaml to skip this probe.",
@@ -733,7 +743,7 @@ fn api_mode_as_hook_str(mode: &ApiMode) -> &'static str {
     }
 }
 
-fn extra_body_for_api_mode(agent: &AgentLoop, api_mode: &ApiMode) -> Option<Value> {
+pub(crate) fn extra_body_for_api_mode(agent: &AgentLoop, api_mode: &ApiMode) -> Option<Value> {
     let mut body = agent
         .config()
         .extra_body

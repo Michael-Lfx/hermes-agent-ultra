@@ -690,7 +690,7 @@ fn format_tool_progress_message(turn: u32, tool_names: &[String], pulse: u32) ->
     }
 }
 
-fn summarize_tool_failure_for_user(tool_name: &str, error: &str) -> Option<String> {
+pub(crate) fn summarize_tool_failure_for_user(tool_name: &str, error: &str) -> Option<String> {
     let err = error.to_ascii_lowercase();
     match tool_name {
         "web_extract"
@@ -854,87 +854,6 @@ pub(crate) fn looks_like_tool_error_output(output: &str) -> bool {
         || lower.contains("missing '")
 }
 
-fn smart_routing_learning_enabled() -> bool {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_ENABLED")
-        .ok()
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(true)
-}
-
-fn smart_routing_learning_alpha() -> f64 {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_ALPHA")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| (0.01..=1.0).contains(v))
-        .unwrap_or(0.20)
-}
-
-fn smart_routing_learning_cheap_bias() -> f64 {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_CHEAP_BIAS")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| (-0.50..=0.50).contains(v))
-        .unwrap_or(0.08)
-}
-
-fn smart_routing_learning_switch_margin() -> f64 {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_SWITCH_MARGIN")
-        .ok()
-        .and_then(|v| v.trim().parse::<f64>().ok())
-        .filter(|v| (0.0..=0.50).contains(v))
-        .unwrap_or(0.03)
-}
-
-fn smart_routing_learning_ttl_secs() -> i64 {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_TTL_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|v| *v >= 0)
-        .unwrap_or(7 * 24 * 60 * 60)
-}
-
-fn smart_routing_learning_half_life_secs() -> i64 {
-    std::env::var("HERMES_SMART_ROUTING_LEARNING_HALF_LIFE_SECS")
-        .ok()
-        .and_then(|v| v.trim().parse::<i64>().ok())
-        .filter(|v| *v >= 0)
-        .unwrap_or(24 * 60 * 60)
-}
-
-fn now_unix_ms() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
-
-fn default_route_learning_home(config: &AgentConfig) -> PathBuf {
-    config
-        .hermes_home
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
-        .or_else(|| {
-            std::env::var("HERMES_AGENT_ULTRA_HOME")
-                .ok()
-                .map(PathBuf::from)
-        })
-        .or_else(|| {
-            std::env::var("HOME")
-                .ok()
-                .map(|home| PathBuf::from(home).join(".hermes-agent-ultra"))
-        })
-        .unwrap_or_else(|| PathBuf::from(".hermes-agent-ultra"))
-}
-
-fn route_learning_state_path(config: &AgentConfig) -> PathBuf {
-    default_route_learning_home(config)
-        .join("logs")
-        .join("route-learning.json")
-}
-
 /// The main agent loop.
 ///
 /// Owns the configuration, a tool registry, and an LLM provider.
@@ -968,7 +887,7 @@ pub struct AgentLoop {
     /// LSP-style context injection controls.
     lsp_context: LspContextConfig,
     /// Rolling per-route performance state for online smart-routing adaptation.
-    route_learning: Arc<Mutex<HashMap<String, RouteLearningStats>>>,
+    pub(crate) route_learning: Arc<Mutex<HashMap<String, RouteLearningStats>>>,
     /// Frozen primary runtime at session start (Python `_primary_runtime`).
     pub(crate) stored_primary_runtime: PrimaryRuntime,
     /// When set, tool calls use this async path instead of sync `ToolRegistry` handlers
@@ -1156,7 +1075,8 @@ impl AgentLoop {
         api_calls: u32,
     ) -> AgentResult {
         self.pending_steer.clear();
-        self.turn_end_plugin_hooks(
+        crate::hooks::turn_end_plugin_hooks(
+            self,
             ctx.get_messages(),
             false,
             true,
@@ -1195,7 +1115,7 @@ impl AgentLoop {
         if result.interrupted {
             result.interrupt_message = self.interrupt.peek_redirect_message();
         }
-        let rt = self.primary_runtime_snapshot();
+        let rt = crate::route_learning::primary_runtime_snapshot(self);
         result.model = Some(rt.model);
         result.provider = rt.provider;
         result.base_url = rt.base_url;
@@ -1336,18 +1256,6 @@ impl AgentLoop {
         cfg.api_mode = active.api_mode.clone();
     }
 
-    pub(crate) fn primary_runtime_for_failover_model(&self, model_id: &str) -> PrimaryRuntime {
-        crate::runtime_provider::primary_runtime_for_failover_model(self, model_id)
-    }
-
-    /// Build an LLM provider from a full [`PrimaryRuntime`] snapshot (failover / fallback).
-    pub(crate) fn build_llm_provider_for_runtime(
-        &self,
-        runtime: &PrimaryRuntime,
-    ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-        crate::runtime_provider::build_llm_provider_for_runtime(self, runtime)
-    }
-
     fn runtime_provider_api_mode(&self, provider: &str) -> Option<ApiMode> {
         let provider = provider.trim();
         if provider.is_empty() {
@@ -1387,35 +1295,6 @@ impl AgentLoop {
             .and_then(|(_, cfg)| cfg.api_mode.clone())
     }
 
-    pub(crate) fn build_delegation_runtime_provider(
-        &self,
-        provider: &str,
-        model_name: &str,
-        route_base_url: Option<&str>,
-        explicit_api_key: Option<&str>,
-    ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-        crate::runtime_provider::build_delegation_runtime_provider(
-            self,
-            provider,
-            model_name,
-            route_base_url,
-            explicit_api_key,
-        )
-    }
-
-    /// Effective provider for API calls: rebuild from active runtime when fallback is active.
-    pub(crate) fn effective_llm_provider(&self) -> Arc<dyn LlmProvider> {
-        crate::runtime_provider::effective_llm_provider(self)
-    }
-
-    pub(crate) fn note_primary_rate_limited_if_applicable(&self) {
-        crate::runtime_provider::note_primary_rate_limited_if_applicable(self)
-    }
-
-    pub(crate) fn active_model(&self) -> String {
-        crate::runtime_provider::active_model(self)
-    }
-
     /// Try switching to a configured fallback model (Nous guard, billing, rate limit).
     pub(crate) fn try_activate_session_fallback(&self, active_model: &str) -> bool {
         if self
@@ -1426,11 +1305,11 @@ impl AgentLoop {
         {
             return false;
         }
-        let chain = self.resolve_retry_failover_chain(active_model);
+        let chain = crate::route_learning::resolve_retry_failover_chain(self, active_model);
         let Some(next) = chain.first() else {
             return false;
         };
-        let rt = self.primary_runtime_for_failover_model(next);
+        let rt = crate::runtime_provider::primary_runtime_for_failover_model(self, next);
         self.activate_runtime_fallback(rt);
         true
     }
@@ -1462,7 +1341,9 @@ impl AgentLoop {
         tool_registry: Arc<ToolRegistry>,
         llm_provider: Arc<dyn LlmProvider>,
     ) -> Self {
-        let route_learning = Arc::new(Mutex::new(Self::load_route_learning_state(&config)));
+        let route_learning = Arc::new(Mutex::new(
+            crate::route_learning::load_route_learning_state(&config),
+        ));
         let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
@@ -1556,7 +1437,7 @@ impl AgentLoop {
                 .filter(|s| !s.is_empty())
                 .map(str::len)
                 .unwrap_or(0),
-            model_hash: crate::api_messages::hash_str(&self.active_model()),
+            model_hash: crate::api_messages::hash_str(&crate::runtime_provider::active_model(self)),
             use_prompt_caching: cfg.use_prompt_caching,
             use_native_cache_layout: cfg.use_native_cache_layout,
             cache_ttl_hash: crate::api_messages::hash_str(&cfg.cache_ttl),
@@ -1569,8 +1450,8 @@ impl AgentLoop {
         let base_url = self
             .resolve_runtime_base_url(provider, None)
             .unwrap_or_default();
-        let api_mode = Self::api_mode_as_hook_str(&cfg.api_mode);
-        self.refresh_prompt_cache_policy(provider, &base_url, api_mode);
+        let api_mode = crate::hooks::api_mode_as_hook_str(&cfg.api_mode);
+        crate::runtime_provider::refresh_prompt_cache_policy(self, provider, &base_url, api_mode);
         let session_id = cfg.session_id.as_deref();
         let (tool_repairs, seq_repairs) =
             agent_runtime_helpers::prepare_live_history_for_api(ctx.get_messages_mut(), session_id);
@@ -1685,7 +1566,9 @@ impl AgentLoop {
         llm_provider: Arc<dyn LlmProvider>,
         interrupt: InterruptController,
     ) -> Self {
-        let route_learning = Arc::new(Mutex::new(Self::load_route_learning_state(&config)));
+        let route_learning = Arc::new(Mutex::new(
+            crate::route_learning::load_route_learning_state(&config),
+        ));
         // let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
@@ -1746,119 +1629,6 @@ impl AgentLoop {
         cfg
     }
 
-    fn load_route_learning_state(config: &AgentConfig) -> HashMap<String, RouteLearningStats> {
-        if !smart_routing_learning_enabled() {
-            return HashMap::new();
-        }
-        let path = route_learning_state_path(config);
-        let raw = match std::fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(_) => return HashMap::new(),
-        };
-        let parsed: RouteLearningState = match serde_json::from_str(&raw) {
-            Ok(state) => state,
-            Err(err) => {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "failed to parse route-learning state; starting empty"
-                );
-                return HashMap::new();
-            }
-        };
-        let mut entries = parsed.entries;
-        let now_ms = now_unix_ms();
-        let _ = Self::prune_route_learning_locked(&mut entries, now_ms);
-        entries
-    }
-
-    fn save_route_learning_state(&self, entries: &HashMap<String, RouteLearningStats>) {
-        let path = route_learning_state_path(&self.config());
-        if let Some(parent) = path.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                tracing::warn!(
-                    path = %parent.display(),
-                    error = %err,
-                    "failed to create route-learning state directory"
-                );
-                return;
-            }
-        }
-        let body = RouteLearningState {
-            schema_version: 1,
-            saved_at_unix_ms: now_unix_ms(),
-            entries: entries.clone(),
-        };
-        let serialized = match serde_json::to_vec_pretty(&body) {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::warn!(error = %err, "failed to serialize route-learning state");
-                return;
-            }
-        };
-        let tmp = path.with_extension("json.tmp");
-        if let Err(err) = std::fs::write(&tmp, serialized) {
-            tracing::warn!(
-                path = %tmp.display(),
-                error = %err,
-                "failed to write route-learning state temp file"
-            );
-            return;
-        }
-        if let Err(err) = std::fs::rename(&tmp, &path) {
-            tracing::warn!(
-                path = %path.display(),
-                error = %err,
-                "failed to move route-learning state into place"
-            );
-        }
-    }
-
-    fn route_learning_effective_stats(
-        stats: &RouteLearningStats,
-        now_ms: i64,
-    ) -> Option<RouteLearningStats> {
-        if stats.samples == 0 {
-            return None;
-        }
-        let mut out = stats.clone();
-        if out.updated_at_unix_ms <= 0 {
-            return Some(out);
-        }
-        let age_ms = now_ms.saturating_sub(out.updated_at_unix_ms).max(0);
-        let ttl_secs = smart_routing_learning_ttl_secs();
-        if ttl_secs > 0 {
-            let ttl_ms = ttl_secs.saturating_mul(1000);
-            if age_ms >= ttl_ms {
-                return None;
-            }
-        }
-        let half_life_secs = smart_routing_learning_half_life_secs();
-        if half_life_secs <= 0 || age_ms <= 0 {
-            return Some(out);
-        }
-        let half_life_ms = (half_life_secs.saturating_mul(1000)) as f64;
-        let decay = (0.5_f64)
-            .powf((age_ms as f64) / half_life_ms)
-            .clamp(0.0, 1.0);
-        let baseline_success = 0.90;
-        let baseline_latency = 1800.0;
-        out.success_rate = baseline_success + (out.success_rate - baseline_success) * decay;
-        out.avg_latency_ms = baseline_latency + (out.avg_latency_ms - baseline_latency) * decay;
-        out.consecutive_failures = ((out.consecutive_failures as f64) * decay).round() as u32;
-        out.samples = ((out.samples as f64) * decay).round().max(1.0) as u32;
-        Some(out)
-    }
-
-    fn prune_route_learning_locked(
-        map: &mut HashMap<String, RouteLearningStats>,
-        now_ms: i64,
-    ) -> bool {
-        let before = map.len();
-        map.retain(|_, stats| Self::route_learning_effective_stats(stats, now_ms).is_some());
-        map.len() != before
-    }
-
     /// Attach an in-process sub-agent orchestrator. When set, `delegate_task`
     /// tool calls are actually executed by the orchestrator instead of just
     /// returning a signal envelope. See
@@ -1905,171 +1675,6 @@ impl AgentLoop {
     pub fn with_delegate_depth(mut self, depth: u32) -> Self {
         self.delegate_depth = depth;
         self
-    }
-
-    // -- Plugin hook helpers ------------------------------------------------
-
-    pub(crate) fn invoke_hook(&self, hook: HookType, ctx_val: &Value) -> Vec<HookResult> {
-        if let Some(ref pm) = self.plugin_manager {
-            if let Ok(pm) = pm.lock() {
-                return pm.invoke_hook(hook, ctx_val);
-            }
-        }
-        Vec::new()
-    }
-
-    /// Python `pre_llm_call` — inject plugin context into the **current user** message (not system).
-    pub(crate) fn inject_pre_llm_hook_into_user_message(
-        &self,
-        results: &[HookResult],
-        ctx: &mut ContextManager,
-    ) {
-        let mut parts: Vec<String> = Vec::new();
-        for r in results {
-            if let HookResult::InjectContext(text) = r {
-                let trimmed = text.trim();
-                if !trimmed.is_empty() {
-                    parts.push(trimmed.to_string());
-                }
-            }
-        }
-        if parts.is_empty() {
-            return;
-        }
-        let plugin_ctx = parts.join("\n\n");
-        let messages = ctx.get_messages_mut();
-        if let Some(idx) = messages
-            .iter()
-            .rposition(|m| m.role == hermes_core::MessageRole::User)
-        {
-            let msg = &mut messages[idx];
-            let base = msg.content.clone().unwrap_or_default();
-            let merged = if base.trim().is_empty() {
-                plugin_ctx
-            } else {
-                format!("{base}\n\n{plugin_ctx}")
-            };
-            msg.content = Some(merged);
-        }
-    }
-
-    /// Fire `pre_llm_call` once before the tool loop (Python `conversation_loop.py` ~652–686).
-    pub(crate) fn apply_pre_llm_call_hooks_once(
-        &self,
-        ctx: &mut ContextManager,
-        user_message: &str,
-        _session_id: &str,
-    ) {
-        let history: Vec<Message> = ctx
-            .get_messages()
-            .iter()
-            .filter(|m| m.role != hermes_core::MessageRole::System)
-            .cloned()
-            .collect();
-        let user_turns = history
-            .iter()
-            .filter(|m| m.role == hermes_core::MessageRole::User)
-            .count();
-        let hook_ctx = serde_json::json!({
-            "session_id": self.config().session_id,
-            "user_message": user_message,
-            "conversation_history": history,
-            "is_first_turn": user_turns <= 1,
-            "model": self.active_model(),
-            "platform": self.config().platform,
-            "sender_id": serde_json::Value::Null,
-            "turn": 0,
-        });
-        let results = self.invoke_hook(HookType::PreLlmCall, &hook_ctx);
-        self.inject_pre_llm_hook_into_user_message(&results, ctx);
-    }
-
-    pub(crate) fn inject_hook_context(&self, results: &[HookResult], ctx: &mut ContextManager) {
-        for r in results {
-            if let HookResult::InjectContext(text) = r {
-                let trimmed = text.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                if let Some(spill_path) = self.spill_hook_context_if_oversized(trimmed) {
-                    let preview = truncate_hook_preview(trimmed, 720);
-                    let note = format!(
-                        "Hook context was oversized and spilled to disk.\nspill_path={}\npreview:\n{}",
-                        spill_path.display(),
-                        preview
-                    );
-                    ctx.add_message(Message::system(note));
-                    continue;
-                }
-                ctx.add_message(Message::system(trimmed.to_string()));
-            }
-        }
-    }
-
-    pub(crate) fn apply_hook_output_transforms(
-        &self,
-        results: &[HookResult],
-        content: &mut Option<String>,
-    ) {
-        let mut current = content.clone().unwrap_or_default();
-        let mut changed = false;
-        for r in results {
-            if let HookResult::TransformLlmOutput(next) = r {
-                current = next.clone();
-                changed = true;
-            }
-        }
-        if changed {
-            *content = Some(current);
-        }
-    }
-
-    pub(crate) fn apply_transform_llm_output_hooks(&self, content: &mut Option<String>) {
-        let hook_ctx = serde_json::json!({
-            "content": content.clone().unwrap_or_default(),
-        });
-        let results = self.invoke_hook(HookType::TransformLlmOutput, &hook_ctx);
-        self.apply_hook_output_transforms(&results, content);
-    }
-
-    fn hook_context_spill_threshold_chars(&self) -> usize {
-        std::env::var("HERMES_HOOK_CONTEXT_SPILL_CHARS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|v| *v >= 1024)
-            .unwrap_or(12_000)
-    }
-
-    fn hook_context_spill_dir(&self) -> PathBuf {
-        let hermes_home = self
-            .config()
-            .hermes_home
-            .as_deref()
-            .map(PathBuf::from)
-            .or_else(|| std::env::var("HERMES_HOME").ok().map(PathBuf::from))
-            .or_else(|| dirs::home_dir().map(|h| h.join(".hermes")))
-            .unwrap_or_else(|| PathBuf::from(".hermes"));
-        hermes_home.join("hooks").join("spills")
-    }
-
-    fn spill_hook_context_if_oversized(&self, text: &str) -> Option<PathBuf> {
-        if text.len() < self.hook_context_spill_threshold_chars() {
-            return None;
-        }
-        let dir = self.hook_context_spill_dir();
-        if std::fs::create_dir_all(&dir).is_err() {
-            return None;
-        }
-        let mut hasher = Sha256::new();
-        hasher.update(text.as_bytes());
-        let digest = hex::encode(hasher.finalize());
-        let stamp = Utc::now().format("%Y%m%dT%H%M%SZ");
-        let path = dir.join(format!("hook_context_{}_{}.txt", stamp, &digest[..16]));
-        if std::fs::write(&path, text).is_ok() {
-            Some(path)
-        } else {
-            None
-        }
     }
 
     // -- Memory helpers ----------------------------------------------------
@@ -2284,9 +1889,13 @@ impl AgentLoop {
     }
 
     pub(crate) async fn cleanup_dead_connections_at_turn_start(&self) {
-        let rt = self.primary_runtime_snapshot();
+        let rt = crate::route_learning::primary_runtime_snapshot(self);
         let provider = rt.provider.as_deref().unwrap_or("").trim();
-        let Some(mut base) = self.resolve_runtime_base_url(provider, rt.base_url.as_deref()) else {
+        let Some(mut base) = crate::runtime_provider::resolve_runtime_base_url(
+            self,
+            provider,
+            rt.base_url.as_deref(),
+        ) else {
             return;
         };
         if base.is_empty() {
@@ -2296,7 +1905,7 @@ impl AgentLoop {
             base.push('/');
         }
         let probe_url = format!("{base}models");
-        self.effective_llm_provider()
+        crate::runtime_provider::effective_llm_provider(self)
             .turn_start_connection_hygiene(&probe_url)
             .await;
     }
@@ -2345,7 +1954,7 @@ impl AgentLoop {
             .ok()
             .and_then(|mut state| state.compression_warning.take());
         if let Some(msg) = msg {
-            self.emit_status("lifecycle", &msg);
+            crate::hooks::emit_status(self, "lifecycle", &msg);
         }
     }
 
@@ -2544,7 +2153,7 @@ impl AgentLoop {
         (ctx.get_messages().to_vec(), compressed)
     }
 
-    fn memory_on_session_end(&self, messages: &[Message]) {
+    pub(crate) fn memory_on_session_end(&self, messages: &[Message]) {
         self.interest_on_session_end(messages);
         if self.config().skip_memory {
             return;
@@ -2560,76 +2169,6 @@ impl AgentLoop {
             .filter_map(|m| serde_json::to_value(m).ok())
             .collect();
         mm.on_session_end(&as_values);
-    }
-
-    fn plugin_on_session_end(
-        &self,
-        completed: bool,
-        interrupted: bool,
-        total_turns: u32,
-        session_started_hooks_fired: bool,
-    ) {
-        let hook_ctx = serde_json::json!({
-            "session_id": self.config().session_id.as_deref().unwrap_or(""),
-            "completed": completed,
-            "finished_naturally": completed,
-            "interrupted": interrupted,
-            "turns": total_turns,
-            "model": self.active_model(),
-            "platform": self.config().platform.as_deref().unwrap_or(""),
-            "session_started_hooks_fired": session_started_hooks_fired,
-        });
-        let _results = self.invoke_hook(HookType::OnSessionEnd, &hook_ctx);
-    }
-
-    /// Per-turn plugin hook only (Python `run_conversation` end).
-    ///
-    /// Memory provider `on_session_end` is **not** invoked here — see Python
-    /// `conversation_loop.py` note at ~4584. Use [`Self::session_end_hooks`] on
-    /// real session teardown (gateway expiry, CLI `/reset`).
-    pub(crate) fn turn_end_plugin_hooks(
-        &self,
-        messages: &[Message],
-        completed: bool,
-        interrupted: bool,
-        total_turns: u32,
-        session_started_hooks_fired: bool,
-    ) {
-        let _ = messages;
-        self.plugin_on_session_end(
-            completed,
-            interrupted,
-            total_turns,
-            session_started_hooks_fired,
-        );
-    }
-
-    /// Full session teardown: memory providers + plugin `on_session_end`.
-    pub fn session_end_hooks(
-        &self,
-        messages: &[Message],
-        completed: bool,
-        interrupted: bool,
-        total_turns: u32,
-        session_started_hooks_fired: bool,
-    ) {
-        self.memory_on_session_end(messages);
-        self.plugin_on_session_end(
-            completed,
-            interrupted,
-            total_turns,
-            session_started_hooks_fired,
-        );
-    }
-
-    fn api_mode_as_hook_str(mode: &ApiMode) -> &'static str {
-        match mode {
-            ApiMode::ChatCompletions => "chat_completions",
-            ApiMode::AnthropicMessages => "anthropic_messages",
-            ApiMode::CodexResponses => "codex_responses",
-            ApiMode::CodexAppServer => "codex_app_server",
-            ApiMode::BedrockConverse => "bedrock_converse",
-        }
     }
 
     pub(crate) fn openrouter_provider_preferences(&self) -> Option<Value> {
@@ -2733,7 +2272,7 @@ impl AgentLoop {
             "model": model,
             "provider": provider,
             "base_url": base_url.unwrap_or(""),
-            "api_mode": Self::api_mode_as_hook_str(api_mode),
+            "api_mode": crate::hooks::api_mode_as_hook_str(api_mode),
             "api_call_count": api_call_count,
             "attempt": api_call_count,
             "stream": false,
@@ -2744,7 +2283,7 @@ impl AgentLoop {
             "request_char_count": request_char_count,
             "max_tokens": max_tokens,
         });
-        let _ = self.invoke_hook(HookType::PreApiRequest, &hook_ctx);
+        let _ = crate::hooks::invoke_hook(self, HookType::PreApiRequest, &hook_ctx);
     }
 
     pub(crate) fn code_index_repo_map_block(&self) -> Option<String> {
@@ -3682,7 +3221,7 @@ impl AgentLoop {
         }
 
         let pre_len = ctx.get_messages().len();
-        let context_length = get_model_context_length(&self.active_model());
+        let context_length = get_model_context_length(&crate::runtime_provider::active_model(self));
         let messages = ctx.get_messages().to_vec();
         let memory_hint = self
             .memory_pre_compress_note(&messages)
@@ -3725,7 +3264,7 @@ impl AgentLoop {
         if let Some(ref db) = sp {
             let cfg = self.config();
             let platform = cfg.platform.as_deref();
-            let model = self.active_model();
+            let model = crate::runtime_provider::active_model(self);
             let _ = db.create_compression_continuation_session(
                 &new_session_id,
                 &old_session_id,
@@ -3774,7 +3313,8 @@ impl AgentLoop {
 
         let Some(script_path) = contextlattice_orchestration_script_path() else {
             if matches!(mode, CompactionGovernanceMode::Enforce) {
-                self.emit_status(
+                crate::hooks::emit_status(
+                    self,
                     "lifecycle",
                     "Compaction governance enforce-mode: ContextLattice script missing; checkpoint skipped.",
                 );
@@ -3834,7 +3374,8 @@ impl AgentLoop {
 
         match output {
             Ok(out) if out.status.success() => {
-                self.emit_status(
+                crate::hooks::emit_status(
+                    self,
                     "lifecycle",
                     &format!(
                         "ContextLattice compaction checkpoint written ({}% -> {}%).",
@@ -3844,7 +3385,8 @@ impl AgentLoop {
             }
             Ok(out) => {
                 if matches!(mode, CompactionGovernanceMode::Enforce) {
-                    self.emit_status(
+                    crate::hooks::emit_status(
+                        self,
                         "lifecycle",
                         &format!(
                             "Compaction governance enforce-mode: checkpoint failed (exit={}) {}",
@@ -3856,7 +3398,8 @@ impl AgentLoop {
             }
             Err(err) => {
                 if matches!(mode, CompactionGovernanceMode::Enforce) {
-                    self.emit_status(
+                    crate::hooks::emit_status(
+                        self,
                         "lifecycle",
                         &format!(
                             "Compaction governance enforce-mode: checkpoint error: {}",
@@ -3893,7 +3436,7 @@ impl AgentLoop {
 
     /// Emit explicit preflight compression status before first LLM call.
     pub(crate) async fn preflight_context_compress_with_status(&self, ctx: &mut ContextManager) {
-        let model = self.active_model();
+        let model = crate::runtime_provider::active_model(self);
         let model_tokens = get_model_context_length(model.as_str());
         let max_c = ctx.max_context_chars().max(1);
         let before = ctx.total_chars();
@@ -3956,7 +3499,8 @@ impl AgentLoop {
             after_pct
         );
         if after_pct >= threshold_pct {
-            self.emit_status(
+            crate::hooks::emit_status(
+                self,
                 "lifecycle",
                 &format!(
                     "会话上下文仍超过窗口容量（约 {}%）。请发送 /new 或 /reset 开始新会话后再问。",
@@ -3970,59 +3514,6 @@ impl AgentLoop {
                 after_pct
             );
         }
-    }
-
-    pub(crate) fn emit_status(&self, event_type: &str, message: &str) {
-        if self.config().quiet_mode {
-            return;
-        }
-        if let Some(cb) = self.callbacks.status_callback.as_ref() {
-            cb(event_type, message);
-        }
-    }
-
-    pub(crate) fn emit_tool_failure_notices(
-        &self,
-        tool_calls: &[ToolCall],
-        results: &[ToolResult],
-    ) {
-        for tc in tool_calls {
-            let Some(result) = results
-                .iter()
-                .find(|r| r.tool_call_id == tc.id && r.is_error)
-            else {
-                continue;
-            };
-            if let Some(msg) = summarize_tool_failure_for_user(&tc.function.name, &result.content) {
-                self.emit_status("tool_failure", &msg);
-            }
-        }
-    }
-
-    /// Surface provider chain-of-thought to UIs (`on_thinking` / gateway stream).
-    fn emit_thinking_delta(&self, text: &str) {
-        if text.trim().is_empty() {
-            return;
-        }
-        if let Some(cb) = self.callbacks.on_thinking.as_ref() {
-            cb(text);
-        }
-    }
-
-    pub(crate) fn emit_reasoning_from_message(&self, message: &Message) {
-        if let Some(reasoning) = message.reasoning_content.as_deref() {
-            self.emit_thinking_delta(reasoning);
-        }
-    }
-
-    /// DeepSeek / thinking models may return structured reasoning before visible content.
-    pub(crate) fn handle_reasoning_only_prefill(
-        &self,
-        message: &Message,
-        attempt: u32,
-        max_attempts: u32,
-    ) {
-        crate::llm_caller::handle_reasoning_only_prefill(self, message, attempt, max_attempts)
     }
 
     pub(crate) fn should_emit_context_pressure_warning(
@@ -4074,10 +3565,6 @@ impl AgentLoop {
             .is_empty()
     }
 
-    pub(crate) fn coerce_textual_tool_calls(mut m: Message) -> (Message, Vec<ToolCall>, bool) {
-        crate::tool_executor::coerce_textual_tool_calls(m)
-    }
-
     pub(crate) fn assistant_has_reasoning(m: &Message) -> bool {
         m.reasoning_content
             .as_deref()
@@ -4088,80 +3575,6 @@ impl AgentLoop {
 
     fn finish_reason_requires_continuation(finish_reason: Option<&str>) -> bool {
         matches!(finish_reason, Some("length" | "pause_turn"))
-    }
-
-    pub(crate) fn effective_finish_reason(
-        &self,
-        response: &hermes_core::LlmResponse,
-        assistant: &Message,
-        history_includes_tool: bool,
-        route: Option<&TurnRuntimeRoute>,
-    ) -> Option<String> {
-        crate::llm_caller::effective_finish_reason(
-            self,
-            response,
-            assistant,
-            history_includes_tool,
-            route,
-        )
-    }
-
-    pub(crate) fn build_finalization_signals(
-        &self,
-        task_hint: &str,
-        messages: &[Message],
-        message: &Message,
-        finish_reason: Option<&str>,
-    ) -> FinalizationSignals {
-        crate::llm_caller::build_finalization_signals(
-            self,
-            task_hint,
-            messages,
-            message,
-            finish_reason,
-        )
-    }
-
-    pub(crate) fn normalize_tool_call_arguments(tc: &mut ToolCall) -> Result<(), String> {
-        agent_runtime_helpers::normalize_tool_call_arguments(tc)
-    }
-
-    fn tool_call_arguments_look_truncated(tc: &ToolCall) -> bool {
-        let trimmed = tc.function.arguments.trim();
-        !trimmed.is_empty() && serde_json::from_str::<Value>(trimmed).is_err()
-    }
-
-    pub(crate) fn upgrade_finish_reason_for_truncated_tool_args(response: &mut LlmResponse) {
-        crate::llm_caller::upgrade_finish_reason_for_truncated_tool_args(response)
-    }
-
-    pub(crate) fn extra_body_for_api_mode(&self, api_mode: &ApiMode) -> Option<Value> {
-        let mut body = self
-            .config()
-            .extra_body
-            .clone()
-            .unwrap_or_else(|| serde_json::json!({}));
-        if !body.is_object() {
-            return self.config().extra_body.clone();
-        }
-        if !matches!(api_mode, ApiMode::CodexResponses) {
-            if body.get("strict_tool_calls").is_none()
-                && body.get("strict_api").is_none()
-                && body.get("provider_strict").is_none()
-            {
-                body["strict_api"] = Value::Bool(true);
-            }
-        }
-        let cfg = self.config();
-        let provider = cfg.provider.as_deref().unwrap_or("");
-        if provider.eq_ignore_ascii_case("openrouter")
-            || self.active_model().contains("openrouter/")
-        {
-            if let Some(prefs) = self.openrouter_provider_preferences() {
-                body["provider"] = prefs;
-            }
-        }
-        Some(body)
     }
 
     fn assemble_stream_assistant_message(
@@ -4238,30 +3651,6 @@ impl AgentLoop {
     }
 
     /// Collect one streaming completion into [`LlmResponse`] (first attempt in `run_stream` D-step).
-    pub(crate) async fn collect_stream_llm_response(
-        &self,
-        ctx: &mut ContextManager,
-        tool_schemas: &[ToolSchema],
-        route: Option<&TurnRuntimeRoute>,
-        active_model: &str,
-        max_tokens_override: Option<u32>,
-        on_chunk: &(dyn Fn(StreamChunk) + Send + Sync),
-        api_call_count: &mut u32,
-        stream_scrubber: Option<&mut crate::stream_scrubber::ThinkBlockScrubber>,
-    ) -> Result<StreamCollectOutcome, AgentError> {
-        crate::llm_caller::collect_stream_llm_response(
-            self,
-            ctx,
-            tool_schemas,
-            route,
-            active_model,
-            max_tokens_override,
-            on_chunk,
-            api_call_count,
-            stream_scrubber,
-        )
-        .await
-    }
 
     /// Expand `@file:` / `@diff` / … tokens in user messages before the LLM sees them.
     ///
@@ -4281,7 +3670,7 @@ impl AgentLoop {
         messages: &mut [Message],
     ) {
         let cwd = Self::context_reference_workspace_root();
-        let context_length = get_model_context_length(&self.active_model());
+        let context_length = get_model_context_length(&crate::runtime_provider::active_model(self));
         for msg in messages.iter_mut() {
             if msg.role != MessageRole::User {
                 continue;
@@ -4311,498 +3700,6 @@ impl AgentLoop {
         self.restore_primary_runtime_at_turn_start();
     }
 
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
-
-    /// Remove duplicate tool calls that share the same function name and arguments.
-    pub(crate) fn deduplicate_tool_calls(calls: &[ToolCall]) -> Vec<ToolCall> {
-        crate::tool_executor::deduplicate_tool_calls(calls)
-    }
-
-    /// Try to repair an unknown tool name via case-insensitive or substring matching.
-    /// Returns `true` if the tool call was repaired.
-    pub(crate) fn repair_tool_call(&self, tc: &mut ToolCall) -> bool {
-        crate::tool_executor::repair_tool_call(self, tc)
-    }
-
-    /// Inject current session id into `session_search` calls when absent.
-    pub(crate) fn hydrate_session_search_args(&self, tc: &mut ToolCall) {
-        crate::tool_executor::hydrate_session_search_args(self, tc)
-    }
-
-    fn latest_user_text<'a>(&self, messages: &'a [Message]) -> Option<&'a str> {
-        messages
-            .iter()
-            .rev()
-            .find(|m| matches!(m.role, hermes_core::MessageRole::User))
-            .and_then(|m| m.content.as_deref())
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-    }
-
-    pub(crate) fn primary_runtime_snapshot(&self) -> PrimaryRuntime {
-        let mut snap = self
-            .state
-            .lock()
-            .map(|state| state.active_runtime.clone())
-            .unwrap_or_else(|_| self.stored_primary_runtime.clone());
-        snap.credential_pool = self.primary_credential_pool.clone();
-        snap
-    }
-
-    /// Python `_has_stream_consumers()` for this turn.
-    pub(crate) fn has_stream_consumers(&self, turn_stream_callback: bool) -> bool {
-        crate::llm_caller::has_stream_consumers(self, turn_stream_callback)
-    }
-
-    fn route_blocks_llm_streaming(route: &TurnRuntimeRoute) -> bool {
-        is_copilot_acp_transport(
-            route.provider.as_deref().unwrap_or(""),
-            route.base_url.as_deref().unwrap_or(""),
-        )
-    }
-
-    pub(crate) fn provider_blocks_llm_streaming(&self) -> bool {
-        crate::llm_caller::provider_blocks_llm_streaming(self)
-    }
-
-    /// Python `_use_streaming` gate for the first LLM attempt in a turn (`inner_attempt == 0`).
-    pub(crate) fn use_streaming_llm_transport(
-        &self,
-        turn_stream_callback: bool,
-        inner_attempt: u32,
-        route: Option<&TurnRuntimeRoute>,
-    ) -> bool {
-        crate::llm_caller::use_streaming_llm_transport(
-            self,
-            turn_stream_callback,
-            inner_attempt,
-            route,
-        )
-    }
-
-    pub(crate) fn session_disable_streaming(&self) {
-        crate::llm_caller::session_disable_streaming(self)
-    }
-
-    pub(crate) fn note_stream_not_supported(&self, err: &AgentError) {
-        crate::llm_caller::note_stream_not_supported(self, err)
-    }
-
-    pub(crate) fn turn_route_cost_guard(&self, model: String) -> TurnRuntimeRoute {
-        let pri = self.primary_runtime_snapshot();
-        let mut sig = pri.to_signature();
-        sig.model = model.clone();
-        TurnRuntimeRoute {
-            model,
-            provider: None,
-            base_url: None,
-            api_key_env: None,
-            api_mode: None,
-            command: None,
-            args: Vec::new(),
-            credential_pool: self.primary_credential_pool.clone(),
-            credential_pool_fallback: true,
-            route_label: None,
-            routing_reason: Some("cost_guard".to_string()),
-            signature: sig,
-        }
-    }
-
-    pub(crate) fn turn_route_reliability_guard(&self, model: String) -> TurnRuntimeRoute {
-        let pri = self.primary_runtime_snapshot();
-        let (provider, _) = self.extract_provider_and_model(model.as_str());
-        let mut sig = pri.to_signature();
-        sig.model = model.clone();
-        TurnRuntimeRoute {
-            model,
-            provider: Some(provider),
-            base_url: None,
-            api_key_env: None,
-            api_mode: None,
-            command: None,
-            args: Vec::new(),
-            credential_pool: self.primary_credential_pool.clone(),
-            credential_pool_fallback: true,
-            route_label: None,
-            routing_reason: Some("reliability_guard".to_string()),
-            signature: sig,
-        }
-    }
-
-    fn try_build_cheap_runtime(
-        &self,
-        cheap: &CheapModelRouteConfig,
-        explicit_api_key: Option<String>,
-    ) -> Result<ResolvedCheapRuntime, ()> {
-        let provider_raw = cheap.provider.as_deref().map(str::trim).unwrap_or("");
-        if provider_raw.is_empty() {
-            return Err(());
-        }
-        let provider_lc = provider_raw.to_lowercase();
-        let model_full = cheap.model.as_deref().map(str::trim).unwrap_or("");
-        if model_full.is_empty() {
-            return Err(());
-        }
-        let (_, model_name) = self.extract_provider_and_model(model_full);
-        let base_url = self.resolve_runtime_base_url(&provider_lc, cheap.base_url.as_deref());
-        let api_mode = base_url
-            .as_deref()
-            .and_then(detect_api_mode_for_url)
-            .unwrap_or(ApiMode::ChatCompletions);
-
-        let has_runtime_override = explicit_api_key
-            .as_ref()
-            .map(|s| !s.trim().is_empty())
-            .is_some()
-            || cheap
-                .base_url
-                .as_ref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false);
-        let pool_ref = if has_runtime_override {
-            None
-        } else {
-            self.primary_credential_pool.as_ref()
-        };
-
-        self.build_runtime_provider(
-            &provider_lc,
-            model_name,
-            cheap.base_url.as_deref(),
-            cheap.api_key_env.as_deref(),
-            explicit_api_key.as_deref(),
-            Some(&api_mode),
-            pool_ref,
-        )
-        .map_err(|_| ())?;
-
-        let (command, args) = self.resolve_runtime_command_args(Some(&provider_lc));
-        if provider_lc == "copilot-acp"
-            && command
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .is_none()
-            && !base_url
-                .as_deref()
-                .map(|u| u.starts_with("acp+tcp://"))
-                .unwrap_or(false)
-        {
-            return Err(());
-        }
-        if provider_lc == "copilot-acp"
-            && !base_url
-                .as_deref()
-                .map(|u| u.starts_with("acp+tcp://"))
-                .unwrap_or(false)
-        {
-            if let Some(cmd) = command.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                if which::which(cmd).is_err() {
-                    return Err(());
-                }
-            }
-        }
-        Ok(ResolvedCheapRuntime {
-            model: model_full.to_string(),
-            provider: provider_lc,
-            base_url,
-            api_mode,
-            command,
-            args,
-            credential_pool: if has_runtime_override {
-                None
-            } else {
-                self.primary_credential_pool.clone()
-            },
-            skip_primary_credential_pool_fallback: has_runtime_override,
-        })
-    }
-
-    fn route_learning_key(&self, provider_hint: Option<&str>, model: &str) -> String {
-        let (inferred_provider, inferred_model) = self.extract_provider_and_model(model);
-        let provider = provider_hint
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(inferred_provider.as_str())
-            .to_ascii_lowercase();
-        format!(
-            "{}:{}",
-            provider,
-            inferred_model.trim().to_ascii_lowercase()
-        )
-    }
-
-    fn route_learning_key_for_route(
-        &self,
-        route: Option<&TurnRuntimeRoute>,
-        response_model: Option<&str>,
-    ) -> String {
-        if let Some(model) = response_model.map(str::trim).filter(|s| !s.is_empty()) {
-            let provider_hint = route.and_then(|r| r.provider.as_deref());
-            return self.route_learning_key(provider_hint, model);
-        }
-        if let Some(rt) = route {
-            return self.route_learning_key(rt.provider.as_deref(), rt.model.as_str());
-        }
-        let snap = self.primary_runtime_snapshot();
-        self.route_learning_key(snap.provider.as_deref(), snap.model.as_str())
-    }
-
-    fn route_learning_stats_for_key(&self, key: &str) -> Option<RouteLearningStats> {
-        let now_ms = now_unix_ms();
-        let mut persist_snapshot: Option<HashMap<String, RouteLearningStats>> = None;
-        let stats = if let Ok(mut map) = self.route_learning.lock() {
-            let mut changed = Self::prune_route_learning_locked(&mut map, now_ms);
-            let out = map
-                .get(key)
-                .and_then(|stats| Self::route_learning_effective_stats(stats, now_ms));
-            if out.is_none() && map.remove(key).is_some() {
-                changed = true;
-            }
-            if changed {
-                persist_snapshot = Some(map.clone());
-            }
-            out
-        } else {
-            None
-        };
-        if let Some(snapshot) = persist_snapshot {
-            self.save_route_learning_state(&snapshot);
-        }
-        stats
-    }
-
-    fn route_learning_score(stats: Option<&RouteLearningStats>, cheap_bias: f64) -> f64 {
-        let success_rate = stats.map(|s| s.success_rate).unwrap_or(0.90);
-        let avg_latency_ms = stats.map(|s| s.avg_latency_ms).unwrap_or(1800.0);
-        let latency_score = (1.0 / (1.0 + (avg_latency_ms / 2500.0))).clamp(0.05, 1.0);
-        let failure_penalty = stats
-            .map(|s| (s.consecutive_failures as f64 * 0.08).min(0.35))
-            .unwrap_or(0.0);
-        let exploration_bonus = stats
-            .map(|s| {
-                let coverage = (s.samples.min(20) as f64) / 20.0;
-                (1.0 - coverage) * 0.03
-            })
-            .unwrap_or(0.03);
-        (success_rate * 0.60) + (latency_score * 0.30) + cheap_bias + exploration_bonus
-            - failure_penalty
-    }
-
-    pub(crate) fn update_route_learning(
-        &self,
-        route: Option<&TurnRuntimeRoute>,
-        response_model: Option<&str>,
-        latency_ms: u64,
-        success: bool,
-    ) {
-        if !smart_routing_learning_enabled() {
-            return;
-        }
-        let key = self.route_learning_key_for_route(route, response_model);
-        let alpha = smart_routing_learning_alpha();
-        let mut persist_snapshot: Option<HashMap<String, RouteLearningStats>> = None;
-        if let Ok(mut map) = self.route_learning.lock() {
-            let now_ms = now_unix_ms();
-            let _ = Self::prune_route_learning_locked(&mut map, now_ms);
-            let entry = map.entry(key).or_insert_with(RouteLearningStats::default);
-            entry.samples = entry.samples.saturating_add(1);
-            if entry.samples == 1 {
-                entry.success_rate = if success { 1.0 } else { 0.0 };
-                entry.avg_latency_ms = latency_ms as f64;
-            } else {
-                let observed_success = if success { 1.0 } else { 0.0 };
-                entry.success_rate = (1.0 - alpha) * entry.success_rate + alpha * observed_success;
-                entry.avg_latency_ms =
-                    (1.0 - alpha) * entry.avg_latency_ms + alpha * (latency_ms as f64);
-            }
-            if success {
-                entry.consecutive_failures = 0;
-            } else {
-                entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
-            }
-            entry.updated_at_unix_ms = now_ms;
-            persist_snapshot = Some(map.clone());
-        }
-        if let Some(snapshot) = persist_snapshot {
-            self.save_route_learning_state(&snapshot);
-        }
-    }
-
-    pub(crate) fn route_learning_snapshot(
-        &self,
-        route: Option<&TurnRuntimeRoute>,
-        response_model: Option<&str>,
-    ) -> Value {
-        let key = self.route_learning_key_for_route(route, response_model);
-        let stats = self.route_learning_stats_for_key(&key);
-        let score = Self::route_learning_score(stats.as_ref(), 0.0);
-        let ttl_secs = smart_routing_learning_ttl_secs();
-        let half_life_secs = smart_routing_learning_half_life_secs();
-        serde_json::json!({
-            "key": key,
-            "enabled": smart_routing_learning_enabled(),
-            "ttl_secs": ttl_secs,
-            "half_life_secs": half_life_secs,
-            "score": score,
-            "stats": stats,
-        })
-    }
-
-    pub(crate) fn resolve_smart_runtime_route(
-        &self,
-        messages: &[Message],
-    ) -> Option<TurnRuntimeRoute> {
-        let text = self.latest_user_text(messages)?;
-        let primary = self.primary_runtime_snapshot();
-        let outcome = resolve_turn_route(
-            text,
-            &self.config().smart_model_routing,
-            &primary,
-            |cheap, explicit_key| self.try_build_cheap_runtime(cheap, explicit_key),
-        );
-
-        match outcome {
-            ResolveTurnOutcome::CheapRouted {
-                model,
-                label,
-                runtime,
-                signature,
-            } => {
-                let primary_key =
-                    self.route_learning_key(primary.provider.as_deref(), primary.model.as_str());
-                let cheap_key = self
-                    .route_learning_key(Some(runtime.provider.as_str()), runtime.model.as_str());
-                let primary_stats = self.route_learning_stats_for_key(&primary_key);
-                let cheap_stats = self.route_learning_stats_for_key(&cheap_key);
-                let primary_score = Self::route_learning_score(primary_stats.as_ref(), 0.0);
-                let cheap_score = Self::route_learning_score(
-                    cheap_stats.as_ref(),
-                    smart_routing_learning_cheap_bias(),
-                );
-                let margin = smart_routing_learning_switch_margin();
-                if smart_routing_learning_enabled() && (cheap_score + margin) < primary_score {
-                    tracing::debug!(
-                        primary_key = %primary_key,
-                        cheap_key = %cheap_key,
-                        primary_score,
-                        cheap_score,
-                        margin,
-                        "smart routing online-learning selected primary route"
-                    );
-                    return None;
-                }
-                let cheap = self.config().smart_model_routing.cheap_model.clone()?;
-                Some(TurnRuntimeRoute {
-                    model,
-                    provider: Some(runtime.provider.clone()),
-                    base_url: runtime.base_url.clone(),
-                    api_key_env: cheap
-                        .api_key_env
-                        .as_ref()
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty()),
-                    api_mode: Some(runtime.api_mode.clone()),
-                    command: runtime.command.clone(),
-                    args: runtime.args.clone(),
-                    credential_pool: runtime.credential_pool.clone(),
-                    credential_pool_fallback: !runtime.skip_primary_credential_pool_fallback,
-                    route_label: Some(format!(
-                        "{} [cheap_score={:.3} primary_score={:.3}]",
-                        label, cheap_score, primary_score
-                    )),
-                    routing_reason: Some("simple_turn_online_learning".to_string()),
-                    signature,
-                })
-            }
-            ResolveTurnOutcome::Primary { .. } => None,
-        }
-    }
-
-    /// Resolve the model used for automatic degradation when nearing
-    /// `max_cost_usd`.
-    pub(crate) fn resolve_cost_degrade_model(&self) -> Option<String> {
-        if let Some(ref m) = self.config().cost_guard_degrade_model {
-            if !m.trim().is_empty() {
-                return Some(m.trim().to_string());
-            }
-        }
-        if let Some(ref m) = self.config().retry.fallback_model {
-            if !m.trim().is_empty() {
-                return Some(m.trim().to_string());
-            }
-        }
-        if self.active_model().trim() != "openai:gpt-4o-mini" {
-            return Some("openai:gpt-4o-mini".to_string());
-        }
-        None
-    }
-
-    pub(crate) fn resolve_reliability_degrade_model(
-        &self,
-        active_model: &str,
-        route: Option<&TurnRuntimeRoute>,
-    ) -> Option<String> {
-        if let Some(ref fallback) = self.config().retry.fallback_model {
-            if !fallback.trim().is_empty() && !fallback.eq_ignore_ascii_case(active_model) {
-                return Some(fallback.trim().to_string());
-            }
-        }
-        let config_provider = self.config().provider.clone();
-        let provider_hint = route
-            .and_then(|r| r.provider.as_deref())
-            .or(config_provider.as_deref())
-            .unwrap_or("openai");
-        let (_, active_model_id) = self.extract_provider_and_model(active_model);
-        if let Some(candidate) =
-            preferred_tool_payload_fallback_model(provider_hint, active_model_id)
-        {
-            let normalized = if candidate.contains(':') {
-                candidate
-            } else {
-                format!("{}:{}", provider_hint, candidate)
-            };
-            if !normalized.eq_ignore_ascii_case(active_model) {
-                return Some(normalized);
-            }
-        }
-        None
-    }
-
-    pub(crate) fn resolve_retry_failover_chain(&self, active_model: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let active_lc = active_model.trim().to_ascii_lowercase();
-
-        let mut push_candidate = |candidate: &str| {
-            let trimmed = candidate.trim();
-            if trimmed.is_empty() {
-                return;
-            }
-            let normalized = trimmed.to_ascii_lowercase();
-            if normalized == active_lc {
-                return;
-            }
-            if seen.insert(normalized) {
-                out.push(trimmed.to_string());
-            }
-        };
-
-        for model in &self.config().retry.fallback_models {
-            push_candidate(model);
-        }
-        if let Some(ref fallback) = self.config().retry.fallback_model {
-            push_candidate(fallback);
-        }
-        if let Some(dynamic) = self.resolve_reliability_degrade_model(active_model, None) {
-            push_candidate(&dynamic);
-        }
-
-        out
-    }
-
     /// Ask the LLM for a final summary when the turn budget is exhausted.
     pub(crate) async fn handle_max_iterations(
         &self,
@@ -4820,8 +3717,9 @@ impl AgentLoop {
             "[SYSTEM] Maximum conversation turns reached. Please provide a brief summary of \
              what was accomplished and any remaining tasks.",
         ));
-        let runtime = self.primary_runtime_snapshot();
-        let (_, model_name) = self.extract_provider_and_model(runtime.model.as_str());
+        let runtime = crate::route_learning::primary_runtime_snapshot(self);
+        let (_, model_name) =
+            crate::route_learning::extract_provider_and_model(self, runtime.model.as_str());
         let response = self
             .llm_provider
             .chat_completion(
@@ -4830,7 +3728,7 @@ impl AgentLoop {
                 self.config().max_tokens,
                 self.config().temperature,
                 Some(model_name),
-                self.extra_body_for_api_mode(&runtime.api_mode).as_ref(),
+                crate::llm_caller::extra_body_for_api_mode(self, &runtime.api_mode).as_ref(),
             )
             .await
             .map_err(|e| AgentError::LlmApi(e.to_string()))?;
@@ -4848,8 +3746,9 @@ impl AgentLoop {
             "[SYSTEM] Tool-loop guard triggered after {} consecutive error turn(s). Latest turn failed {}/{} tool call(s). Stop calling tools and provide a concise final response with what succeeded, what failed, and precise next manual step(s).",
             consecutive_error_turns, failed_calls, total_calls
         )));
-        let runtime = self.primary_runtime_snapshot();
-        let (_, model_name) = self.extract_provider_and_model(runtime.model.as_str());
+        let runtime = crate::route_learning::primary_runtime_snapshot(self);
+        let (_, model_name) =
+            crate::route_learning::extract_provider_and_model(self, runtime.model.as_str());
         let response = self
             .llm_provider
             .chat_completion(
@@ -4858,27 +3757,11 @@ impl AgentLoop {
                 self.config().max_tokens,
                 self.config().temperature,
                 Some(model_name),
-                self.extra_body_for_api_mode(&runtime.api_mode).as_ref(),
+                crate::llm_caller::extra_body_for_api_mode(self, &runtime.api_mode).as_ref(),
             )
             .await
             .map_err(|e| AgentError::LlmApi(e.to_string()))?;
         Ok(Some(response.message))
-    }
-
-    pub(crate) fn tool_result_from_dispatch_output(
-        output: String,
-    ) -> Result<String, hermes_core::ToolError> {
-        crate::tool_executor::tool_result_from_dispatch_output(output)
-    }
-
-    /// Execute a batch of tool calls in parallel using a JoinSet.
-    pub(crate) fn resolve_max_delegate_depth(&self) -> u32 {
-        crate::tool_executor::resolve_max_delegate_depth(self)
-    }
-
-    /// Cap concurrent delegate_task calls based on config.
-    pub(crate) fn cap_delegates(&self, tool_calls: &mut Vec<ToolCall>) {
-        crate::tool_executor::cap_delegates(self, tool_calls)
     }
 
     pub(crate) fn emit_background_review_metrics(&self, turn: u32, ctx: &ContextManager) {
@@ -6512,8 +5395,16 @@ impl AgentLoop {
 mod tests {
     use super::*;
     use crate::governor::{GovernorRuntimeState, TurnGovernor};
+    use crate::hooks::spill_hook_context_if_oversized;
+    use crate::llm_caller::use_streaming_llm_transport;
     use crate::message_sanitization::budget_pressure_text;
     use crate::replay::{ReplayState, redact_json_value};
+    use crate::route_learning::{
+        now_unix_ms, route_learning_effective_stats, route_learning_state_path,
+    };
+    use crate::tool_executor::{
+        coerce_textual_tool_calls, deduplicate_tool_calls, hydrate_session_search_args,
+    };
     use futures::stream::BoxStream;
     use hermes_core::JsonSchema;
     use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -6570,10 +5461,13 @@ mod tests {
             args: Vec::new(),
             credential_pool: None,
         });
-        assert_eq!(agent.active_model(), "anthropic/claude-sonnet-4");
+        assert_eq!(
+            crate::runtime_provider::active_model(&agent),
+            "anthropic/claude-sonnet-4"
+        );
         assert_eq!(agent.config().model, "anthropic/claude-sonnet-4");
         agent.restore_primary_runtime_at_turn_start();
-        assert_eq!(agent.active_model(), "gpt-4o");
+        assert_eq!(crate::runtime_provider::active_model(&agent), "gpt-4o");
         assert_eq!(agent.config().model, "gpt-4o");
         assert!(
             !agent
@@ -6980,7 +5874,7 @@ mod tests {
             Arc::new(DummyProvider),
         );
         let mut content = Some("before".to_string());
-        agent.apply_hook_output_transforms(
+        crate::hooks::apply_hook_output_transforms(
             &[HookResult::TransformLlmOutput("after".to_string())],
             &mut content,
         );
@@ -8768,7 +7662,7 @@ mod tests {
             Arc::new(DummyProvider),
         );
         let messages = vec![Message::user("帮我总结一下今天要做什么")];
-        let selected = agent.resolve_smart_runtime_route(&messages);
+        let selected = crate::route_learning::resolve_smart_runtime_route(&agent, &messages);
         assert_eq!(
             selected.as_ref().map(|r| r.model.as_str()),
             Some("gpt-4o-mini")
@@ -8870,8 +7764,10 @@ mod tests {
                 },
             );
         }
-        let selected =
-            agent.resolve_smart_runtime_route(&[Message::user("summarize today's work")]);
+        let selected = crate::route_learning::resolve_smart_runtime_route(
+            &agent,
+            &[Message::user("summarize today's work")],
+        );
         assert!(
             selected.is_none(),
             "online learning should keep primary when cheap route is unstable"
@@ -8920,9 +7816,22 @@ mod tests {
         let mut cfg = AgentConfig::default();
         cfg.hermes_home = Some(tmp.path().to_string_lossy().to_string());
         let agent = AgentLoop::new(cfg, Arc::new(ToolRegistry::new()), Arc::new(DummyProvider));
-        agent.update_route_learning(None, Some("openai:gpt-4o"), 2100, false);
-        agent.update_route_learning(None, Some("openai:gpt-4o"), 900, true);
-        let snapshot = agent.route_learning_snapshot(None, Some("openai:gpt-4o"));
+        crate::route_learning::update_route_learning(
+            &agent,
+            None,
+            Some("openai:gpt-4o"),
+            2100,
+            false,
+        );
+        crate::route_learning::update_route_learning(
+            &agent,
+            None,
+            Some("openai:gpt-4o"),
+            900,
+            true,
+        );
+        let snapshot =
+            crate::route_learning::route_learning_snapshot(&agent, None, Some("openai:gpt-4o"));
         assert_eq!(snapshot["enabled"], true);
         assert_eq!(snapshot["key"], "openai:gpt-4o");
         assert_eq!(snapshot["stats"]["samples"], 2);
@@ -8977,7 +7886,13 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        agent.update_route_learning(None, Some("openai:gpt-4o"), 1200, true);
+        crate::route_learning::update_route_learning(
+            &agent,
+            None,
+            Some("openai:gpt-4o"),
+            1200,
+            true,
+        );
         let persisted_path = route_learning_state_path(&cfg);
         assert!(
             persisted_path.exists(),
@@ -8989,7 +7904,8 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let snapshot = reloaded.route_learning_snapshot(None, Some("openai:gpt-4o"));
+        let snapshot =
+            crate::route_learning::route_learning_snapshot(&reloaded, None, Some("openai:gpt-4o"));
         assert_eq!(snapshot["key"], "openai:gpt-4o");
         assert!(snapshot["stats"]["samples"].as_u64().unwrap_or(0) >= 1);
     }
@@ -9046,7 +7962,8 @@ mod tests {
             .expect("write malformed route-learning file");
 
         let agent = AgentLoop::new(cfg, Arc::new(ToolRegistry::new()), Arc::new(DummyProvider));
-        let snapshot = agent.route_learning_snapshot(None, Some("openai:gpt-4o"));
+        let snapshot =
+            crate::route_learning::route_learning_snapshot(&agent, None, Some("openai:gpt-4o"));
         assert!(
             snapshot["stats"].is_null(),
             "malformed state must fall back cleanly"
@@ -9152,7 +8069,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let primary = agent.primary_runtime_snapshot();
+        let primary = crate::route_learning::primary_runtime_snapshot(&agent);
         assert_eq!(primary.command.as_deref(), Some("copilot-language-server"));
         assert_eq!(
             primary.args,
@@ -9239,7 +8156,7 @@ mod tests {
             Arc::new(DummyProvider),
         );
         let messages = vec![Message::user("总结一下这个需求")];
-        let selected = agent.resolve_smart_runtime_route(&messages);
+        let selected = crate::route_learning::resolve_smart_runtime_route(&agent, &messages);
         assert_eq!(
             selected.as_ref().map(|r| r.model.as_str()),
             Some("gpt-5-mini")
@@ -9328,7 +8245,10 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("给我一段简短总结")]);
+        let selected = crate::route_learning::resolve_smart_runtime_route(
+            &agent,
+            &[Message::user("给我一段简短总结")],
+        );
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("qwen-oauth")
@@ -9399,8 +8319,16 @@ mod tests {
             Arc::new(DummyProvider),
         );
 
-        let built =
-            agent.build_runtime_provider("stepfun", "step-3.5-flash", None, None, None, None, None);
+        let built = crate::runtime_provider::build_runtime_provider(
+            &agent,
+            "stepfun",
+            "step-3.5-flash",
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
         assert!(built.is_ok(), "stepfun runtime provider should build");
     }
 
@@ -9502,7 +8430,10 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = crate::route_learning::resolve_smart_runtime_route(
+            &agent,
+            &[Message::user("帮我总结这段话")],
+        );
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("openai-codex")
@@ -10037,7 +8968,10 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = crate::route_learning::resolve_smart_runtime_route(
+            &agent,
+            &[Message::user("帮我总结这段话")],
+        );
         assert!(
             selected.is_none(),
             "missing ACP CLI should fail cheap-route and fall back"
@@ -10118,7 +9052,10 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider),
         );
-        let selected = agent.resolve_smart_runtime_route(&[Message::user("帮我总结这段话")]);
+        let selected = crate::route_learning::resolve_smart_runtime_route(
+            &agent,
+            &[Message::user("帮我总结这段话")],
+        );
         assert_eq!(
             selected.as_ref().and_then(|r| r.provider.as_deref()),
             Some("copilot-acp")
@@ -10184,7 +9121,7 @@ mod tests {
             Arc::new(DummyProvider),
         );
         let messages = vec![Message::user("请帮我 debug 这段 traceback 并修复错误")];
-        let selected = agent.resolve_smart_runtime_route(&messages);
+        let selected = crate::route_learning::resolve_smart_runtime_route(&agent, &messages);
         assert!(selected.is_none());
     }
 
@@ -10309,7 +9246,7 @@ mod tests {
             },
             extra_content: None,
         };
-        agent.hydrate_session_search_args(&mut tc);
+        hydrate_session_search_args(&agent, &mut tc);
         let args: Value = serde_json::from_str(&tc.function.arguments).unwrap();
         assert_eq!(
             args.get("current_session_id").and_then(|v| v.as_str()),
@@ -10370,7 +9307,7 @@ mod tests {
             },
             extra_content: None,
         };
-        agent.hydrate_session_search_args(&mut tc);
+        hydrate_session_search_args(&agent, &mut tc);
         let args: Value = serde_json::from_str(&tc.function.arguments).unwrap();
         assert_eq!(
             args.get("current_session_id").and_then(|v| v.as_str()),
@@ -10937,7 +9874,7 @@ mod tests {
         assert_eq!(resolved.as_deref(), Some("stepfun-secret"));
         hermes_core::test_env::remove_var("STEPFUN_API_KEY");
 
-        let base = agent.resolve_runtime_base_url("stepfun", None);
+        let base = crate::runtime_provider::resolve_runtime_base_url(&agent, "stepfun", None);
         assert_eq!(base.as_deref(), Some("https://api.stepfun.ai/step_plan/v1"));
     }
 
@@ -11089,7 +10026,11 @@ mod tests {
             Arc::new(DummyProvider),
         );
         assert_eq!(
-            agent.resolve_reliability_degrade_model("anthropic:claude-sonnet-4-20250514", None),
+            crate::route_learning::resolve_reliability_degrade_model(
+                &agent,
+                "anthropic:claude-sonnet-4-20250514",
+                None
+            ),
             None
         );
     }
@@ -11673,38 +10614,37 @@ mod tests {
 
         let mut ctx = ContextManager::default_budget();
         ctx.add_message(Message::user("aaa"));
-        let first = agent.build_turn_api_messages(&mut ctx);
-        let second = agent.build_turn_api_messages(&mut ctx);
+        let first = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx);
+        let second = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx);
         assert!(
             Arc::ptr_eq(&first, &second),
-            "unchanged ctx should reuse cached Arc"
+            "same ctx should return cached Arc"
         );
 
         ctx.add_message(Message::assistant("draft"));
-        let after_assistant = agent.build_turn_api_messages(&mut ctx);
+        let after_assistant = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx);
         assert!(
             !Arc::ptr_eq(&first, &after_assistant),
-            "append must change cache key and rebuild"
+            "different ctx should return new Arc"
         );
 
         let _ = ctx.get_messages_mut().pop();
-        let after_pop = agent.build_turn_api_messages(&mut ctx);
+        let after_pop = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx);
         assert!(
             !after_pop.iter().any(|m| m.role == MessageRole::Assistant),
-            "pop must not leak assistant into API messages (rebuild or miss)"
+            "ctx invalidation should recompute after pop"
         );
-
         let mut ctx_inplace = ContextManager::default_budget();
         ctx_inplace.add_message(Message::user("aaa"));
-        let before_edit = agent.build_turn_api_messages(&mut ctx_inplace);
+        let before_edit = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx_inplace);
         ctx_inplace.get_messages_mut()[0].content = Some("xyz".to_string());
-        let stale_hit = agent.build_turn_api_messages(&mut ctx_inplace);
+        let stale_hit = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx_inplace);
         assert!(
             Arc::ptr_eq(&before_edit, &stale_hit),
-            "in-place edit with same count/chars can return stale cache without invalidate"
+            "in-place mutation without invalidation must return stale cache hit"
         );
         agent.invalidate_turn_api_messages_cache();
-        let after_invalidate = agent.build_turn_api_messages(&mut ctx_inplace);
+        let after_invalidate = crate::llm_caller::build_turn_api_messages(&agent, &mut ctx_inplace);
         assert!(!Arc::ptr_eq(&before_edit, &after_invalidate));
         let user_text = after_invalidate
             .iter()

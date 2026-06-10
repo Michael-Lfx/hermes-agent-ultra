@@ -15,7 +15,7 @@ impl AgentLoop {
     pub(crate) fn api_mode_is_codex_app_server(&self) -> bool {
         use crate::smart_model_routing::ApiMode;
         matches!(
-            self.primary_runtime_snapshot().api_mode,
+            crate::route_learning::primary_runtime_snapshot(self).api_mode,
             ApiMode::CodexAppServer
         )
     }
@@ -153,11 +153,13 @@ impl AgentLoop {
 
         hermes_telemetry::record_codex_turn(turn.tool_iterations);
 
-        let mut ctx = ContextManager::for_model(self.active_model().as_str());
+        let mut ctx =
+            ContextManager::for_model(crate::runtime_provider::active_model(self).as_str());
         for msg in &messages {
             ctx.add_message(msg.clone());
         }
-        self.turn_end_plugin_hooks(
+        crate::hooks::turn_end_plugin_hooks(
+            self,
             ctx.get_messages(),
             false,
             turn.interrupted,
@@ -207,7 +209,8 @@ impl AgentLoop {
             "Codex app-server turn failed: {err} \
              Fall back to default runtime with `/codex-runtime auto`."
         )));
-        let mut ctx = ContextManager::for_model(self.active_model().as_str());
+        let mut ctx =
+            ContextManager::for_model(crate::runtime_provider::active_model(self).as_str());
         for msg in messages {
             ctx.add_message(msg);
         }

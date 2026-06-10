@@ -356,9 +356,9 @@ impl AgentLoop {
     /// Record token usage from one LLM HTTP response.
     pub fn record_api_usage(&self, usage: &UsageStats) {
         let config = self.config();
-        let model = self.active_model();
+        let model = crate::runtime_provider::active_model(self);
         let provider = config.provider.as_deref();
-        let runtime = self.primary_runtime_snapshot();
+        let runtime = crate::route_learning::primary_runtime_snapshot(self);
         let base_url = runtime.base_url.as_deref();
         if let Ok(mut state) = self.state.lock() {
             state
@@ -373,10 +373,10 @@ impl AgentLoop {
     /// Usage snapshot for TUI `session.usage` and `/usage` (Python `_get_usage`).
     pub fn session_usage_display(&self) -> SessionUsageDisplay {
         let metrics = self.session_usage_metrics();
-        let model = self.active_model();
+        let model = crate::runtime_provider::active_model(self);
         let config = self.config();
         let provider = config.provider.as_deref();
-        let runtime = self.primary_runtime_snapshot();
+        let runtime = crate::route_learning::primary_runtime_snapshot(self);
         let base_url = runtime.base_url.as_deref();
 
         let input = if metrics.input_tokens > 0 {

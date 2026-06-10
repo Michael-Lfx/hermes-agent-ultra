@@ -14,7 +14,9 @@ pub fn drop_trailing_empty_response_scaffolding(messages: &mut Vec<Message>) {
             && last
                 .content
                 .as_deref()
-                .map(|c| c.contains("(empty)") || c.starts_with("[SYSTEM] Maximum conversation turns"))
+                .map(|c| {
+                    c.contains("(empty)") || c.starts_with("[SYSTEM] Maximum conversation turns")
+                })
                 .unwrap_or(false);
         if !is_scaffolding {
             break;
@@ -52,9 +54,12 @@ fn trajectories_enabled(agent: &AgentLoop) -> bool {
 
 impl AgentLoop {
     pub(crate) fn apply_turn_prep_infrastructure_hooks(&self) {
-        let rt = self.primary_runtime_snapshot();
+        let rt = crate::route_learning::primary_runtime_snapshot(self);
         let provider = rt.provider.as_deref().unwrap_or("");
-        hermes_intelligence::runtime_main::set_runtime_main(provider, &self.active_model());
+        hermes_intelligence::runtime_main::set_runtime_main(
+            provider,
+            &crate::runtime_provider::active_model(self),
+        );
     }
 
     pub(crate) fn apply_turn_finalize_infrastructure_hooks(
@@ -76,11 +81,7 @@ impl AgentLoop {
                 "iteration budget exhausted after {} API calls (max {})",
                 loop_result.api_calls, max_iters
             );
-            hermes_tools::record_iteration_budget_exhausted(
-                loop_result.api_calls,
-                max_iters,
-                &err,
-            );
+            hermes_tools::record_iteration_budget_exhausted(loop_result.api_calls, max_iters, &err);
         }
     }
 
@@ -96,7 +97,11 @@ impl AgentLoop {
         let Some(sp) = self.session_persistence() else {
             return;
         };
-        let sid = self.config().session_id.clone().unwrap_or_else(|| "anonymous".to_string());
+        let sid = self
+            .config()
+            .session_id
+            .clone()
+            .unwrap_or_else(|| "anonymous".to_string());
         let sid = sid.trim();
         let sid = if sid.is_empty() { "anonymous" } else { sid };
         if let Err(err) = sp.save_trajectory(sid, messages, user_message, completed) {

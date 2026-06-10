@@ -45,11 +45,12 @@ impl AgentLoop {
         max_tokens_override: Option<u32>,
         api_call_count: &mut u32,
     ) -> Result<hermes_core::LlmResponse, AgentError> {
-        let default_model = self.active_model();
+        let default_model = crate::runtime_provider::active_model(self);
         let model = route
             .map(|r| r.model.as_str())
             .unwrap_or(default_model.as_str());
-        let (inferred_provider, model_name) = self.extract_provider_and_model(model);
+        let (inferred_provider, model_name) =
+            crate::route_learning::extract_provider_and_model(self, model);
         let route_provider_hint = route
             .and_then(|r| r.provider.as_deref())
             .map(str::trim)
@@ -72,9 +73,10 @@ impl AgentLoop {
         let retry = self.config().retry.clone();
         let (effective_max_retries, effective_base_delay_ms) =
             (retry.max_retries, retry.base_delay_ms);
-        let active_runtime = self.primary_runtime_snapshot();
+        let active_runtime = crate::route_learning::primary_runtime_snapshot(self);
         let default_api_mode = active_runtime.api_mode.clone();
-        let default_extra_body = self.extra_body_for_api_mode(&default_api_mode);
+        let default_extra_body =
+            crate::llm_caller::extra_body_for_api_mode(self, &default_api_mode);
         let effective_max_tokens = max_tokens_override.or(self.config().max_tokens);
         let mut context_overflow_retries = 0u32;
         let mut has_retried_429_same_cred = false;
@@ -111,18 +113,20 @@ impl AgentLoop {
         }
 
         for attempt in 0..=effective_max_retries {
-            let api_messages = self.build_turn_api_messages(ctx);
+            let api_messages = crate::llm_caller::build_turn_api_messages(self, ctx);
             self.interrupt.check_interrupt()?;
             let api_start = Instant::now();
             *api_call_count = api_call_count.saturating_add(1);
             let hook_api_mode = route
                 .and_then(|rt| rt.api_mode.as_ref())
                 .unwrap_or(&default_api_mode);
-            let hook_base_url = self.resolve_runtime_base_url(
+            let hook_base_url = crate::runtime_provider::resolve_runtime_base_url(
+                self,
                 active_provider.as_str(),
                 route.and_then(|rt| rt.base_url.as_deref()),
             );
-            self.invoke_pre_api_request_hook(
+            crate::hooks::invoke_pre_api_request_hook(
+                self,
                 *api_call_count,
                 &api_messages,
                 tool_schemas.len(),
@@ -133,11 +137,13 @@ impl AgentLoop {
                 effective_max_tokens,
             );
             let result = if let Some(rt) = route {
-                let (provider_name, _) = self.extract_provider_and_model(model);
+                let (provider_name, _) =
+                    crate::route_learning::extract_provider_and_model(self, model);
                 let mode = rt.api_mode.as_ref().unwrap_or(&default_api_mode);
-                let extra_body_for_call = self.extra_body_for_api_mode(mode);
-                let pool = self.credential_pool_for_route(rt);
-                let routed_provider = self.build_runtime_provider(
+                let extra_body_for_call = crate::llm_caller::extra_body_for_api_mode(self, mode);
+                let pool = crate::runtime_provider::credentials_pool_for_route(self, rt);
+                let routed_provider = crate::runtime_provider::build_runtime_provider(
+                    self,
                     rt.provider.as_deref().unwrap_or(provider_name.as_str()),
                     &effective_model_name,
                     rt.base_url.as_deref(),
@@ -165,7 +171,7 @@ impl AgentLoop {
                             rt.routing_reason,
                             e
                         );
-                        self.effective_llm_provider()
+                        crate::runtime_provider::effective_llm_provider(self)
                             .chat_completion(
                                 &api_messages,
                                 tool_schemas,
@@ -178,7 +184,7 @@ impl AgentLoop {
                     }
                 }
             } else {
-                self.effective_llm_provider()
+                crate::runtime_provider::effective_llm_provider(self)
                     .chat_completion(
                         &api_messages,
                         tool_schemas,
@@ -215,7 +221,8 @@ impl AgentLoop {
                             "API rejected image content — stripping images and retrying text-only"
                         );
                         self.disable_vision_supported_and_strip_context(ctx);
-                        self.emit_status(
+                        crate::hooks::emit_status(
+                            self,
                             "lifecycle",
                             "Model rejected images — retrying without image content",
                         );
@@ -234,7 +241,8 @@ impl AgentLoop {
                         tracing::warn!(
                             "Thinking block signature invalid — stripped reasoning blocks, retrying"
                         );
-                        self.emit_status(
+                        crate::hooks::emit_status(
+                            self,
                             "lifecycle",
                             "Thinking block signature invalid — stripped reasoning blocks and retrying",
                         );
@@ -247,7 +255,8 @@ impl AgentLoop {
                             tracing::warn!(
                                 "Invalid encrypted reasoning replay — stripped and retrying"
                             );
-                            self.emit_status(
+                            crate::hooks::emit_status(
+                                self,
                                 "lifecycle",
                                 "Encrypted reasoning replay invalid — stripped and retrying",
                             );
@@ -258,7 +267,8 @@ impl AgentLoop {
                         if crate::error_classifier::shrink_oversized_images_in_context(ctx) {
                             self.invalidate_turn_api_messages_cache();
                             tracing::warn!("Image too large — stripped image parts and retrying");
-                            self.emit_status(
+                            crate::hooks::emit_status(
+                                self,
                                 "lifecycle",
                                 "Image too large — reduced image payload and retrying",
                             );
@@ -269,7 +279,8 @@ impl AgentLoop {
                         tracing::warn!(
                             "llama.cpp grammar/schema error — retrying without tool strictness"
                         );
-                        self.emit_status(
+                        crate::hooks::emit_status(
+                            self,
                             "lifecycle",
                             "Tool schema rejected by local grammar engine — retrying",
                         );
@@ -278,7 +289,8 @@ impl AgentLoop {
                     if failover
                         == crate::error_classifier::FailoverReason::OAuthLongContextBetaForbidden
                     {
-                        self.emit_status(
+                        crate::hooks::emit_status(
+                            self,
                             "lifecycle",
                             "Anthropic 1M context beta unavailable for this subscription — retrying",
                         );
@@ -307,9 +319,11 @@ impl AgentLoop {
                         ErrorClass::Auth => {
                             if !auth_refresh_attempted {
                                 auth_refresh_attempted = true;
-                                self.refresh_oauth_store_tokens_if_needed().await;
+                                crate::runtime_provider::refresh_oauth_store_tokens_if_needed(self)
+                                    .await;
                                 tracing::info!("Auth error — refreshed OAuth tokens, retrying");
-                                self.emit_status(
+                                crate::hooks::emit_status(
+                                    self,
                                     "lifecycle",
                                     "Authentication error — refreshed OAuth tokens and retrying",
                                 );
@@ -320,7 +334,7 @@ impl AgentLoop {
                                 &err_str,
                                 self.config().hermes_home.as_deref(),
                             ) {
-                                self.emit_status("lifecycle", &diag);
+                                crate::hooks::emit_status(self, "lifecycle", &diag);
                                 return Err(AgentError::LlmApi(format!("{err_str}\n\n{diag}")));
                             }
                             return Err(AgentError::LlmApi(err_str));
@@ -330,7 +344,7 @@ impl AgentLoop {
                                 && is_tool_payload_validation_error(&err_str)
                             {
                                 let (provider_name, model_name) =
-                                    self.extract_provider_and_model(model);
+                                    crate::route_learning::extract_provider_and_model(self, model);
                                 if let Some(fallback_model_name) =
                                     preferred_tool_payload_fallback_model(
                                         active_provider.as_str(),
@@ -348,9 +362,15 @@ impl AgentLoop {
                                             let mode =
                                                 rt.api_mode.as_ref().unwrap_or(&default_api_mode);
                                             let extra_body_for_call =
-                                                self.extra_body_for_api_mode(mode);
-                                            let pool = self.credential_pool_for_route(rt);
-                                            match self.build_runtime_provider(
+                                                crate::llm_caller::extra_body_for_api_mode(
+                                                    self, mode,
+                                                );
+                                            let pool =
+                                                crate::runtime_provider::credentials_pool_for_route(
+                                                    self, rt,
+                                                );
+                                            match crate::runtime_provider::build_runtime_provider(
+                                                self,
                                                 rt.provider
                                                     .as_deref()
                                                     .unwrap_or(provider_name.as_str()),
@@ -376,7 +396,8 @@ impl AgentLoop {
                                                 Err(build_err) => Err(build_err),
                                             }
                                         } else {
-                                            match self.build_runtime_provider(
+                                            match crate::runtime_provider::build_runtime_provider(
+                                                self,
                                                 provider_name.as_str(),
                                                 &fallback_model_name,
                                                 None,
@@ -402,11 +423,14 @@ impl AgentLoop {
                                         };
                                         match fallback_with_tools {
                                             Ok(resp) => {
-                                                self.emit_status(
+                                                crate::hooks::emit_status(
+                                                    self,
                                                     "lifecycle",
                                                     &format!(
                                                         "Model/tool-schema mismatch on {}:{}; auto-routed to {} for this turn",
-                                                        provider_name, model_name, fallback_model_name
+                                                        provider_name,
+                                                        model_name,
+                                                        fallback_model_name
                                                     ),
                                                 );
                                                 return Ok(resp);
@@ -426,9 +450,12 @@ impl AgentLoop {
                                 );
                                 let no_tools_result = if let Some(rt) = route {
                                     let mode = rt.api_mode.as_ref().unwrap_or(&default_api_mode);
-                                    let extra_body_for_call = self.extra_body_for_api_mode(mode);
-                                    let pool = self.credential_pool_for_route(rt);
-                                    match self.build_runtime_provider(
+                                    let extra_body_for_call =
+                                        crate::llm_caller::extra_body_for_api_mode(self, mode);
+                                    let pool = crate::runtime_provider::credentials_pool_for_route(
+                                        self, rt,
+                                    );
+                                    match crate::runtime_provider::build_runtime_provider(self,
                                         rt.provider.as_deref().unwrap_or(provider_name.as_str()),
                                         model_name,
                                         rt.base_url.as_deref(),
@@ -457,8 +484,9 @@ impl AgentLoop {
                                                     effective_max_tokens,
                                                     self.config().temperature,
                                                     Some(
-                                                        self.extract_provider_and_model(
-                                                            self.active_model().as_str(),
+                                                        crate::route_learning::extract_provider_and_model(
+                                                            self,
+                                                            crate::runtime_provider::active_model(self).as_str(),
                                                         )
                                                         .1,
                                                     ),
@@ -481,7 +509,8 @@ impl AgentLoop {
                                 };
                                 match no_tools_result {
                                     Ok(resp) => {
-                                        self.emit_status(
+                                        crate::hooks::emit_status(
+                                            self,
                                             "lifecycle",
                                             "Model/tool-schema mismatch detected; retried once without tools for this turn",
                                         );
@@ -500,7 +529,8 @@ impl AgentLoop {
                                 tracing::warn!(
                                     "Context overflow detected; compressing context and retrying in-turn"
                                 );
-                                self.emit_status(
+                                crate::hooks::emit_status(
+                                    self,
                                     "lifecycle",
                                     "Context window exceeded; compressing history and retrying",
                                 );
@@ -512,9 +542,14 @@ impl AgentLoop {
                         ErrorClass::RateLimit | ErrorClass::Retryable => {
                             if failover == crate::retry_failover::FailoverReason::Billing {
                                 let pool = route
-                                    .and_then(|rt| self.credential_pool_for_route(rt))
+                                    .and_then(|rt| {
+                                        crate::runtime_provider::credentials_pool_for_route(
+                                            self, rt,
+                                        )
+                                    })
                                     .or(self.primary_credential_pool.as_ref());
-                                let base_url = self.resolve_runtime_base_url(
+                                let base_url = crate::runtime_provider::resolve_runtime_base_url(
+                                    self,
                                     active_provider.as_str(),
                                     route.and_then(|rt| rt.base_url.as_deref()),
                                 );
@@ -525,7 +560,8 @@ impl AgentLoop {
                                         base_url.as_deref(),
                                     );
                                 if !pool_may_recover {
-                                    self.emit_status(
+                                    crate::hooks::emit_status(
+                                        self,
                                         "lifecycle",
                                         "Billing or credits exhausted — switching to fallback provider",
                                     );
@@ -591,9 +627,14 @@ impl AgentLoop {
                             }
                             if matches!(class, ErrorClass::RateLimit) {
                                 let pool = route
-                                    .and_then(|rt| self.credential_pool_for_route(rt))
+                                    .and_then(|rt| {
+                                        crate::runtime_provider::credentials_pool_for_route(
+                                            self, rt,
+                                        )
+                                    })
                                     .or(self.primary_credential_pool.as_ref());
-                                let base_url = self.resolve_runtime_base_url(
+                                let base_url = crate::runtime_provider::resolve_runtime_base_url(
+                                    self,
                                     active_provider.as_str(),
                                     route.and_then(|rt| rt.base_url.as_deref()),
                                 );
@@ -615,7 +656,8 @@ impl AgentLoop {
                                     tracing::info!(
                                         "Rate limit: rotated credential pool entry, retrying"
                                     );
-                                    self.emit_status(
+                                    crate::hooks::emit_status(
+                                        self,
                                         "lifecycle",
                                         "Rate limited; rotated API credential and retrying",
                                     );
@@ -627,15 +669,18 @@ impl AgentLoop {
                                     base_url.as_deref(),
                                 ) {
                                     if attempt >= effective_max_retries {
-                                        self.note_primary_rate_limited_if_applicable();
+                                        crate::runtime_provider::note_primary_rate_limited_if_applicable(self);
                                     }
                                 }
                             }
                             if attempt >= effective_max_retries {
                                 if matches!(class, ErrorClass::RateLimit) {
-                                    self.note_primary_rate_limited_if_applicable();
+                                    crate::runtime_provider::note_primary_rate_limited_if_applicable(self);
                                 }
-                                let failover_chain = self.resolve_retry_failover_chain(model);
+                                let failover_chain =
+                                    crate::route_learning::resolve_retry_failover_chain(
+                                        self, model,
+                                    );
                                 if !failover_chain.is_empty() {
                                     let mut failover_errors = Vec::new();
                                     for fallback in failover_chain {
@@ -651,13 +696,16 @@ impl AgentLoop {
                                             fallback
                                         );
                                         let failover_runtime =
-                                            self.primary_runtime_for_failover_model(&fallback);
+                                            crate::runtime_provider::primary_runtime_for_failover_model(self, &fallback);
                                         let (_, failover_model_name) =
-                                            self.extract_provider_and_model(&fallback);
-                                        let extra_body = self
-                                            .extra_body_for_api_mode(&failover_runtime.api_mode);
-                                        let fallback_result = match self
-                                            .build_llm_provider_for_runtime(&failover_runtime)
+                                            crate::route_learning::extract_provider_and_model(
+                                                self, &fallback,
+                                            );
+                                        let extra_body = crate::llm_caller::extra_body_for_api_mode(
+                                            self,
+                                            &failover_runtime.api_mode,
+                                        );
+                                        let fallback_result = match crate::runtime_provider::build_llm_provider_for_runtime(self, &failover_runtime)
                                         {
                                             Ok(provider) => {
                                                 provider
@@ -676,7 +724,8 @@ impl AgentLoop {
                                         match fallback_result {
                                             Ok(resp) => {
                                                 self.activate_runtime_fallback(failover_runtime);
-                                                self.emit_status(
+                                                crate::hooks::emit_status(
+                                                    self,
                                                     "lifecycle",
                                                     &format!(
                                                         "Failover recovered request via {}",
@@ -710,7 +759,8 @@ impl AgentLoop {
                                 attempt + 1,
                                 effective_max_retries
                             );
-                            self.emit_status(
+                            crate::hooks::emit_status(
+                                self,
                                 "lifecycle",
                                 &format!(
                                     "LLM API retry in {}ms (attempt {}/{})",

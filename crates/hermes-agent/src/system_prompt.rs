@@ -5,12 +5,13 @@ use std::sync::{LazyLock, Mutex};
 use hermes_core::ToolSchema;
 
 use crate::agent_loop::AgentLoop;
-use crate::context::{SystemPromptBuilder, load_builtin_memory_snapshot, load_soul_md, resolve_personality};
+use crate::context::{
+    SystemPromptBuilder, load_builtin_memory_snapshot, load_soul_md, resolve_personality,
+};
 use crate::prompt_builder::{
-    COMPUTER_USE_GUIDANCE, CRONJOB_GUIDANCE, KANBAN_GUIDANCE, MEMORY_GUIDANCE,
-    OPENAI_MODEL_EXECUTION_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
+    COMPUTER_USE_GUIDANCE, CRONJOB_GUIDANCE, GOOGLE_MODEL_OPERATIONAL_GUIDANCE, KANBAN_GUIDANCE,
+    MEMORY_GUIDANCE, OPENAI_MODEL_EXECUTION_GUIDANCE, SESSION_SEARCH_GUIDANCE, SKILLS_GUIDANCE,
     TASK_COMPLETION_GUIDANCE, TOOL_USE_ENFORCEMENT_GUIDANCE, USER_PROFILE_GUIDANCE,
-    GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
 };
 
 pub static PLATFORM_HINTS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -487,8 +488,8 @@ impl AgentLoop {
                 } else if let Some(profile) =
                     resolve_personality(requested, self.config().hermes_home.as_deref())
                 {
-                    builder =
-                        builder.with_block(&format!("## Active Personality ({requested})\n{profile}"));
+                    builder = builder
+                        .with_block(&format!("## Active Personality ({requested})\n{profile}"));
                 } else if requested.contains(char::is_whitespace) {
                     // Compatibility path: historically this field was appended verbatim.
                     builder = builder.with_block(&format!("Personality: {requested}"));
@@ -523,7 +524,7 @@ impl AgentLoop {
             }
         }
 
-        let mem_block = self.memory_system_prompt();
+        let mem_block = crate::tool_executor::memory_system_prompt(self);
         if !mem_block.is_empty() {
             builder = builder.with_memory_context(&mem_block);
         }
@@ -540,13 +541,17 @@ impl AgentLoop {
         }
 
         let provider = self.effective_provider_for_prompt(model_for_prompt);
-        let session_id = self.config().pass_session_id.then(|| {
-            self.config()
-                .session_id
-                .as_ref()
-                .filter(|sid| !sid.trim().is_empty())
-                .cloned()
-        }).flatten();
+        let session_id = self
+            .config()
+            .pass_session_id
+            .then(|| {
+                self.config()
+                    .session_id
+                    .as_ref()
+                    .filter(|sid| !sid.trim().is_empty())
+                    .cloned()
+            })
+            .flatten();
         builder = builder.with_timestamp(
             Some(model_for_prompt),
             provider.as_deref(),

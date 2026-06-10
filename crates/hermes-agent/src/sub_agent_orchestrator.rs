@@ -428,14 +428,14 @@ impl SubAgentOrchestrator {
             resolver = resolver.with_primary_credential_pool(pool.clone());
         }
 
-        resolver
-            .build_delegation_runtime_provider(
-                provider.as_str(),
-                model_name.as_str(),
-                clean_config_string(child_config.delegation_base_url.as_deref()),
-                clean_config_string(child_config.delegation_api_key.as_deref()),
-            )
-            .map_err(SubAgentError::Agent)
+        crate::runtime_provider::build_delegation_runtime_provider(
+            &resolver,
+            provider.as_str(),
+            model_name.as_str(),
+            clean_config_string(child_config.delegation_base_url.as_deref()),
+            clean_config_string(child_config.delegation_api_key.as_deref()),
+        )
+        .map_err(SubAgentError::Agent)
     }
 
     async fn persist_lineage(&self, lineage: &SubAgentLineage) {
@@ -537,8 +537,8 @@ mod tests {
                 usage: None,
                 model: "noop".into(),
                 finish_reason: Some("stop".into()),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
         fn chat_completion_stream(
             &self,
@@ -655,8 +655,8 @@ mod tests {
                     usage: None,
                     model: "slow".into(),
                     finish_reason: Some("stop".into()),
-                ..Default::default()
-        })
+                    ..Default::default()
+                })
             }
             fn chat_completion_stream(
                 &self,
@@ -698,19 +698,23 @@ mod tests {
             .await;
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], "timeout");
-        assert!(parsed["sub_agent_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("subagent-"));
+        assert!(
+            parsed["sub_agent_id"]
+                .as_str()
+                .unwrap()
+                .starts_with("subagent-")
+        );
         // Lineage file should exist under $HERMES_HOME/subagents/<id>.json
         let dir = tmp.path().join("subagents");
         let mut entries = tokio::fs::read_dir(&dir).await.unwrap();
         let entry = entries.next_entry().await.unwrap().unwrap();
-        assert!(entry
-            .path()
-            .extension()
-            .map(|s| s == "json")
-            .unwrap_or(false));
+        assert!(
+            entry
+                .path()
+                .extension()
+                .map(|s| s == "json")
+                .unwrap_or(false)
+        );
     }
 
     #[tokio::test]

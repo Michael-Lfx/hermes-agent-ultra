@@ -224,7 +224,8 @@ pub(crate) fn build_llm_provider_for_runtime(
     agent: &AgentLoop,
     runtime: &PrimaryRuntime,
 ) -> Result<Arc<dyn LlmProvider>, AgentError> {
-    let (inferred_provider, model_name) = agent.extract_provider_and_model(runtime.model.as_str());
+    let (inferred_provider, model_name) =
+        crate::route_learning::extract_provider_and_model(agent, runtime.model.as_str());
     let provider = runtime
         .provider
         .as_deref()
@@ -445,7 +446,7 @@ pub(crate) fn resolve_runtime_base_url(
         })
 }
 
-fn resolve_runtime_command_args(
+pub(crate) fn resolve_runtime_command_args(
     agent: &AgentLoop,
     provider: Option<&str>,
 ) -> (Option<String>, Vec<String>) {
@@ -827,8 +828,7 @@ pub(crate) fn note_primary_rate_limited_if_applicable(agent: &AgentLoop) {
         .as_deref()
         .unwrap_or("")
         .to_ascii_lowercase();
-    let active_prov = agent
-        .primary_runtime_snapshot()
+    let active_prov = crate::route_learning::primary_runtime_snapshot(agent)
         .provider
         .as_deref()
         .unwrap_or("")
@@ -848,7 +848,7 @@ pub(crate) fn primary_runtime_for_failover_model(
     // Need to handle this somewhat differently since primary_runtime_from_config is still on AgentLoop
     let cfg = agent.config_snapshot();
     let mut rt = primary_rt_from_cfg(&cfg);
-    let (provider, _) = agent.extract_provider_and_model(model_id);
+    let (provider, _) = crate::route_learning::extract_provider_and_model(agent, model_id);
     rt.model = model_id.trim().to_string();
     if !provider.is_empty() {
         rt.provider = Some(provider);
@@ -896,101 +896,4 @@ pub(crate) fn active_model(agent: &AgentLoop) -> String {
         .lock()
         .map(|state| state.active_runtime.model.clone())
         .unwrap_or_else(|_| agent.config_snapshot().model)
-}
-
-fn try_build_cheap_runtime(
-    agent: &AgentLoop,
-    cheap: &CheapModelRouteConfig,
-    explicit_api_key: Option<String>,
-) -> Result<ResolvedCheapRuntime, ()> {
-    let provider_raw = cheap.provider.as_deref().map(str::trim).unwrap_or("");
-    if provider_raw.is_empty() {
-        return Err(());
-    }
-    let provider_lc = provider_raw.to_lowercase();
-    let model_full = cheap.model.as_deref().map(str::trim).unwrap_or("");
-    if model_full.is_empty() {
-        return Err(());
-    }
-    let (_, model_name) = agent.extract_provider_and_model(model_full);
-    let base_url = resolve_runtime_base_url(agent, &provider_lc, cheap.base_url.as_deref());
-    let api_mode = base_url
-        .as_deref()
-        .and_then(detect_api_mode_for_url)
-        .unwrap_or(ApiMode::ChatCompletions);
-
-    let has_runtime_override = explicit_api_key
-        .as_ref()
-        .map(|s| !s.trim().is_empty())
-        .is_some()
-        || cheap
-            .base_url
-            .as_ref()
-            .map(|s| !s.trim().is_empty())
-            .unwrap_or(false);
-    let pool_ref = if has_runtime_override {
-        None
-    } else {
-        agent.primary_credential_pool.as_ref()
-    };
-
-    build_runtime_provider(
-        agent,
-        &provider_lc,
-        model_name,
-        cheap.base_url.as_deref(),
-        cheap.api_key_env.as_deref(),
-        explicit_api_key.as_deref(),
-        Some(&api_mode),
-        pool_ref,
-    )
-    .map_err(|_| ())?;
-
-    let (command, args) = resolve_runtime_command_args(agent, Some(&provider_lc));
-    let pool = if has_runtime_override {
-        None
-    } else {
-        agent.primary_credential_pool.clone()
-    };
-    if provider_lc == "copilot-acp" && command.as_deref().map(|c| !c.is_empty()).unwrap_or(false) {
-        return Ok(ResolvedCheapRuntime {
-            model: model_full.to_string(),
-            provider: provider_lc,
-            base_url,
-            api_mode,
-            command,
-            args,
-            credential_pool: pool,
-            skip_primary_credential_pool_fallback: true,
-        });
-    }
-
-    let api_mode_for_route = base_url
-        .as_deref()
-        .and_then(detect_api_mode_for_url)
-        .unwrap_or(ApiMode::ChatCompletions);
-    let api_mode_str = api_mode_hook_str(&api_mode_for_route);
-    let base_url_str = base_url.as_deref().unwrap_or_default().to_string();
-    refresh_prompt_cache_policy(agent, &provider_lc, &base_url_str, api_mode_str);
-
-    Ok(ResolvedCheapRuntime {
-        model: model_full.to_string(),
-        provider: provider_lc,
-        base_url,
-        api_mode: api_mode_for_route,
-        command: None,
-        args: Vec::new(),
-        credential_pool: pool,
-        skip_primary_credential_pool_fallback: false,
-    })
-}
-
-fn api_mode_hook_str(mode: &ApiMode) -> &'static str {
-    match mode {
-        ApiMode::ChatCompletions => "chat_completions",
-        ApiMode::AnthropicMessages => "anthropic_messages",
-        ApiMode::CodexResponses => "codex_responses",
-        ApiMode::CodexAppServer => "codex_app_server",
-        ApiMode::BedrockConverse => "bedrock_converse",
-    }
 }

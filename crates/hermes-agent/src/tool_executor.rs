@@ -291,7 +291,7 @@ impl AgentLoop {
 
                 match dispatch_result {
                     Ok(output) if async_tool_dispatch.is_some() => {
-                        match Self::tool_result_from_dispatch_output(output) {
+                        match tool_result_from_dispatch_output(output) {
                             Ok(output) => {
                                 tracing::debug!(
                                     tool = %tool_name,

@@ -121,12 +121,12 @@ pub(crate) async fn prepare_turn(
         preview_text.clone()
     };
     let msg_preview = msg_preview.replace('\n', " ");
-    let rt = agent.primary_runtime_snapshot();
+    let rt = crate::route_learning::primary_runtime_snapshot(agent);
     tracing::info!(
         session_id = %crate::session_log::current_session_tag(),
         task_id = %task_id,
         user_turn = user_turn_count,
-        model = %agent.active_model(),
+        model = %crate::runtime_provider::active_model(agent),
         provider = rt.provider.as_deref().unwrap_or("unknown"),
         platform = %agent.config().platform.as_deref().unwrap_or("unknown"),
         history_len = history_len,
@@ -141,7 +141,8 @@ pub(crate) async fn prepare_turn(
             ""
         };
         let short: String = print_preview.chars().take(60).collect();
-        agent.emit_status(
+        crate::hooks::emit_status(
+            agent,
             "lifecycle",
             &format!("💬 Starting conversation: '{short}{suffix}'"),
         );
@@ -253,11 +254,11 @@ fn apply_turn_level_output_hooks(
         "user_message": meta.original_user_message,
         "assistant_response": response,
         "conversation_history": history_json,
-        "model": agent.active_model(),
+        "model": crate::runtime_provider::active_model(agent),
         "platform": agent.config().platform,
         "task_id": meta.task_id,
     });
-    let results = agent.invoke_hook(HookType::PostLlmCall, &hook_ctx);
+    let results = crate::hooks::invoke_hook(agent, HookType::PostLlmCall, &hook_ctx);
     let mut out = response.to_string();
     for r in results {
         if let HookResult::TransformLlmOutput(next) = r {
@@ -283,7 +284,7 @@ fn persist_turn_session(agent: &AgentLoop, messages: &[Message], inner: &AgentRe
     let transcript = strip_system_messages_from_history(messages);
     let sys = leading_system_prompt_for_persist(messages);
     let platform = cfg.platform.as_deref();
-    let model = agent.active_model();
+    let model = crate::runtime_provider::active_model(agent);
     let mut cursor = agent
         .state
         .lock()
@@ -352,7 +353,11 @@ pub(crate) fn resolve_initial_system_prompt(
         }
     }
     (
-        agent.build_system_prompt(task_hint, tool_schemas, &agent.active_model()),
+        agent.build_system_prompt(
+            task_hint,
+            tool_schemas,
+            &crate::runtime_provider::active_model(agent),
+        ),
         false,
     )
 }
@@ -425,7 +430,7 @@ async fn run_with_message_prelude(
         Box::new(|_| ())
     };
 
-    let mut ctx = ContextManager::for_model(agent.active_model().as_str());
+    let mut ctx = ContextManager::for_model(crate::runtime_provider::active_model(agent).as_str());
     let mut tool_errors: Vec<hermes_core::ToolErrorRecord> = Vec::new();
     let session_id_owned = agent.config().session_id.clone().unwrap_or_default();
     let session_id = session_id_owned.as_str();
@@ -455,10 +460,10 @@ async fn run_with_message_prelude(
     if !restored_system {
         let hook_ctx = serde_json::json!({
             "session_id": agent.config().session_id,
-            "model": agent.active_model(),
+            "model": crate::runtime_provider::active_model(agent),
         });
-        let _results = agent.invoke_hook(HookType::OnSessionStart, &hook_ctx);
-        agent.inject_hook_context(&_results, &mut ctx);
+        let _results = crate::hooks::invoke_hook(agent, HookType::OnSessionStart, &hook_ctx);
+        crate::hooks::inject_hook_context(agent, &_results, &mut ctx);
         session_started_hooks_fired = true;
     }
 
@@ -528,7 +533,7 @@ async fn run_with_message_prelude(
     let mem_ctx_raw = agent.memory_prefetch(&first_user, session_id);
     agent.set_turn_ext_prefetch_cache(mem_ctx_raw);
 
-    agent.apply_pre_llm_call_hooks_once(&mut ctx, &first_user, session_id);
+    crate::hooks::apply_pre_llm_call_hooks_once(agent, &mut ctx, &first_user, session_id);
 
     if agent.api_mode_is_codex_app_server() {
         let loop_messages: Vec<Message> = ctx.get_messages().to_vec();
@@ -557,7 +562,7 @@ async fn run_with_message_prelude(
             } else {
                 "run"
             },
-            "model": agent.active_model(),
+            "model": crate::runtime_provider::active_model(agent),
             "max_turns": agent.config().max_turns,
             "max_turns_effective": max_turns_limit,
             "max_turns_unlimited": max_turns_limit.is_none(),
