@@ -6,9 +6,11 @@
 mod gateway_handlers;
 mod gateway_process;
 mod interactive_lock;
+mod provenance;
 
 use gateway_process::*;
 use interactive_lock::*;
+use provenance::*;
 
 use hermes_cli::gateway_runtime_defaults;
 use hermes_cli::startup_metrics::StartupMetrics;
@@ -10396,14 +10398,16 @@ async fn run_setup(cli: Cli) -> Result<(), AgentError> {
 
 /// Handle `hermes doctor`.
 fn build_elite_doctor_diagnostics(cli: &Cli) -> serde_json::Value {
-    let provenance_path = provenance_key_path_for_cli(cli);
+    let provenance_path = provenance_key_path_for_cli(&hermes_state_root(cli));
     let provenance_exists = provenance_path.exists();
     let provenance_key_id = if provenance_exists {
-        load_or_create_provenance_key(cli, false).ok().map(|key| {
-            let digest = Sha256::digest(&key);
-            let full = hex::encode(digest);
-            full.chars().take(16).collect::<String>()
-        })
+        load_or_create_provenance_key(&hermes_state_root(cli), false)
+            .ok()
+            .map(|key| {
+                let digest = Sha256::digest(&key);
+                let full = hex::encode(digest);
+                full.chars().take(16).collect::<String>()
+            })
     } else {
         None
     };
@@ -10901,7 +10905,7 @@ async fn run_doctor(
         let out = write_doctor_snapshot(&cli, &snapshot_payload, snapshot_path.as_deref())?;
         println!("\nDoctor snapshot: {}", out.display());
         if let Ok(snapshot_bytes) = std::fs::read(&out) {
-            match sign_artifact_bytes(&cli, &snapshot_bytes, true)
+            match sign_artifact_bytes(&hermes_state_root(&cli), &snapshot_bytes, true)
                 .and_then(|sig| write_provenance_sidecar(&out, &sig))
             {
                 Ok(sig_path) => {
@@ -11075,24 +11079,6 @@ fn write_doctor_snapshot(
     Ok(path)
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct ProvenanceSignature {
-    generated_at: String,
-    algorithm: String,
-    key_id: String,
-    artifact_sha256: String,
-    signature_hex: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct ProvenanceVerification {
-    ok: bool,
-    code: String,
-    key_id: Option<String>,
-    artifact_sha256: Option<String>,
-    reason: Option<String>,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct RouteLearningStatsRecord {
     samples: u32,
@@ -11107,225 +11093,6 @@ struct RouteLearningStateRecord {
     schema_version: u32,
     saved_at_unix_ms: i64,
     entries: std::collections::HashMap<String, RouteLearningStatsRecord>,
-}
-
-fn provenance_key_path_for_cli(cli: &Cli) -> PathBuf {
-    hermes_state_root(cli).join("auth").join("provenance.key")
-}
-
-fn parse_provenance_key_material(raw: &str) -> Result<Vec<u8>, AgentError> {
-    let s = raw.trim();
-    if s.is_empty() {
-        return Err(AgentError::Config(
-            "empty provenance key material".to_string(),
-        ));
-    }
-    let is_hex = s.len() % 2 == 0 && s.chars().all(|c| c.is_ascii_hexdigit());
-    if is_hex {
-        return hex::decode(s)
-            .map_err(|e| AgentError::Config(format!("decode provenance hex key: {e}")));
-    }
-    if let Ok(bytes) = BASE64_STANDARD.decode(s.as_bytes()) {
-        if !bytes.is_empty() {
-            return Ok(bytes);
-        }
-    }
-    Ok(s.as_bytes().to_vec())
-}
-
-fn load_or_create_provenance_key(cli: &Cli, allow_create: bool) -> Result<Vec<u8>, AgentError> {
-    if let Ok(raw_env) = std::env::var("HERMES_PROVENANCE_SIGNING_KEY") {
-        let bytes = parse_provenance_key_material(&raw_env)?;
-        if bytes.len() < 16 {
-            return Err(AgentError::Config(
-                "HERMES_PROVENANCE_SIGNING_KEY must be at least 16 bytes".to_string(),
-            ));
-        }
-        return Ok(bytes);
-    }
-
-    let path = provenance_key_path_for_cli(cli);
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| AgentError::Io(format!("read {}: {}", path.display(), e)))?;
-        let bytes = parse_provenance_key_material(&raw)?;
-        if bytes.len() < 16 {
-            return Err(AgentError::Config(format!(
-                "provenance key in {} must be at least 16 bytes",
-                path.display()
-            )));
-        }
-        return Ok(bytes);
-    }
-
-    if !allow_create {
-        return Err(AgentError::Config(format!(
-            "provenance key not found at {} (set HERMES_PROVENANCE_SIGNING_KEY or run doctor snapshot/bundle once)",
-            path.display()
-        )));
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AgentError::Io(format!("mkdir {}: {}", parent.display(), e)))?;
-    }
-    let mut key_bytes = [0u8; 32];
-    {
-        use rand::TryRng;
-        rand::rngs::SysRng
-            .try_fill_bytes(&mut key_bytes)
-            .map_err(|e| AgentError::Config(e.to_string()))?;
-    }
-    let key_hex = hex::encode(key_bytes);
-    std::fs::write(&path, format!("{key_hex}\n"))
-        .map_err(|e| AgentError::Io(format!("write {}: {}", path.display(), e)))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path)
-            .map_err(|e| AgentError::Io(format!("metadata {}: {}", path.display(), e)))?
-            .permissions();
-        perms.set_mode(0o600);
-        let _ = std::fs::set_permissions(&path, perms);
-    }
-    Ok(key_bytes.to_vec())
-}
-
-fn sign_artifact_bytes(
-    cli: &Cli,
-    bytes: &[u8],
-    allow_create_key: bool,
-) -> Result<ProvenanceSignature, AgentError> {
-    use hmac::Mac as _;
-
-    let key = load_or_create_provenance_key(cli, allow_create_key)?;
-    let artifact_hash_bytes = Sha256::digest(bytes);
-    let artifact_sha256 = hex::encode(artifact_hash_bytes);
-    let key_id = {
-        let key_hash = Sha256::digest(&key);
-        let full = hex::encode(key_hash);
-        full.chars().take(16).collect::<String>()
-    };
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key)
-        .map_err(|e| AgentError::Config(format!("init provenance hmac: {e}")))?;
-    mac.update(artifact_sha256.as_bytes());
-    let signature_hex = hex::encode(mac.finalize().into_bytes());
-    Ok(ProvenanceSignature {
-        generated_at: chrono::Utc::now().to_rfc3339(),
-        algorithm: "hmac-sha256".to_string(),
-        key_id,
-        artifact_sha256,
-        signature_hex,
-    })
-}
-
-fn provenance_sidecar_path_for_artifact(path: &Path) -> PathBuf {
-    let filename = path
-        .file_name()
-        .map(|f| format!("{}.sig.json", f.to_string_lossy()))
-        .unwrap_or_else(|| "artifact.sig.json".to_string());
-    path.parent()
-        .map(|p| p.join(&filename))
-        .unwrap_or_else(|| PathBuf::from(filename))
-}
-
-fn write_provenance_sidecar(path: &Path, sig: &ProvenanceSignature) -> Result<PathBuf, AgentError> {
-    let sidecar = provenance_sidecar_path_for_artifact(path);
-    let body = serde_json::to_string_pretty(sig)
-        .map_err(|e| AgentError::Config(format!("serialize provenance sidecar: {e}")))?;
-    std::fs::write(&sidecar, body)
-        .map_err(|e| AgentError::Io(format!("write {}: {}", sidecar.display(), e)))?;
-    Ok(sidecar)
-}
-
-fn verify_artifact_provenance(
-    cli: &Cli,
-    artifact_path: &Path,
-    signature_path: Option<&Path>,
-) -> Result<ProvenanceVerification, AgentError> {
-    use hmac::Mac as _;
-
-    let bytes = match std::fs::read(artifact_path) {
-        Ok(value) => value,
-        Err(err) => {
-            return Ok(ProvenanceVerification {
-                ok: false,
-                code: "artifact_read_error".to_string(),
-                key_id: None,
-                artifact_sha256: None,
-                reason: Some(format!("read {}: {}", artifact_path.display(), err)),
-            });
-        }
-    };
-    let sidecar_path = signature_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| provenance_sidecar_path_for_artifact(artifact_path));
-    let sidecar_raw = match std::fs::read_to_string(&sidecar_path) {
-        Ok(value) => value,
-        Err(err) => {
-            return Ok(ProvenanceVerification {
-                ok: false,
-                code: "signature_read_error".to_string(),
-                key_id: None,
-                artifact_sha256: None,
-                reason: Some(format!("read {}: {}", sidecar_path.display(), err)),
-            });
-        }
-    };
-    let sig: ProvenanceSignature = match serde_json::from_str(&sidecar_raw) {
-        Ok(value) => value,
-        Err(err) => {
-            return Ok(ProvenanceVerification {
-                ok: false,
-                code: "signature_parse_error".to_string(),
-                key_id: None,
-                artifact_sha256: None,
-                reason: Some(format!("parse {}: {}", sidecar_path.display(), err)),
-            });
-        }
-    };
-    let key = match load_or_create_provenance_key(cli, false) {
-        Ok(value) => value,
-        Err(err) => {
-            return Ok(ProvenanceVerification {
-                ok: false,
-                code: "key_unavailable".to_string(),
-                key_id: Some(sig.key_id),
-                artifact_sha256: Some(sig.artifact_sha256),
-                reason: Some(err.to_string()),
-            });
-        }
-    };
-    let artifact_sha = hex::encode(Sha256::digest(&bytes));
-    if artifact_sha != sig.artifact_sha256 {
-        return Ok(ProvenanceVerification {
-            ok: false,
-            code: "artifact_sha256_mismatch".to_string(),
-            key_id: Some(sig.key_id),
-            artifact_sha256: Some(artifact_sha),
-            reason: Some("artifact_sha256 mismatch".to_string()),
-        });
-    }
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(&key)
-        .map_err(|e| AgentError::Config(format!("init provenance hmac: {e}")))?;
-    mac.update(sig.artifact_sha256.as_bytes());
-    let expected = hex::encode(mac.finalize().into_bytes());
-    if expected != sig.signature_hex {
-        return Ok(ProvenanceVerification {
-            ok: false,
-            code: "signature_mismatch".to_string(),
-            key_id: Some(sig.key_id),
-            artifact_sha256: Some(sig.artifact_sha256),
-            reason: Some("signature mismatch".to_string()),
-        });
-    }
-    Ok(ProvenanceVerification {
-        ok: true,
-        code: "ok".to_string(),
-        key_id: Some(sig.key_id),
-        artifact_sha256: Some(sig.artifact_sha256),
-        reason: None,
-    })
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -11572,7 +11339,7 @@ fn build_doctor_support_bundle_with_options(
         deterministic,
     )?;
 
-    if let Ok(sig) = sign_artifact_bytes(cli, &manifest_body, true) {
+    if let Ok(sig) = sign_artifact_bytes(&hermes_state_root(cli), &manifest_body, true) {
         let sig_body = serde_json::to_vec_pretty(&sig)
             .map_err(|e| AgentError::Config(format!("serialize replay signature: {}", e)))?;
         append_bundle_bytes(
@@ -11667,7 +11434,11 @@ async fn run_verify_provenance(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| Some(provenance_sidecar_path_for_artifact(&artifact)));
-    let verification = verify_artifact_provenance(&cli, &artifact, signature_path.as_deref())?;
+    let verification = verify_artifact_provenance(
+        &hermes_state_root(&cli),
+        &artifact,
+        signature_path.as_deref(),
+    )?;
     let rendered = if json {
         serde_json::to_string(&verification)
             .map_err(|e| AgentError::Config(format!("serialize verification: {}", e)))?
@@ -12506,7 +12277,7 @@ async fn run_incident_pack(
         });
         let out = write_doctor_snapshot(&cli, &payload, None)?;
         if let Ok(snapshot_bytes) = std::fs::read(&out) {
-            if let Ok(sig) = sign_artifact_bytes(&cli, &snapshot_bytes, true) {
+            if let Ok(sig) = sign_artifact_bytes(&hermes_state_root(&cli), &snapshot_bytes, true) {
                 let _ = write_provenance_sidecar(&out, &sig);
             }
         }
@@ -12526,7 +12297,7 @@ async fn run_incident_pack(
     )?;
 
     let bundle_sig_path = if let Ok(bundle_bytes) = std::fs::read(&bundle) {
-        sign_artifact_bytes(&cli, &bundle_bytes, true)
+        sign_artifact_bytes(&hermes_state_root(&cli), &bundle_bytes, true)
             .ok()
             .and_then(|sig| write_provenance_sidecar(&bundle, &sig).ok())
             .map(|p| p.display().to_string())
@@ -12558,7 +12329,7 @@ async fn run_incident_pack(
 }
 
 async fn run_rotate_provenance_key(cli: Cli, json: bool) -> Result<(), AgentError> {
-    let path = provenance_key_path_for_cli(&cli);
+    let path = provenance_key_path_for_cli(&hermes_state_root(&cli));
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| AgentError::Io(format!("mkdir {}: {}", parent.display(), e)))?;
@@ -14585,162 +14356,6 @@ mod tests {
             read_env_key(&env_file, "OPENAI_API_KEY").as_deref(),
             Some("real-key")
         );
-    }
-
-    #[test]
-    fn provenance_sign_and_verify_round_trip() {
-        use clap::Parser;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let config_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&config_dir).expect("create cfg dir");
-        let cli = Cli::parse_from([
-            "hermes-agent-ultra",
-            "--config-dir",
-            config_dir.to_str().expect("cfg path utf8"),
-        ]);
-
-        let artifact = tmp.path().join("doctor-snapshot.json");
-        let body = b"{\"ok\":true}";
-        std::fs::write(&artifact, body).expect("write artifact");
-
-        let sig = sign_artifact_bytes(&cli, body, true).expect("sign");
-        let sidecar = write_provenance_sidecar(&artifact, &sig).expect("sidecar");
-        let verified =
-            verify_artifact_provenance(&cli, &artifact, Some(sidecar.as_path())).expect("verify");
-        assert!(verified.ok, "verification should pass");
-        assert_eq!(verified.code, "ok");
-        assert!(verified.reason.is_none(), "no reason on success");
-    }
-
-    #[test]
-    fn provenance_verify_detects_tampered_artifact() {
-        use clap::Parser;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let config_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&config_dir).expect("create cfg dir");
-        let cli = Cli::parse_from([
-            "hermes-agent-ultra",
-            "--config-dir",
-            config_dir.to_str().expect("cfg path utf8"),
-        ]);
-
-        let artifact = tmp.path().join("doctor-snapshot.json");
-        let body = b"{\"ok\":true}";
-        std::fs::write(&artifact, body).expect("write artifact");
-        let sig = sign_artifact_bytes(&cli, body, true).expect("sign");
-        let sidecar = write_provenance_sidecar(&artifact, &sig).expect("sidecar");
-
-        std::fs::write(&artifact, b"{\"ok\":false}").expect("tamper artifact");
-
-        let verified =
-            verify_artifact_provenance(&cli, &artifact, Some(sidecar.as_path())).expect("verify");
-        assert!(!verified.ok, "tamper must fail");
-        assert_eq!(verified.code, "artifact_sha256_mismatch");
-        assert_eq!(verified.reason.as_deref(), Some("artifact_sha256 mismatch"));
-    }
-
-    #[test]
-    fn provenance_verify_detects_signature_mismatch() {
-        use clap::Parser;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let config_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&config_dir).expect("create cfg dir");
-        let cli = Cli::parse_from([
-            "hermes-agent-ultra",
-            "--config-dir",
-            config_dir.to_str().expect("cfg path utf8"),
-        ]);
-
-        let artifact = tmp.path().join("doctor-snapshot.json");
-        let body = b"{\"ok\":true}";
-        std::fs::write(&artifact, body).expect("write artifact");
-        let sig = sign_artifact_bytes(&cli, body, true).expect("sign");
-        let sidecar = write_provenance_sidecar(&artifact, &sig).expect("sidecar");
-
-        let mut parsed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&sidecar).expect("read sidecar"))
-                .expect("parse sidecar");
-        parsed["signature_hex"] = serde_json::json!("deadbeef");
-        std::fs::write(
-            &sidecar,
-            serde_json::to_string_pretty(&parsed).expect("serialize sidecar"),
-        )
-        .expect("write tampered sidecar");
-
-        let verified =
-            verify_artifact_provenance(&cli, &artifact, Some(sidecar.as_path())).expect("verify");
-        assert!(!verified.ok, "signature mismatch must fail");
-        assert_eq!(verified.code, "signature_mismatch");
-        assert_eq!(verified.reason.as_deref(), Some("signature mismatch"));
-    }
-
-    #[test]
-    fn provenance_verify_detects_missing_sidecar_with_code() {
-        use clap::Parser;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let config_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&config_dir).expect("create cfg dir");
-        let cli = Cli::parse_from([
-            "hermes-agent-ultra",
-            "--config-dir",
-            config_dir.to_str().expect("cfg path utf8"),
-        ]);
-
-        let artifact = tmp.path().join("doctor-snapshot.json");
-        std::fs::write(&artifact, b"{\"ok\":true}").expect("write artifact");
-
-        let verified = verify_artifact_provenance(&cli, &artifact, None).expect("verify");
-        assert!(!verified.ok, "missing sidecar must fail");
-        assert_eq!(verified.code, "signature_read_error");
-        assert!(
-            verified
-                .reason
-                .as_deref()
-                .unwrap_or("")
-                .contains(".sig.json")
-        );
-    }
-
-    #[tokio::test]
-    async fn rotate_provenance_key_archives_previous_key_and_rekeys() {
-        use clap::Parser;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let config_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&config_dir).expect("create cfg dir");
-        let cli = Cli::parse_from([
-            "hermes-agent-ultra",
-            "--config-dir",
-            config_dir.to_str().expect("cfg path utf8"),
-        ]);
-
-        let old_key = load_or_create_provenance_key(&cli, true).expect("create key");
-        run_rotate_provenance_key(cli.clone(), true)
-            .await
-            .expect("rotate key");
-        let new_key = load_or_create_provenance_key(&cli, false).expect("load rotated key");
-        assert_ne!(old_key, new_key, "rotation must change active key bytes");
-
-        let auth_dir = provenance_key_path_for_cli(&cli)
-            .parent()
-            .expect("key path parent")
-            .to_path_buf();
-        let archived_count = std::fs::read_dir(auth_dir)
-            .expect("read auth dir")
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("provenance.key.")
-                    && entry.file_name().to_string_lossy().ends_with(".bak")
-            })
-            .count();
-        assert!(archived_count >= 1, "rotation should archive previous key");
     }
 
     #[test]
