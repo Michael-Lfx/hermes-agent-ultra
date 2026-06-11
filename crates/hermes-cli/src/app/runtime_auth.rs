@@ -3,7 +3,7 @@ use hermes_core::AgentError;
 use crate::auth::{NousDeviceCodeOptions, login_nous_device_code, save_nous_auth_state};
 
 use super::App;
-use super::auth_refresh::{AuthRefreshOutcome, run_auth_refresh};
+use super::auth_refresh::{AuthRefreshJob, AuthRefreshOutcome, run_auth_refresh};
 use super::provider::provider_api_key_from_env;
 
 impl App {
@@ -62,26 +62,35 @@ impl App {
         }
     }
 
-    pub(super) async fn refresh_runtime_provider_credentials_if_needed(
+    pub(super) async fn refresh_runtime_auth(
         &mut self,
         force_refresh: bool,
-    ) {
+        nous_login_reason: &str,
+    ) -> AuthRefreshOutcome {
         let provider = self.current_runtime_provider();
         let mut outcome = self
             .auth_lane
             .refresh(provider.clone(), force_refresh)
             .await;
         if outcome.nous_login_required
-            && self
-                .attempt_interactive_nous_login("credential missing or invalid")
-                .await
+            && self.attempt_interactive_nous_login(nous_login_reason).await
         {
-            outcome = run_auth_refresh(super::auth_refresh::AuthRefreshJob {
+            outcome = run_auth_refresh(AuthRefreshJob {
                 provider,
                 force_refresh: true,
             })
             .await;
         }
+        outcome
+    }
+
+    pub(super) async fn refresh_runtime_provider_credentials_if_needed(
+        &mut self,
+        force_refresh: bool,
+    ) {
+        let outcome = self
+            .refresh_runtime_auth(force_refresh, "credential missing or invalid")
+            .await;
         self.apply_auth_refresh_outcome(outcome);
     }
 
@@ -134,20 +143,9 @@ impl App {
     }
 
     pub(super) async fn force_auth_refresh_after_error(&mut self) -> bool {
-        let provider = self.current_runtime_provider();
-        let mut outcome = self.auth_lane.refresh(provider.clone(), true).await;
-        if outcome.nous_login_required
-            && self
-                .attempt_interactive_nous_login("runtime auth refresh failed")
-                .await
-        {
-            outcome = run_auth_refresh(super::auth_refresh::AuthRefreshJob {
-                provider,
-                force_refresh: true,
-            })
+        let outcome = self
+            .refresh_runtime_auth(true, "runtime auth refresh failed")
             .await;
-        }
-
         let refreshed = outcome.credential_rotated;
         let notice = if outcome.credential_rotated {
             Some(format!(
