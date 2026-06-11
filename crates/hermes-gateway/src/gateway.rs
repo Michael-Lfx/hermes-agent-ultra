@@ -398,6 +398,12 @@ impl Gateway {
         self.build_runtime_context(incoming, session_key).await
     }
 
+    fn platform_supports_streaming(&self, platform: &str) -> bool {
+        self.config.streaming_enabled
+            && !platform.eq_ignore_ascii_case("weixin")
+            && !platform.eq_ignore_ascii_case("whatsapp")
+    }
+
     /// Append a synthetic user turn and run the foreground agent route (slash flows).
     pub async fn append_user_message_and_route(
         &self,
@@ -411,9 +417,41 @@ impl Gateway {
             .replace_messages(session_key, messages.clone())
             .await;
         let route_id = Self::route_correlation_id(incoming, session_key);
-        self.route_non_streaming(incoming, Arc::new(messages), session_key, &route_id)
-            .await?;
+        let messages = Arc::new(messages);
+        if self.platform_supports_streaming(&incoming.platform) {
+            self.route_streaming(incoming, messages, session_key, &route_id)
+                .await?;
+        } else {
+            self.route_non_streaming(incoming, messages, session_key, &route_id)
+                .await?;
+        }
         Ok(())
+    }
+
+    /// Quick-command alias targets that must run through `apply_command_result`.
+    fn try_resolve_quick_alias_action(
+        input: &str,
+        quick_commands: &BTreeMap<String, QuickCommandConfig>,
+    ) -> Option<GatewayCommandResult> {
+        let (cmd, args) = Self::split_slash_command(input);
+        let key = Self::quick_command_key(&cmd);
+        let quick = quick_commands.get(&key)?;
+        if quick.kind.trim().to_ascii_lowercase() != "alias" {
+            return None;
+        }
+        let target = quick.target.as_deref().filter(|v| !v.trim().is_empty())?;
+        let mut rewritten = target.trim().to_string();
+        if !args.is_empty() {
+            rewritten.push(' ');
+            rewritten.push_str(&args);
+        }
+        let result = handle_command(&rewritten);
+        match result {
+            GatewayCommandResult::PlanMode { .. }
+            | GatewayCommandResult::BackgroundTask { .. }
+            | GatewayCommandResult::BtwTask { .. } => Some(result),
+            _ => None,
+        }
     }
 
     /// Wire the shared clarify dispatcher so inbound IM replies can fulfill an
@@ -1041,6 +1079,13 @@ impl Gateway {
         incoming: &IncomingMessage,
         session_key: &str,
     ) -> Result<bool, GatewayError> {
+        if let Some(result) =
+            Self::try_resolve_quick_alias_action(&incoming.text, &self.config.quick_commands)
+        {
+            return self
+                .apply_command_result(incoming, session_key, result)
+                .await;
+        }
         if let Some(reply) = self.resolve_quick_command(&incoming.text).await? {
             self.send_incoming_reply(incoming, &reply, None).await?;
             return Ok(true);

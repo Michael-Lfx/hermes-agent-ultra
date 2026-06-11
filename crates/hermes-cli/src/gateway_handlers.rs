@@ -25,7 +25,8 @@ use crate::gateway_main::{
     GatewayAgentCache, extract_last_assistant_reply, get_or_build_gateway_cached_agent,
     resolve_model_for_gateway, truncate_hook_tool_result,
 };
-use crate::gateway_plan_mode::{GatewayPlanTurnPrep, finalize_gateway_agent_reply, prepare_gateway_plan_turn};
+use crate::gateway_plan_mode::{finalize_gateway_agent_reply, prepare_gateway_plan_turn};
+use hermes_cli::plan_mode::PlanTurnPrep;
 
 fn gateway_conversation_reply(conv: &hermes_agent::ConversationResult) -> String {
     conv.final_response
@@ -486,8 +487,8 @@ pub(crate) async fn gateway_handle_message_non_streaming(
     let mut agent = agent.lock().await;
     let mut user_message = user_message;
     match prepare_gateway_plan_turn(&agent, &user_message) {
-        GatewayPlanTurnPrep::Run { user_message: um } => user_message = um,
-        GatewayPlanTurnPrep::ReplyOnly { text } => {
+        PlanTurnPrep::Run { user_message: um } => user_message = um,
+        PlanTurnPrep::ReplyOnly { text } => {
             drop(agent);
             return Ok(text);
         }
@@ -831,8 +832,8 @@ pub(crate) async fn gateway_handle_message_streaming(
     let mut agent = agent.lock().await;
     let mut user_message = user_message;
     match prepare_gateway_plan_turn(&agent, &user_message) {
-        GatewayPlanTurnPrep::Run { user_message: um } => user_message = um,
-        GatewayPlanTurnPrep::ReplyOnly { text } => {
+        PlanTurnPrep::Run { user_message: um } => user_message = um,
+        PlanTurnPrep::ReplyOnly { text } => {
             drop(agent);
             return Ok(text);
         }

@@ -456,12 +456,24 @@ impl App {
                 self.set_running(false);
             }
         } else {
-            // Regular user message
-            let user_message = self.prepare_user_message(trimmed);
-            self.session
-                .messages
-                .push(hermes_core::Message::user(user_message));
-            self.run_agent_turn().await?;
+            use crate::plan_mode::{PlanApprovalParseStyle, PlanTurnPrep, prepare_plan_turn};
+
+            match prepare_plan_turn(
+                &self.core.agent,
+                trimmed,
+                PlanApprovalParseStyle::Interactive,
+            ) {
+                PlanTurnPrep::ReplyOnly { text } => {
+                    crate::commands::emit_command_output(self, text);
+                }
+                PlanTurnPrep::Run { user_message } => {
+                    let user_message = self.prepare_user_message(&user_message);
+                    self.session
+                        .messages
+                        .push(hermes_core::Message::user(user_message));
+                    self.run_agent_turn().await?;
+                }
+            }
         }
 
         Ok(())

@@ -35,6 +35,7 @@ pub mod mcp_config;
 pub mod model_switch;
 pub mod pairing_store;
 pub mod paths;
+pub mod plan_mode;
 pub mod platform_toolsets;
 pub mod profiles;
 pub mod providers;
