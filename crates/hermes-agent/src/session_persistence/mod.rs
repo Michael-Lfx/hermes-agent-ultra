@@ -885,6 +885,20 @@ impl SessionPersistence {
         queries::end_session(&self.conn_arc()?, session_id, end_reason)
     }
 
+    pub fn archive_session(&self, session_id: &str, archived: bool) -> Result<(), AgentError> {
+        let conn = self.conn_arc()?;
+        let guard = conn
+            .lock()
+            .map_err(|_| AgentError::Io("state db lock poisoned".into()))?;
+        guard
+            .execute(
+                "UPDATE sessions SET archived = ?1 WHERE id = ?2",
+                rusqlite::params![if archived { 1 } else { 0 }, session_id],
+            )
+            .map_err(|e| AgentError::Io(format!("archive_session: {e}")))?;
+        Ok(())
+    }
+
     pub fn reopen_session(&self, session_id: &str) -> Result<(), AgentError> {
         queries::reopen_session(&self.conn_arc()?, session_id)
     }
@@ -974,6 +988,126 @@ impl SessionPersistence {
             limit,
         )
         .map_err(|e| AgentError::Io(e.to_string()))
+    }
+
+    /// Session statistics: total, today, week.
+    pub fn session_stats(&self) -> Result<(i64, i64, i64), AgentError> {
+        let conn = self.conn_arc()?;
+        let guard = conn
+            .lock()
+            .map_err(|_| AgentError::Io("state db lock poisoned".into()))?;
+
+        let total: i64 = guard
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+            .map_err(|e| AgentError::Io(format!("session_stats total: {e}")))?;
+
+        let now = queries::now_unix();
+        let today_start = now - 86400.0;
+        let week_start = now - 7.0 * 86400.0;
+
+        let today: i64 = guard
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE started_at >= ?1",
+                rusqlite::params![today_start],
+                |r| r.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("session_stats today: {e}")))?;
+
+        let week: i64 = guard
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE started_at >= ?1",
+                rusqlite::params![week_start],
+                |r| r.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("session_stats week: {e}")))?;
+
+        Ok((total, today, week))
+    }
+
+    /// Count empty sessions (0 messages).
+    pub fn count_empty_sessions(&self) -> Result<i64, AgentError> {
+        let conn = self.conn_arc()?;
+        let guard = conn
+            .lock()
+            .map_err(|_| AgentError::Io("state db lock poisoned".into()))?;
+
+        let count: i64 = guard
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE message_count = 0",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| AgentError::Io(format!("count_empty_sessions: {e}")))?;
+
+        Ok(count)
+    }
+
+    /// Delete empty sessions (0 messages), return deleted count.
+    pub fn delete_empty_sessions(&self) -> Result<u64, AgentError> {
+        let conn = self.conn_arc()?;
+        let deleted = write::execute_write(&conn, |c| {
+            let ids: Vec<String> = c
+                .prepare("SELECT id FROM sessions WHERE message_count = 0")
+                .map_err(|e| AgentError::Io(format!("delete_empty prepare: {e}")))?
+                .query_map([], |r| r.get(0))
+                .map_err(|e| AgentError::Io(format!("delete_empty query: {e}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AgentError::Io(format!("delete_empty read: {e}")))?;
+            if ids.is_empty() {
+                return Ok(0u64);
+            }
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            c.execute(
+                &format!(
+                    "UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IN ({placeholders})"
+                ),
+                rusqlite::params_from_iter(ids.iter()),
+            )
+            .map_err(|e| AgentError::Io(format!("delete_empty orphan: {e}")))?;
+            for sid in &ids {
+                c.execute(
+                    "DELETE FROM messages WHERE session_id = ?1",
+                    rusqlite::params![sid],
+                )
+                .map_err(|e| AgentError::Io(format!("delete_empty messages: {e}")))?;
+                c.execute("DELETE FROM sessions WHERE id = ?1", rusqlite::params![sid])
+                    .map_err(|e| AgentError::Io(format!("delete_empty session: {e}")))?;
+            }
+            Ok(ids.len() as u64)
+        })?;
+        self.after_write(&conn);
+        Ok(deleted)
+    }
+
+    /// Bulk delete sessions by ID, return deleted count. Max 500.
+    pub fn bulk_delete_sessions(&self, session_ids: &[String]) -> Result<u64, AgentError> {
+        if session_ids.is_empty() {
+            return Ok(0);
+        }
+        let ids: Vec<String> = session_ids.iter().cloned().take(500).collect();
+        let conn = self.conn_arc()?;
+        let deleted = write::execute_write(&conn, |c| {
+            let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            c.execute(
+                &format!(
+                    "UPDATE sessions SET parent_session_id = NULL WHERE parent_session_id IN ({placeholders})"
+                ),
+                rusqlite::params_from_iter(ids.iter()),
+            )
+            .map_err(|e| AgentError::Io(format!("bulk_delete orphan: {e}")))?;
+            for sid in &ids {
+                c.execute(
+                    "DELETE FROM messages WHERE session_id = ?1",
+                    rusqlite::params![sid],
+                )
+                .map_err(|e| AgentError::Io(format!("bulk_delete messages: {e}")))?;
+                c.execute("DELETE FROM sessions WHERE id = ?1", rusqlite::params![sid])
+                    .map_err(|e| AgentError::Io(format!("bulk_delete session: {e}")))?;
+            }
+            Ok(ids.len() as u64)
+        })?;
+        self.after_write(&conn);
+        Ok(deleted)
     }
 }
 

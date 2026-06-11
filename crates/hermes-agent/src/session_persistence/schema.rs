@@ -184,6 +184,7 @@ const SESSIONS_COLUMNS: &[(&str, &str)] = &[
     ("handoff_platform", "TEXT"),
     ("handoff_error", "TEXT"),
     ("rewind_count", "INTEGER NOT NULL DEFAULT 0"),
+    ("archived", "INTEGER NOT NULL DEFAULT 0"),
 ];
 
 const MESSAGES_COLUMNS: &[(&str, &str)] = &[

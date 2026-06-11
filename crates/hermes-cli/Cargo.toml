@@ -59,6 +59,7 @@ hermes-skills = { workspace = true }
 hermes-auth = { workspace = true }
 hermes-telemetry = { workspace = true }
 hermes-acp-server = { workspace = true }
+hermes-server = { workspace = true }
 hermes-intelligence = { workspace = true }
 hermes-insights = { workspace = true }
 clap = { workspace = true }
