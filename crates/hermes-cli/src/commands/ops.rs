@@ -13,7 +13,7 @@ use std::time::SystemTime;
 use hermes_core::AgentError;
 
 use super::{
-    background, compress, discover_repo_root_for_about, plan_capability_mode, policy,
+    background, compress, discover_repo_root_for_about, plan::plan_capability_mode, policy,
     read_json_file, replay_enabled_runtime, session, skills,
 };
 use crate::App;

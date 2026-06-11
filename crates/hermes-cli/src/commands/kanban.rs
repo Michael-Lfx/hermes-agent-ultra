@@ -88,7 +88,7 @@ fn render_kanban_status(board: &KanbanBoard) -> String {
 // Parse /kanban add arguments
 // ---------------------------------------------------------------------------
 
-fn parse_kanban_add(args: &[&str]) -> Result<NewKanbanTaskInput, AgentError> {
+pub(crate) fn parse_kanban_add(args: &[&str]) -> Result<NewKanbanTaskInput, AgentError> {
     if args.is_empty() {
         return Err(AgentError::Config(
             "Usage: /kanban add <title> [--lane <todo|doing|blocked|done>] [--priority <1..5>] [--assignee <name>] [--depends K-0001,K-0002] [--desc <text>]".to_string(),

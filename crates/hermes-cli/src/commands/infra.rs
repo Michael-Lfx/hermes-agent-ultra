@@ -455,7 +455,7 @@ fn extract_json_path<'a>(
     Some(cur)
 }
 
-fn extract_embedding_diag_line(payload: &serde_json::Value) -> String {
+pub(crate) fn extract_embedding_diag_line(payload: &serde_json::Value) -> String {
     let backend = [
         &["backend"][..],
         &["embedding_backend"][..],

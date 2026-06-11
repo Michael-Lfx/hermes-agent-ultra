@@ -1385,23 +1385,23 @@ fn render_trigger_triage_learning_status() -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SubconsciousTask {
-    id: String,
-    source: String,
-    prompt: String,
-    score: f64,
-    risk: String,
-    requires_approval: bool,
-    status: String,
+    pub(crate) id: String,
+    pub(crate) source: String,
+    pub(crate) prompt: String,
+    pub(crate) score: f64,
+    pub(crate) risk: String,
+    pub(crate) requires_approval: bool,
+    pub(crate) status: String,
     #[serde(default)]
-    job_id: Option<String>,
-    created_at: String,
-    updated_at: String,
+    pub(crate) job_id: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct SubconsciousQueueState {
     #[serde(default)]
-    tasks: Vec<SubconsciousTask>,
+    pub(crate) tasks: Vec<SubconsciousTask>,
 }
 
 fn subconscious_state_path() -> PathBuf {
