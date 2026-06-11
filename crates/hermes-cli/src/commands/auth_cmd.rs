@@ -119,14 +119,14 @@ pub(crate) fn handle_telemetry_command(
 
     if let Some(repo_root) = super::detect_repo_root_from_cwd() {
         let report_dir = repo_root.join(".sync-reports");
-        let eval = super::latest_json_report(&report_dir, "eval-trend-gate-")
-            .and_then(|p| super::summarize_gate_report(&p, "eval"))
+        let eval = super::ops::latest_json_report(&report_dir, "eval-trend-gate-")
+            .and_then(|p| super::ops::summarize_gate_report(&p, "eval"))
             .unwrap_or_else(|| "eval=unknown".to_string());
-        let autopilot = super::latest_json_report(&report_dir, "performance-autopilot-")
-            .and_then(|p| super::summarize_performance_autopilot_report(&p, "autopilot"))
+        let autopilot = super::ops::latest_json_report(&report_dir, "performance-autopilot-")
+            .and_then(|p| super::ops::summarize_performance_autopilot_report(&p, "autopilot"))
             .unwrap_or_else(|| "autopilot=unknown".to_string());
-        let replay = super::latest_json_report(&report_dir, "deterministic-replay-")
-            .and_then(|p| super::summarize_gate_report(&p, "replay"))
+        let replay = super::ops::latest_json_report(&report_dir, "deterministic-replay-")
+            .and_then(|p| super::ops::summarize_gate_report(&p, "replay"))
             .unwrap_or_else(|| "replay=unknown".to_string());
         let _ = writeln!(out, "gates: {}; {}; {}", eval, autopilot, replay);
     }

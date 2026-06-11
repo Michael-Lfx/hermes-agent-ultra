@@ -5,20 +5,20 @@
 //! dispatch and shared plumbing.
 
 use std::fmt::Write as _;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
 
 use hermes_core::AgentError;
 
-use crate::alpha_runtime::render_mission_board;
-use crate::App;
-use crate::commands::{CommandResult, emit_command_output};
 use super::{
-    background, compress, policy, session, skills,
-    discover_repo_root_for_about, read_json_file,
-    plan_capability_mode, replay_enabled_runtime,
+    background, compress, discover_repo_root_for_about, plan_capability_mode, policy,
+    read_json_file, replay_enabled_runtime, session, skills,
 };
+use crate::App;
+use crate::alpha_runtime::render_mission_board;
+use crate::commands::{CommandResult, emit_command_output};
 
 // ---------------------------------------------------------------------------
 // RepoReviewBudgetProfile
@@ -146,7 +146,7 @@ fn apply_repo_review_budget_profile(profile: RepoReviewBudgetProfile) {
 // Report helpers
 // ---------------------------------------------------------------------------
 
-fn latest_json_report(report_dir: &Path, prefix: &str) -> Option<PathBuf> {
+pub(crate) fn latest_json_report(report_dir: &Path, prefix: &str) -> Option<PathBuf> {
     let mut reports: Vec<PathBuf> = std::fs::read_dir(report_dir)
         .ok()?
         .filter_map(|entry| {
@@ -163,7 +163,7 @@ fn latest_json_report(report_dir: &Path, prefix: &str) -> Option<PathBuf> {
     reports.into_iter().last()
 }
 
-fn summarize_gate_report(path: &Path, key: &str) -> Option<String> {
+pub(crate) fn summarize_gate_report(path: &Path, key: &str) -> Option<String> {
     let report = read_json_file(path)?;
     let ok = report
         .get("ok")
@@ -255,7 +255,7 @@ const AUTOPILOT_ALLOWED_ENV_KEYS: &[&str] = &[
     "HERMES_PERF_AUTOPILOT_MODE",
 ];
 
-fn summarize_performance_autopilot_report(path: &Path, key: &str) -> Option<String> {
+pub(crate) fn summarize_performance_autopilot_report(path: &Path, key: &str) -> Option<String> {
     let report = read_json_file(path)?;
     let ok = report
         .get("ok")
@@ -555,7 +555,10 @@ pub(crate) async fn handle_dashboard_command(
 // /simulate
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_simulate_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_simulate_command(
+    app: &mut App,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         let counters = app.tool_registry.policy_counters();
         emit_command_output(
@@ -846,7 +849,7 @@ fn handle_ops_tool_profile_command(
 // /ops eval
 // ---------------------------------------------------------------------------
 
-async fn handle_ops_eval_command(
+pub(crate) async fn handle_ops_eval_command(
     app: &mut App,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
@@ -924,7 +927,10 @@ async fn handle_ops_eval_command(
 // /qos
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_qos_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) async fn handle_qos_command(
+    app: &mut App,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let sub = args
         .first()
         .copied()
@@ -1514,7 +1520,10 @@ async fn handle_ops_cockpit_command(
 // /ops — main dispatcher
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_ops_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) async fn handle_ops_command(
+    app: &mut App,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         let yolo = !app.config.approval.require_approval;
         let policy_mode = std::env::var("HERMES_TOOL_POLICY_MODE")
