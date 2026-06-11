@@ -688,7 +688,43 @@ pub(crate) fn stream_chunk_has_progress(chunk: &StreamChunk) -> bool {
         || chunk.usage.is_some()
 }
 
-pub(crate) fn process_stream_lane_event(app: &mut App, state: &mut TuiState, event: Event) -> bool {
+pub(crate) enum StreamLaneOutcome {
+    Handled(bool),
+    AgentRunComplete {
+        result: Result<AgentResult, String>,
+        elapsed_secs: f64,
+    },
+    ManagedAppRunComplete {
+        result: Result<Box<App>, String>,
+        elapsed_secs: f64,
+    },
+}
+
+fn apply_stream_lane_outcome(
+    app: &mut App,
+    state: &mut TuiState,
+    outcome: StreamLaneOutcome,
+) -> bool {
+    match outcome {
+        StreamLaneOutcome::Handled(redraw) => redraw,
+        StreamLaneOutcome::AgentRunComplete {
+            result,
+            elapsed_secs,
+        } => {
+            handle_agent_run_complete(app, state, result, elapsed_secs);
+            true
+        }
+        StreamLaneOutcome::ManagedAppRunComplete {
+            result,
+            elapsed_secs,
+        } => {
+            handle_managed_app_run_complete(app, state, result, elapsed_secs);
+            true
+        }
+    }
+}
+
+pub(crate) fn process_stream_lane_event(state: &mut TuiState, event: Event) -> StreamLaneOutcome {
     match event {
         Event::StreamDelta(delta) => {
             if !delta.is_empty() {
@@ -712,7 +748,7 @@ pub(crate) fn process_stream_lane_event(app: &mut App, state: &mut TuiState, eve
                 .expect("processing")
                 .stream_buffer
                 .push_str(&delta);
-            true
+            StreamLaneOutcome::Handled(true)
         }
         Event::StreamChunk(chunk) => {
             if stream_chunk_has_progress(&chunk) {
@@ -1004,7 +1040,7 @@ pub(crate) fn process_stream_lane_event(app: &mut App, state: &mut TuiState, eve
                     state.last_usage_total_emitted = Some(usage.total_tokens);
                 }
             }
-            true
+            StreamLaneOutcome::Handled(true)
         }
         Event::AgentDone => {
             if state
@@ -1047,23 +1083,23 @@ pub(crate) fn process_stream_lane_event(app: &mut App, state: &mut TuiState, eve
                     .clear();
                 state.status_message.clear();
             }
-            true
+            StreamLaneOutcome::Handled(true)
         }
         Event::AgentRunComplete {
             result,
             elapsed_secs,
-        } => {
-            handle_agent_run_complete(app, state, result, elapsed_secs);
-            true
-        }
+        } => StreamLaneOutcome::AgentRunComplete {
+            result,
+            elapsed_secs,
+        },
         Event::ManagedAppRunComplete {
             result,
             elapsed_secs,
-        } => {
-            handle_managed_app_run_complete(app, state, result, elapsed_secs);
-            true
-        }
-        _ => false,
+        } => StreamLaneOutcome::ManagedAppRunComplete {
+            result,
+            elapsed_secs,
+        },
+        _ => StreamLaneOutcome::Handled(false),
     }
 }
 
@@ -1461,7 +1497,8 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                 if let Some(first) = stream_event {
                     let mut task_completed =
                         stream_event_completes_background_task(&first);
-                    let mut redraw = process_stream_lane_event(&mut app, &mut state, first);
+                    let outcome = process_stream_lane_event(&mut state, first);
+                    let mut redraw = apply_stream_lane_outcome(&mut app, &mut state, outcome);
                     let (drain_cap, drain_budget) =
                         stream_lane_budget(state.phase.is_processing(), state.phase.processing_mut().expect("processing").stream_chunk_count);
                     let drain_started = Instant::now();
@@ -1469,7 +1506,8 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         match tui.stream_events.try_recv() {
                             Ok(next) => {
                                 task_completed |= stream_event_completes_background_task(&next);
-                                redraw |= process_stream_lane_event(&mut app, &mut state, next);
+                                let outcome = process_stream_lane_event(&mut state, next);
+                                redraw |= apply_stream_lane_outcome(&mut app, &mut state, outcome);
                                 if drain_started.elapsed() >= drain_budget {
                                     break;
                                 }
