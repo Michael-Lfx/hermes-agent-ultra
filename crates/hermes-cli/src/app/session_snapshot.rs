@@ -162,7 +162,11 @@ impl App {
         self.apply_agent_result(result);
         self.snapshot_gate.record_mutation();
         if end_of_run || self.snapshot_gate.should_persist() {
-            self.persist_session_snapshot(None).map(|_| ())?;
+            if end_of_run {
+                self.persist_session_snapshot(None).map(|_| ())?;
+            } else {
+                self.enqueue_session_snapshot(None).map(|_| ())?;
+            }
             self.snapshot_gate.mark_persisted();
         }
         Ok(())
@@ -328,14 +332,39 @@ impl App {
         let json = serde_json::to_string_pretty(&payload).map_err(|e| {
             AgentError::Config(format!("Failed to serialize session snapshot: {e}"))
         })?;
-        std::fs::write(&path, json).map_err(|e| {
-            AgentError::Io(format!(
-                "Failed to write session snapshot {}: {}",
-                path.display(),
-                e
-            ))
-        })?;
+        self.persist_lane
+            .write_blocking(path.clone(), json)
+            .map_err(|e| AgentError::Io(e.to_string()))?;
         self.enforce_session_snapshot_guardrails(&sessions_dir, &path)?;
+        Ok(path)
+    }
+
+    pub(super) fn enqueue_session_snapshot(
+        &self,
+        name_override: Option<&str>,
+    ) -> Result<PathBuf, AgentError> {
+        let sessions_dir = self.state_root.join("sessions");
+        let stem = name_override
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .unwrap_or(self.session.session_id.as_str());
+        let path = sessions_dir.join(format!("{stem}.json"));
+        let payload = serde_json::json!({
+            "session_info": self.session_info(),
+            "messages": self.session.messages.iter().map(|m| {
+                serde_json::json!({
+                    "role": format!("{:?}", m.role),
+                    "content": m.content.as_deref().unwrap_or(""),
+                    "tool_call_id": m.tool_call_id,
+                    "tool_calls": m.tool_calls,
+                    "reasoning_content": m.reasoning_content,
+                })
+            }).collect::<Vec<_>>(),
+        });
+        let json = serde_json::to_string_pretty(&payload).map_err(|e| {
+            AgentError::Config(format!("Failed to serialize session snapshot: {e}"))
+        })?;
+        self.persist_lane.enqueue(path.clone(), json);
         Ok(path)
     }
 }

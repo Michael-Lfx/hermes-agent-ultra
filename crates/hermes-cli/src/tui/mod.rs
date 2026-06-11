@@ -44,6 +44,7 @@ use hermes_core::{AgentError, AgentResult, Message, StreamChunk};
 use crate::app::{
     AcpServerRuntime, AgentCoordinator, App, ModelRuntime, SessionRuntime, SessionSnapshotRuntime,
     SlashCommandHost, TranscriptRuntime, UiChromeRuntime,
+    actors::{AgentLane, StandardAgentRunRequest},
 };
 use crate::commands;
 use crate::theme::Theme;
@@ -441,6 +442,11 @@ async fn abort_and_join_task(task: &mut Option<JoinHandle<()>>) {
         handle.abort();
         let _ = handle.await;
     }
+}
+
+async fn abort_agent_lanes(agent_lane: &AgentLane, managed_task: &mut Option<JoinHandle<()>>) {
+    agent_lane.abort();
+    abort_and_join_task(managed_task).await;
 }
 
 /// Blocking crossterm reader on a dedicated OS thread, bridged into the async event loop.
@@ -5805,7 +5811,8 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
     let mut frame_tick = tokio::time::interval(Duration::from_millis(60));
     frame_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut needs_redraw = true;
-    let mut active_agent_task: Option<JoinHandle<()>> = None;
+    let agent_lane = AgentLane::spawn();
+    let mut active_managed_task: Option<JoinHandle<()>> = None;
 
     // Main event loop
     while app.running() {
@@ -5850,7 +5857,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         if is_ctrl_c(&key) {
                             if state.phase.is_processing() {
                                 app.interrupt_controller_mut().interrupt(None);
-                                abort_and_join_task(&mut active_agent_task).await;
+                                abort_agent_lanes(&agent_lane, &mut active_managed_task).await;
                                 tui.event_sender().send(Event::Interrupt).ok();
                             }
                             app.set_running(false);
@@ -5878,7 +5885,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         let should_quit = state.handle_key(key, &mut app);
                         if should_quit {
                             app.interrupt_controller_mut().interrupt(None);
-                            abort_and_join_task(&mut active_agent_task).await;
+                            abort_agent_lanes(&agent_lane, &mut active_managed_task).await;
                             app.set_running(false);
                             break;
                         }
@@ -6057,10 +6064,8 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                                     elapsed_secs: started.elapsed().as_secs_f64(),
                                                 });
                                             });
-                                            active_agent_task = Some(task);
+                                            active_managed_task = Some(task);
                                         } else {
-                                            // Non-slash prompts run in a background task so stream events
-                                            // can be consumed/rendered live by this UI loop.
                                             app.input_history_mut().push(trimmed.clone());
                                             *app.history_index_mut() = app.input_history().len();
                                             let user_message = app.prepare_user_message(&trimmed);
@@ -6069,91 +6074,15 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                             state.begin_processing_cycle(app.current_model());
                                             state.status_message = "Processing...".to_string();
 
-                                            let stream_tx = tui.stream_sender();
-                                            let agent = app.agent().clone();
-                                            let stream_enabled = app.config().streaming.enabled;
-                                            let tool_schemas = app.tool_schemas().to_vec();
-                                            let messages = app.messages().to_vec();
-                                            let stream_handle = app.stream_handle().cloned();
-                                            let task_id = Some(app.session_id().to_string());
-
-                                            let task = tokio::spawn(async move {
-                                                let started = Instant::now();
-                                                let (history, user_message) =
-                                                    match hermes_agent::split_messages_for_run_conversation(
-                                                        &messages,
-                                                    ) {
-                                                        Some(pair) => pair,
-                                                        None => {
-                                                            let _ = stream_tx.send(
-                                                                Event::AgentRunComplete {
-                                                                    result: Err(
-                                                                        "no user message in turn"
-                                                                            .to_string(),
-                                                                    ),
-                                                                    elapsed_secs: started
-                                                                        .elapsed()
-                                                                        .as_secs_f64(),
-                                                                },
-                                                            );
-                                                            return;
-                                                        }
-                                                    };
-                                                let result = if stream_enabled {
-                                                    let stream_cb: Option<
-                                                        Box<
-                                                            dyn Fn(hermes_core::StreamChunk)
-                                                                + Send
-                                                                + Sync,
-                                                        >,
-                                                    > = stream_handle.map(|h| {
-                                                        Box::new(
-                                                            move |chunk: hermes_core::StreamChunk| {
-                                                                h.send_chunk(chunk);
-                                                            },
-                                                        )
-                                                            as Box<
-                                                                dyn Fn(hermes_core::StreamChunk)
-                                                                    + Send
-                                                                    + Sync,
-                                                            >
-                                                    });
-                                                    agent
-                                                        .run_conversation(
-                                                            hermes_agent::RunConversationParams {
-                                                                user_message,
-                                                                conversation_history: history,
-                                                                task_id,
-                                                                stream_callback: stream_cb,
-                                                                persist_user_message: None,
-                                                                tools: Some(tool_schemas),
-                                                                persist_session: false,
-                                                            },
-                                                        )
-                                                        .await
-                                                        .map(|c| c.into_loop_result())
-                                                } else {
-                                                    agent
-                                                        .run_conversation(
-                                                            hermes_agent::RunConversationParams {
-                                                                user_message,
-                                                                conversation_history: history,
-                                                                task_id,
-                                                                stream_callback: None,
-                                                                persist_user_message: None,
-                                                                tools: Some(tool_schemas),
-                                                                persist_session: false,
-                                                            },
-                                                        )
-                                                        .await
-                                                        .map(|c| c.into_loop_result())
-                                                };
-                                                let _ = stream_tx.send(Event::AgentRunComplete {
-                                                    result: result.map_err(|e| e.to_string()),
-                                                    elapsed_secs: started.elapsed().as_secs_f64(),
-                                                });
+                                            agent_lane.submit(StandardAgentRunRequest {
+                                                agent: app.agent().clone(),
+                                                messages: app.messages().to_vec(),
+                                                stream_enabled: app.config().streaming.enabled,
+                                                tool_schemas: app.tool_schemas().to_vec(),
+                                                stream_handle: app.stream_handle().cloned(),
+                                                session_id: app.session_id().to_string(),
+                                                result_tx: tui.stream_sender(),
                                             });
-                                            active_agent_task = Some(task);
                                         }
                                     }
                                 }
@@ -6194,7 +6123,6 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         result,
                         elapsed_secs,
                     }) => {
-                        active_agent_task = None;
                         handle_agent_run_complete(
                             &mut app,
                             &mut state,
@@ -6207,7 +6135,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         result,
                         elapsed_secs,
                     }) => {
-                        active_agent_task = None;
+                        active_managed_task = None;
                         handle_managed_app_run_complete(
                             &mut app,
                             &mut state,
@@ -6217,7 +6145,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         needs_redraw = true;
                     }
                     Some(Event::Interrupt) => {
-                        abort_and_join_task(&mut active_agent_task).await;
+                        abort_agent_lanes(&agent_lane, &mut active_managed_task).await;
                         state.finish_processing_cycle("⏹ interrupted after");
                         state.phase.processing_mut().expect("processing").stream_buffer.clear();
                         state.phase.processing_mut().expect("processing").stream_md_cache.clear();
@@ -6229,7 +6157,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                     }
                     Some(Event::Shutdown) => {
                         app.interrupt_controller_mut().interrupt(None);
-                        abort_and_join_task(&mut active_agent_task).await;
+                        abort_agent_lanes(&agent_lane, &mut active_managed_task).await;
                         state.finish_processing_cycle("⏹ interrupted after");
                         state.phase.processing_mut().expect("processing").stream_buffer.clear();
                         state.phase.processing_mut().expect("processing").stream_md_cache.clear();
@@ -6270,7 +6198,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                         }
                     }
                     if task_completed {
-                        active_agent_task = None;
+                        active_managed_task = None;
                     }
                     if redraw {
                         if should_redraw_stream_while_composing(
@@ -6313,7 +6241,7 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
     }
 
     app.interrupt_controller_mut().interrupt(None);
-    abort_and_join_task(&mut active_agent_task).await;
+    abort_agent_lanes(&agent_lane, &mut active_managed_task).await;
     app.flush_session_teardown(false);
     shutdown_crossterm_event_pipeline(event_pipeline).await;
     shutdown_signal_bridge(signal_bridge).await;

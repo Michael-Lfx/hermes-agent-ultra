@@ -25,6 +25,7 @@ use crate::runtime_tool_wiring::{wire_cron_scheduler_backend, wire_stdio_clarify
 use crate::terminal_backend::build_terminal_backend;
 use crate::tui::StreamHandle;
 
+pub mod actors;
 mod agent_run;
 mod inference;
 mod objective;
@@ -58,6 +59,7 @@ pub use traits::{
     UiChromeRuntime,
 };
 
+use actors::PersistLane;
 use pet::{load_pet_settings, persist_pet_settings};
 use provider::{
     apply_cli_runtime_overrides, default_mouse_enabled, default_rtk_raw_mode,
@@ -77,6 +79,7 @@ pub struct App {
     pub chrome: ChromeState,
     pub acp: AcpState,
     pub(super) snapshot_gate: SnapshotPersistGate,
+    pub(super) persist_lane: PersistLane,
 }
 
 impl std::fmt::Debug for App {
@@ -111,6 +114,7 @@ impl Clone for App {
             chrome: self.chrome.clone(),
             acp: self.acp.clone(),
             snapshot_gate: self.snapshot_gate.clone(),
+            persist_lane: self.persist_lane.clone(),
         }
     }
 }
@@ -280,6 +284,7 @@ impl App {
             chrome: ChromeState::new(load_pet_settings()),
             acp: AcpState::new(),
             snapshot_gate: SnapshotPersistGate::new(),
+            persist_lane: PersistLane::spawn(),
         };
         app.ensure_session_stub_snapshot();
         Ok(app)
