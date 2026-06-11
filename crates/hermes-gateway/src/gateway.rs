@@ -691,7 +691,10 @@ impl Gateway {
     ) {
         let name = name.into();
         info!("Registering platform adapter: {}", name);
-        self.router.adapters.write().await.insert(name, adapter);
+        let wrapped = Arc::new(crate::instrumented_adapter::InstrumentedAdapter::new(
+            &name, adapter,
+        ));
+        self.router.adapters.write().await.insert(name, wrapped);
     }
 
     /// Retrieve a registered platform adapter by name.

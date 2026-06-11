@@ -30,6 +30,7 @@ pub mod gateway_requirements;
 pub mod hook_payloads;
 pub mod hooks;
 pub(crate) mod inbound_pipeline;
+pub(crate) mod instrumented_adapter;
 pub mod markdown_split;
 pub mod media;
 pub mod message_router;
