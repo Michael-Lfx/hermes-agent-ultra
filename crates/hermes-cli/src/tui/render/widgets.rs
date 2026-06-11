@@ -1002,9 +1002,17 @@ pub(crate) fn render_input(
         && state.phase.composer_mut().mode == InputMode::Insert
         && !state.phase.composer_mut().history_search_active
     {
-        textarea.set_placeholder_text(
-            "Type a message (Enter sends, Shift+Enter/Ctrl+J inserts newline)",
-        );
+        let clarify_awaiting = state
+            .phase
+            .processing()
+            .map(|p| p.clarify_awaiting)
+            .unwrap_or(false);
+        let placeholder = if clarify_awaiting {
+            "Clarify: reply with option number or text (Enter sends)"
+        } else {
+            "Type a message (Enter sends, Shift+Enter/Ctrl+J inserts newline)"
+        };
+        textarea.set_placeholder_text(placeholder);
         textarea.set_placeholder_style(
             Style::default()
                 .fg(colors.status_bar_dim)

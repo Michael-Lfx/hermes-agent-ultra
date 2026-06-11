@@ -455,6 +455,14 @@ impl ClarifyDispatcher {
     pub async fn pending(&self) -> usize {
         self.queue.lock().await.len()
     }
+
+    /// Whether a sync clarify call is blocked in `wait_for` for this session.
+    pub async fn session_has_active_wait(&self, session_key: &str) -> bool {
+        self.active_session_waits
+            .lock()
+            .await
+            .contains_key(session_key)
+    }
 }
 
 #[cfg(test)]

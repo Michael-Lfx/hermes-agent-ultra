@@ -21,7 +21,8 @@ use hermes_tools::tools::messaging::MessagingSessionContext;
 
 use crate::cli::Cli;
 use crate::commands::recover_queued_background_jobs;
-use crate::runtime_tool_wiring::{wire_cron_scheduler_backend, wire_stdio_clarify_backend};
+use crate::runtime_tool_wiring::{wire_cron_scheduler_backend, wire_dispatcher_clarify_backend};
+use hermes_gateway::tool_backends::ClarifyDispatcher;
 use crate::terminal_backend::build_terminal_backend;
 use crate::tui::StreamHandle;
 
@@ -81,6 +82,8 @@ pub struct App {
     pub runtime: RuntimeFlags,
     pub chrome: ChromeState,
     pub acp: AcpState,
+    /// Clarify question/answer bridge for TUI (replaces raw stdin while TUI owns the terminal).
+    pub clarify_dispatcher: ClarifyDispatcher,
     pub(super) snapshot_gate: SnapshotPersistGate,
     pub(super) persist_lane: PersistLane,
     pub(super) auth_lane: AuthLane,
@@ -117,6 +120,7 @@ impl Clone for App {
             runtime: self.runtime.clone(),
             chrome: self.chrome.clone(),
             acp: self.acp.clone(),
+            clarify_dispatcher: self.clarify_dispatcher.clone(),
             snapshot_gate: self.snapshot_gate.clone(),
             persist_lane: self.persist_lane.clone(),
             auth_lane: self.auth_lane.clone(),
@@ -227,7 +231,8 @@ impl App {
                 "send_message live delivery enabled via configured gateway adapters"
             );
         }
-        wire_stdio_clarify_backend(&tool_registry);
+        let clarify_dispatcher = ClarifyDispatcher::new();
+        wire_dispatcher_clarify_backend(&tool_registry, clarify_dispatcher.clone());
         let cron_data_dir = state_root.join("cron");
         std::fs::create_dir_all(&cron_data_dir)
             .map_err(|e| AgentError::Io(format!("cron dir {}: {}", cron_data_dir.display(), e)))?;
@@ -287,6 +292,7 @@ impl App {
             runtime: RuntimeFlags::new(),
             chrome: ChromeState::new(load_pet_settings()),
             acp: AcpState::new(),
+            clarify_dispatcher,
             snapshot_gate: SnapshotPersistGate::new(),
             persist_lane: PersistLane::spawn(),
             auth_lane: AuthLane::spawn(),
@@ -300,6 +306,20 @@ impl App {
 
     pub fn set_running(&mut self, running: bool) {
         self.runtime.running = running;
+    }
+
+    /// Whether a `clarify` tool call is waiting for an answer on this session.
+    pub async fn clarify_awaiting_answer(&self) -> bool {
+        self.clarify_dispatcher
+            .session_has_active_wait(&self.session.session_id)
+            .await
+    }
+
+    /// Deliver a clarify answer from the TUI composer while the agent turn is in flight.
+    pub async fn try_fulfill_clarify(&self, answer: &str) -> bool {
+        self.clarify_dispatcher
+            .try_fulfill_for_session(&self.session.session_id, answer)
+            .await
     }
 
     /// Attach a streaming handle (used by TUI mode).

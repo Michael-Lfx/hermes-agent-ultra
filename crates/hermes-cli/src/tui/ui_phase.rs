@@ -79,6 +79,10 @@ pub struct ProcessingState {
     pub last_progress_pulse_at: Option<Instant>,
     pub active_tools: Vec<String>,
     pub live_thinking: String,
+    /// `clarify` tool is waiting for an answer via the composer.
+    pub clarify_awaiting: bool,
+    /// Assistant prompt to inject when the stream lane applies tool_start side effects.
+    pub pending_clarify_prompt: Option<String>,
 }
 
 impl ProcessingState {
@@ -102,6 +106,8 @@ impl ProcessingState {
             last_progress_pulse_at: None,
             active_tools: Vec::new(),
             live_thinking: String::new(),
+            clarify_awaiting: false,
+            pending_clarify_prompt: None,
         }
     }
 }

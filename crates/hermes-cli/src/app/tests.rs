@@ -11,6 +11,7 @@ use crate::alpha_runtime::{
 use crate::test_env_lock;
 use hermes_config::LlmProviderConfig;
 use hermes_core::LlmProvider;
+use hermes_gateway::tool_backends::ClarifyDispatcher;
 use std::collections::HashMap;
 
 fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -56,6 +57,7 @@ fn build_minimal_test_app() -> App {
         runtime: RuntimeFlags::new(),
         chrome: ChromeState::new(PetSettings::default()),
         acp: AcpState::new(),
+        clarify_dispatcher: ClarifyDispatcher::new(),
         snapshot_gate: SnapshotPersistGate::new(),
         persist_lane: PersistLane::spawn(),
         auth_lane: AuthLane::spawn(),

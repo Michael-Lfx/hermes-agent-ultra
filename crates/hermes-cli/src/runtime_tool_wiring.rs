@@ -205,6 +205,28 @@ impl ClarifyBackend for StdioClarifyBackend {
     }
 }
 
+/// Replace `clarify` with dispatcher-backed blocking clarify (TUI / gateway).
+pub fn wire_dispatcher_clarify_backend(
+    tool_registry: &Arc<ToolRegistry>,
+    dispatcher: ClarifyDispatcher,
+) {
+    wire_gateway_clarify_backend(tool_registry, dispatcher);
+}
+
+/// Format a clarify question for chat/TUI display.
+pub fn format_clarify_prompt_for_ui(question: &str, choices: &[String]) -> String {
+    if choices.is_empty() {
+        return format!("❓ {question}\n\nReply with your answer.");
+    }
+    let mut lines = vec![format!("❓ {question}"), String::new()];
+    for (i, choice) in choices.iter().enumerate() {
+        lines.push(format!("  {}. {choice}", i + 1));
+    }
+    lines.push(String::new());
+    lines.push("Reply with option number or text.".to_string());
+    lines.join("\n")
+}
+
 /// Replace `clarify` signal backend with a stdio-backed clarify flow.
 pub fn wire_stdio_clarify_backend(tool_registry: &Arc<ToolRegistry>) {
     let handler: Arc<dyn ToolHandler> =
@@ -421,6 +443,16 @@ mod tests {
             serde_json::from_str(&list).expect("list output should be json");
         assert_eq!(listed["action"], "list");
         assert_eq!(listed["count"], 1);
+    }
+
+    #[test]
+    fn format_clarify_prompt_lists_choices() {
+        let text = super::format_clarify_prompt_for_ui(
+            "pick one",
+            &["alpha".into(), "beta".into()],
+        );
+        assert!(text.contains("1. alpha"));
+        assert!(text.contains("2. beta"));
     }
 
     #[tokio::test]

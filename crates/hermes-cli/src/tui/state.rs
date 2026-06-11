@@ -180,6 +180,8 @@ impl TuiState {
         processing.stream_needs_break = false;
         processing.active_tools.clear();
         processing.live_thinking.clear();
+        processing.clarify_awaiting = false;
+        processing.pending_clarify_prompt = None;
         processing.processing_phase = "preflight".to_string();
         processing.processing_phase_label = "preparing request".to_string();
         processing.processing_phase_progress = 0;

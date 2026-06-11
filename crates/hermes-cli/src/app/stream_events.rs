@@ -28,7 +28,7 @@ impl App {
         }
     }
 
-    pub(super) fn preview_for_status(raw: &str, max_chars: usize) -> String {
+    pub(crate) fn preview_for_status(raw: &str, max_chars: usize) -> String {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
             return String::new();
@@ -67,14 +67,21 @@ impl App {
             })),
             on_tool_start: Some(Box::new(move |tool: &str, args: &Value| {
                 let arg_preview = App::preview_for_status(&args.to_string(), 140);
-                App::push_stream_extra_event(
-                    &tool_start_shared,
-                    serde_json::json!({
-                        "ui_event": "tool_start",
-                        "tool": tool,
-                        "args_preview": arg_preview,
-                    }),
-                );
+                let mut payload = serde_json::json!({
+                    "ui_event": "tool_start",
+                    "tool": tool,
+                    "args_preview": arg_preview,
+                });
+                if tool == "clarify" {
+                    if let Some(question) = args.get("question").and_then(|v| v.as_str()) {
+                        payload["clarify_question"] =
+                            serde_json::Value::String(question.to_string());
+                    }
+                    if let Some(choices) = args.get("choices") {
+                        payload["clarify_choices"] = choices.clone();
+                    }
+                }
+                App::push_stream_extra_event(&tool_start_shared, payload);
             })),
             on_tool_complete: Some(Box::new(move |tool: &str, content: &str| {
                 let preview = App::preview_for_status(content, 160);

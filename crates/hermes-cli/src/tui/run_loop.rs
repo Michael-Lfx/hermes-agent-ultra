@@ -657,7 +657,15 @@ fn apply_stream_lane_outcome(
     outcome: StreamLaneOutcome,
 ) -> bool {
     match outcome {
-        StreamLaneOutcome::Handled(redraw) => redraw,
+        StreamLaneOutcome::Handled(mut redraw) => {
+            if let Some(processing) = state.phase.processing_mut() {
+                if let Some(prompt) = processing.pending_clarify_prompt.take() {
+                    app.push_ui_assistant(prompt);
+                    redraw = true;
+                }
+            }
+            redraw
+        }
         StreamLaneOutcome::AgentRunComplete {
             result,
             elapsed_secs,
@@ -771,6 +779,34 @@ pub(crate) fn process_stream_lane_event(state: &mut TuiState, event: Event) -> S
                                         .active_tools
                                         .push(tool.clone());
                                 }
+                                if tool == "clarify" {
+                                    let question = extra
+                                        .get("clarify_question")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("(clarification needed)");
+                                    let choices: Vec<String> = extra
+                                        .get("clarify_choices")
+                                        .and_then(|v| v.as_array())
+                                        .map(|arr| {
+                                            arr.iter()
+                                                .filter_map(|v| v.as_str().map(str::to_string))
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let prompt = crate::runtime_tool_wiring::format_clarify_prompt_for_ui(
+                                        question,
+                                        &choices,
+                                    );
+                                    let processing = state
+                                        .phase
+                                        .processing_mut()
+                                        .expect("processing");
+                                    processing.clarify_awaiting = true;
+                                    processing.pending_clarify_prompt = Some(prompt);
+                                    state.status_message =
+                                        "Clarify: reply in the composer (number or text)"
+                                            .to_string();
+                                }
                                 let args_preview = extra
                                     .get("args_preview")
                                     .and_then(|v| v.as_str())
@@ -795,6 +831,13 @@ pub(crate) fn process_stream_lane_event(state: &mut TuiState, event: Event) -> S
                                     .unwrap_or("tool")
                                     .trim()
                                     .to_string();
+                                if tool == "clarify" {
+                                    state
+                                        .phase
+                                        .processing_mut()
+                                        .expect("processing")
+                                        .clarify_awaiting = false;
+                                }
                                 if let Some(idx) = state
                                     .phase
                                     .processing_mut()
@@ -1166,6 +1209,40 @@ pub async fn run(mut app: App) -> Result<(), AgentError> {
                                 continue;
                             }
                             if state.phase.is_processing() {
+                                let clarify_input =
+                                    state.phase.composer_mut().input.trim().to_string();
+                                let clarify_awaiting = state
+                                    .phase
+                                    .processing()
+                                    .map(|p| p.clarify_awaiting)
+                                    .unwrap_or(false);
+                                if !clarify_input.is_empty()
+                                    && active_managed_task.is_some()
+                                    && (clarify_awaiting || app.clarify_awaiting_answer().await)
+                                {
+                                    state.phase.composer_mut().input.clear();
+                                    state.phase.composer_mut().cursor_position = 0;
+                                    state.phase.composer_mut().completions.clear();
+                                    state.phase.composer_mut().completion_index = None;
+                                    app.push_ui_user(clarify_input.clone());
+                                    if app.try_fulfill_clarify(&clarify_input).await {
+                                        if let Some(processing) = state.phase.processing_mut() {
+                                            processing.clarify_awaiting = false;
+                                        }
+                                        state.status_message =
+                                            "Clarify answer sent — agent continuing…".to_string();
+                                        state.push_activity(format!(
+                                            "clarify answer: {}",
+                                            App::preview_for_status(&clarify_input, 80)
+                                        ));
+                                    } else {
+                                        state.status_message =
+                                            "Could not deliver clarify answer (timed out?)"
+                                                .to_string();
+                                    }
+                                    needs_redraw = true;
+                                    continue;
+                                }
                                 state.status_message =
                                     "Still processing previous request… wait for completion."
                                         .to_string();
