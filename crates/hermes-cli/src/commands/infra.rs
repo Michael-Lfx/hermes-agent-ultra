@@ -1,4 +1,4 @@
-﻿//! Infrastructure slash commands: toolsets, plugins, MCP, reload, cron, agents, LSP, graph.
+//! Infrastructure slash commands: toolsets, plugins, MCP, reload, cron, agents, LSP, graph.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -8,31 +8,35 @@ use std::sync::Arc;
 use hermes_core::AgentError;
 use regex::Regex;
 
+use crate::App;
 use crate::alpha_runtime::load_contextlattice_policy;
 use crate::commands::{CommandResult, emit_command_output, yes_no};
-use crate::App;
 
-pub(crate) fn handle_toolsets_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    if app.config.platform_toolsets.is_empty() {
-        emit_command_output(app, "No explicit platform toolsets configured.");
+pub(crate) fn handle_toolsets_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    if host.config().platform_toolsets.is_empty() {
+        emit_command_output(host, "No explicit platform toolsets configured.");
         return Ok(CommandResult::Handled);
     }
-    let mut rows: Vec<_> = app.config.platform_toolsets.iter().collect();
+    let mut rows: Vec<_> = host.config().platform_toolsets.iter().collect();
     rows.sort_by(|a, b| a.0.cmp(b.0));
     let mut out = String::from("Configured toolsets by platform:\n");
     for (platform, toolsets) in rows {
         let _ = writeln!(out, "  - {:<10} {}", platform, toolsets.join(", "));
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_plugins_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_plugins_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let rows = super::discover_plugin_surface(true);
     if rows.is_empty() {
         let plugins_dir = hermes_config::hermes_home().join("plugins");
         emit_command_output(
-            app,
+            host,
             format!(
                 "No plugin bundles discovered.\nUser plugin dir: {}\nInstall with `hermes plugins install <owner/repo>`.",
                 plugins_dir.display()
@@ -40,7 +44,7 @@ pub(crate) fn handle_plugins_command(app: &mut App) -> Result<CommandResult, Age
         );
     } else {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Plugin surface ({} entries):\n{}",
                 rows.len(),
@@ -51,13 +55,15 @@ pub(crate) fn handle_plugins_command(app: &mut App) -> Result<CommandResult, Age
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_mcp_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    if app.config.mcp_servers.is_empty() {
-        emit_command_output(app, "No MCP servers configured in `config.yaml`.");
+pub(crate) fn handle_mcp_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    if host.config().mcp_servers.is_empty() {
+        emit_command_output(host, "No MCP servers configured in `config.yaml`.");
         return Ok(CommandResult::Handled);
     }
     let mut out = String::from("Configured MCP servers:\n");
-    for server in &app.config.mcp_servers {
+    for server in &host.config().mcp_servers {
         let endpoint = server
             .url
             .as_deref()
@@ -75,29 +81,32 @@ pub(crate) fn handle_mcp_command(app: &mut App) -> Result<CommandResult, AgentEr
             }
         );
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_reload_command(app: &mut App, cmd: &str) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_reload_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    cmd: &str,
+) -> Result<CommandResult, AgentError> {
     if cmd == "/reload-mcp" {
         emit_command_output(
-            app,
+            host,
             "MCP reload requested. Restart session/gateway for full connector renegotiation.",
         );
     } else {
         hermes_config::loader::load_dotenv();
-        match hermes_config::load_config(app.state_root.to_str()) {
+        match hermes_config::load_config(host.state_root().to_str()) {
             Ok(cfg) => {
-                app.config = Arc::new(cfg);
+                host.set_config(Arc::new(cfg));
                 emit_command_output(
-                    app,
+                    host,
                     "Reload complete: env + config rehydrated for this session.",
                 );
             }
             Err(err) => {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Reload partially applied (.env refreshed), but config parse failed: {}",
                         err
@@ -109,7 +118,9 @@ pub(crate) fn handle_reload_command(app: &mut App, cmd: &str) -> Result<CommandR
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_cron_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_cron_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let cron_data = hermes_config::cron_dir();
     let jobs_file = cron_data.join("jobs.json");
     let count = std::fs::read_to_string(&jobs_file)
@@ -135,7 +146,7 @@ pub(crate) fn handle_cron_command(app: &mut App) -> Result<CommandResult, AgentE
                 .unwrap_or(0)
         });
     emit_command_output(
-        app,
+        host,
         format!(
             "Cron scheduler data dir: {}\nPersisted jobs: {}\nUse `hermes cron list` for full job table.",
             cron_data.display(),
@@ -185,13 +196,16 @@ fn env_truthy(raw: &str) -> bool {
     )
 }
 
-pub(crate) fn handle_agents_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_agents_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let sub = args.first().map(|s| s.trim().to_ascii_lowercase());
 
     if matches!(sub.as_deref(), Some("pause")) {
         crate::env_vars::set_var("HERMES_DELEGATION_PAUSED", "1");
         emit_command_output(
-            app,
+            host,
             "Delegation spawning paused for this runtime.\nSet with `/agents resume`.\nStatus: `/agents status`.",
         );
         return Ok(CommandResult::Handled);
@@ -199,21 +213,21 @@ pub(crate) fn handle_agents_command(app: &mut App, args: &[&str]) -> Result<Comm
     if matches!(sub.as_deref(), Some("resume" | "unpause")) {
         crate::env_vars::set_var("HERMES_DELEGATION_PAUSED", "0");
         emit_command_output(
-            app,
+            host,
             "Delegation spawning resumed for this runtime.\nStatus: `/agents status`.",
         );
         return Ok(CommandResult::Handled);
     }
     if matches!(sub.as_deref(), Some("doctor")) {
         emit_command_output(
-            app,
+            host,
             "Agents doctor\n- queue manifest audit: `python3 scripts/audit_background_queue.py`\n- optional repair: `python3 scripts/audit_background_queue.py --repair`\n- delegation state: `/agents status`\n- spawn tree UI: `/agents` (TUI overlay)",
         );
         return Ok(CommandResult::Handled);
     }
 
     if matches!(sub.as_deref(), Some(other) if other != "status" && other != "list") {
-        emit_command_output(app, "Usage: /agents [status|pause|resume|doctor]");
+        emit_command_output(host, "Usage: /agents [status|pause|resume|doctor]");
         return Ok(CommandResult::Handled);
     }
 
@@ -224,7 +238,7 @@ pub(crate) fn handle_agents_command(app: &mut App, args: &[&str]) -> Result<Comm
     let rows = background_status_rows();
     if rows.is_empty() {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Delegation spawning: {}\nBackground jobs: 0\n\nNo background jobs found.\nAudit/repair queue manifests with `python3 scripts/audit_background_queue.py [--repair]`.",
                 if paused { "paused" } else { "active" }
@@ -233,7 +247,7 @@ pub(crate) fn handle_agents_command(app: &mut App, args: &[&str]) -> Result<Comm
     } else {
         let joined = rows.into_iter().take(20).collect::<Vec<_>>().join("\n");
         emit_command_output(
-            app,
+            host,
             format!(
                 "Delegation spawning: {}\nBackground jobs (top 20):\n{}\n\nQueue audit: `python3 scripts/audit_background_queue.py`\nPause/resume: `/agents pause` or `/agents resume`",
                 if paused { "paused" } else { "active" },
@@ -244,7 +258,10 @@ pub(crate) fn handle_agents_command(app: &mut App, args: &[&str]) -> Result<Comm
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_lsp_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_lsp_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let sub = args
         .first()
         .map(|v| v.to_ascii_lowercase())
@@ -260,47 +277,47 @@ pub(crate) fn handle_lsp_command(app: &mut App, args: &[&str]) -> Result<Command
             let _ = writeln!(
                 out,
                 "  code_index_enabled: {}",
-                yes_no(app.config.agent.code_index_enabled)
+                yes_no(host.config().agent.code_index_enabled)
             );
             let _ = writeln!(
                 out,
                 "  code_index_max_files: {}",
-                app.config.agent.code_index_max_files
+                host.config().agent.code_index_max_files
             );
             let _ = writeln!(
                 out,
                 "  code_index_max_symbols: {}",
-                app.config.agent.code_index_max_symbols
+                host.config().agent.code_index_max_symbols
             );
             let _ = writeln!(
                 out,
                 "  lsp_context_enabled: {}",
-                yes_no(app.config.agent.lsp_context_enabled)
+                yes_no(host.config().agent.lsp_context_enabled)
             );
             let _ = writeln!(
                 out,
                 "  lsp_context_max_chars: {}",
-                app.config.agent.lsp_context_max_chars
+                host.config().agent.lsp_context_max_chars
             );
             let _ = writeln!(
                 out,
                 "  tip: run `/plan map the repo architecture` to force a high-signal repo-map pass."
             );
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "refresh" => {
             emit_command_output(
-                app,
+                host,
                 "Code index refresh is automatic while the agent executes tool calls. Queue a focused analysis with `/plan <task>` if you want a deliberate repo-map rebuild now.",
             );
         }
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /lsp [status|refresh]\n  status   show code-index + LSP context configuration\n  refresh  explain how to trigger a fresh index pass",
             );
         }
-        _ => emit_command_output(app, "Usage: /lsp [status|refresh]"),
+        _ => emit_command_output(host, "Usage: /lsp [status|refresh]"),
     }
     Ok(CommandResult::Handled)
 }
@@ -592,14 +609,17 @@ async fn contextlattice_embedding_diagnostics_lines() -> Vec<String> {
     lines
 }
 
-pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) async fn handle_graph_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let sub = args
         .first()
         .map(|v| v.to_ascii_lowercase())
         .unwrap_or_else(|| "status".to_string());
     match sub.as_str() {
         "status" | "show" => {
-            let contextlattice_mcp = app.config.mcp_servers.iter().any(|entry| {
+            let contextlattice_mcp = host.config().mcp_servers.iter().any(|entry| {
                 let name = entry.name.to_ascii_lowercase();
                 let url = entry
                     .url
@@ -636,7 +656,7 @@ pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result
             } else {
                 let _ = writeln!(out, "  contextlattice_policy: unavailable");
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "embeddings" | "embedding" | "diag" => {
             let mut out = String::new();
@@ -651,7 +671,7 @@ pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result
                 }
             }
             out.push_str("\nIf endpoint support is partial, Hermes falls back to `/telemetry/recall` snapshots.");
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "repo" | "semantic" => {
             let mut max_files = 220usize;
@@ -678,7 +698,7 @@ pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result
             };
             if !repo_root.exists() {
                 emit_command_output(
-                    app,
+                    host,
                     format!("Repo path does not exist: {}", repo_root.display()),
                 );
                 return Ok(CommandResult::Handled);
@@ -688,7 +708,7 @@ pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result
             collect_graph_candidate_files(&repo_root, max_files, &mut files)?;
             if files.is_empty() {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "No candidate source files found under {} (max_files={}).",
                         repo_root.display(),
@@ -750,17 +770,16 @@ pub(crate) async fn handle_graph_command(app: &mut App, args: &[&str]) -> Result
                 let _ = writeln!(out, "  {}[\"{}\"] --> {}[\"{}\"]", src_n, src, dst_n, dst);
             }
             let _ = writeln!(out, "```");
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "help" => emit_command_output(
-            app,
+            host,
             "Usage: /graph [status|embeddings|repo [path] [--max-files N]]",
         ),
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /graph [status|embeddings|repo [path] [--max-files N]]",
         ),
     }
     Ok(CommandResult::Handled)
 }
-

@@ -33,7 +33,7 @@ use crate::{App, env_vars};
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_toolcards_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args.first().copied().unwrap_or("help");
@@ -43,7 +43,7 @@ pub(crate) fn handle_toolcards_command(
         }
         _ => "Tool-card controls:\n  /toolcards export   Export current tool-card transcript".to_string(),
     };
-    emit_command_output(app, msg);
+    emit_command_output(host, msg);
     Ok(CommandResult::Handled)
 }
 
@@ -52,30 +52,24 @@ pub(crate) fn handle_toolcards_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_personality_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let builtin = hermes_agent::builtin_personality_names();
     let builtin_descriptions = hermes_agent::builtin_personality_descriptions();
     if args.is_empty() {
         emit_command_output(
-            app,
-            super::format_personality_catalog(
-                app.current_personality.as_deref(),
-                builtin_descriptions,
-            ),
+            host,
+            super::format_personality_catalog(host.current_personality(), builtin_descriptions),
         );
     } else if args.len() == 1 && args[0].eq_ignore_ascii_case("list") {
         emit_command_output(
-            app,
-            super::format_personality_catalog(
-                app.current_personality.as_deref(),
-                builtin_descriptions,
-            ),
+            host,
+            super::format_personality_catalog(host.current_personality(), builtin_descriptions),
         );
     } else {
         let name = args.join(" ");
-        app.switch_personality(&name);
+        host.switch_personality(&name);
         let mut response = format!("Switched personality to `{}`.", name);
         if !name.contains(char::is_whitespace)
             && !name.eq_ignore_ascii_case("default")
@@ -86,7 +80,7 @@ pub(crate) fn handle_personality_command(
                 name, name,
             ));
         }
-        emit_command_output(app, response);
+        emit_command_output(host, response);
     }
     Ok(CommandResult::Handled)
 }
@@ -96,11 +90,11 @@ pub(crate) fn handle_personality_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_curator_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let skills_dir = hermes_config::hermes_home().join("skills");
-    let curator_config = curator_config_from_app(app);
+    let curator_config = curator_config_from_app(host);
 
     let sub = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
@@ -133,7 +127,7 @@ pub(crate) async fn handle_curator_command(
                 out.push_str(
                     "\nSkills created by the agent during background review will appear here.",
                 );
-                emit_command_output(app, &out);
+                emit_command_output(host, &out);
             } else {
                 let mut out = format!("## Agent-created skills ({})\n\n", rows.len());
 
@@ -178,7 +172,7 @@ pub(crate) async fn handle_curator_command(
                 out.push_str(
                     "\nUse `/curator run` to run the curator manually.\nUse `/curator history` to view run history.",
                 );
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
             }
         }
         "run" => {
@@ -193,7 +187,7 @@ pub(crate) async fn handle_curator_command(
                     "Curator dry-run: checked={} stale={} archived={} reactivated={}",
                     result.checked, result.marked_stale, result.archived, result.reactivated
                 );
-                emit_command_output(app, report_text);
+                emit_command_output(host, report_text);
                 return Ok(CommandResult::Handled);
             }
 
@@ -203,17 +197,17 @@ pub(crate) async fn handle_curator_command(
                 "Curator run: checked={} stale={} archived={} reactivated={}",
                 result.checked, result.marked_stale, result.archived, result.reactivated
             );
-            emit_command_output(app, report_text);
+            emit_command_output(host, report_text);
             let after_state = hermes_skills::load_curator_state(&skills_dir);
             // Detect if a backup was created during curator run (state changed)
             if before_state.last_run_at != after_state.last_run_at {
-                emit_command_output(app, "\n[Curator state updated]");
+                emit_command_output(host, "\n[Curator state updated]");
             }
         }
         "history" => {
             let state = hermes_skills::load_curator_state(&skills_dir);
             if state.run_count == 0 {
-                emit_command_output(app, "No curator run history yet.");
+                emit_command_output(host, "No curator run history yet.");
             } else {
                 let mut out = String::from("Curator run history\n\n");
                 let _ = writeln!(out, "run_count: {}", state.run_count);
@@ -223,7 +217,7 @@ pub(crate) async fn handle_curator_command(
                 if let Some(ref summary) = state.last_run_summary {
                     let _ = writeln!(out, "last_summary: {}", truncate_chars(summary, 160));
                 }
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
             }
         }
         "backup" => {
@@ -231,48 +225,48 @@ pub(crate) async fn handle_curator_command(
             match sub.as_deref() {
                 Some("create") | None => match backup_skills(&skills_dir) {
                     Ok(path) => {
-                        emit_command_output(app, format!("Backup created at {}", path.display()));
+                        emit_command_output(host, format!("Backup created at {}", path.display()));
                     }
                     Err(e) => {
-                        emit_command_output(app, format!("Backup failed: {}", e));
+                        emit_command_output(host, format!("Backup failed: {}", e));
                     }
                 },
                 Some("list") => match list_backups(&skills_dir) {
                     Ok(backups) => {
                         if backups.is_empty() {
-                            emit_command_output(app, "No curator backups found.");
+                            emit_command_output(host, "No curator backups found.");
                         } else {
                             let mut out = String::from("Curator backups\n");
                             for (name, _) in &backups {
                                 let _ = writeln!(out, "- {}", name);
                             }
-                            emit_command_output(app, out.trim_end());
+                            emit_command_output(host, out.trim_end());
                         }
                     }
                     Err(e) => {
-                        emit_command_output(app, format!("Failed to list backups: {}", e));
+                        emit_command_output(host, format!("Failed to list backups: {}", e));
                     }
                 },
                 Some("rollback") => {
                     let Some(backup_name) = args.get(2) else {
-                        emit_command_output(app, "Usage: /curator backup rollback <backup-name>");
+                        emit_command_output(host, "Usage: /curator backup rollback <backup-name>");
                         return Ok(CommandResult::Handled);
                     };
                     match rollback_skills(&skills_dir, backup_name) {
                         Ok(()) => {
                             emit_command_output(
-                                app,
+                                host,
                                 format!("Rolled back to backup `{}`.", backup_name),
                             );
                         }
                         Err(e) => {
-                            emit_command_output(app, format!("Rollback failed: {}", e));
+                            emit_command_output(host, format!("Rollback failed: {}", e));
                         }
                     }
                 }
                 Some(other) => {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Unknown backup subcommand '{}'. Use create, list, or rollback.",
                             other
@@ -283,7 +277,7 @@ pub(crate) async fn handle_curator_command(
         }
         other => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Unknown curator subcommand '{}'. Try: status, run, history, backup.",
                     other
@@ -294,8 +288,8 @@ pub(crate) async fn handle_curator_command(
     Ok(CommandResult::Handled)
 }
 
-fn curator_config_from_app(app: &App) -> hermes_skills::CuratorConfig {
-    let gc = &app.config.curator;
+fn curator_config_from_app(host: &impl crate::app::ModelRuntime) -> hermes_skills::CuratorConfig {
+    let gc = &host.config().curator;
     hermes_skills::CuratorConfig {
         enabled: gc.enabled,
         interval_hours: gc.interval_hours,
@@ -534,15 +528,15 @@ fn rollback_skills(skills_dir: &std::path::Path, backup_name: &str) -> Result<()
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_tools_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args
         .first()
         .is_some_and(|sub| sub.eq_ignore_ascii_case("trust"))
     {
-        let counters = app.tool_registry.policy_counters();
-        let tools = app.tool_registry.list_tools();
+        let counters = host.tool_registry().policy_counters();
+        let tools = host.tool_registry().list_tools();
         let mut risk: Vec<(String, i32, String)> = tools
             .iter()
             .map(|tool| {
@@ -597,20 +591,20 @@ pub(crate) fn handle_tools_command(
             let _ = writeln!(out, "- {name:<28} score={score:>3} tier={tier}");
         }
         out.push_str("\nUse `/ops status` and `/raw trace verify` for live enforcement + trace integrity signals.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
-    let tools = app.tool_registry.list_tools();
+    let tools = host.tool_registry().list_tools();
     if tools.is_empty() {
-        emit_command_output(app, "No tools registered.");
+        emit_command_output(host, "No tools registered.");
     } else {
         let mut out = format!("Registered tools ({}):\n", tools.len());
         for tool in &tools {
             out.push_str(&format!("- `{}` — {}\n", tool.name, tool.description));
         }
         out.push_str("\n\nUse `/tools trust` for a risk/score summary.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
     }
     Ok(CommandResult::Handled)
 }
@@ -620,25 +614,25 @@ pub(crate) fn handle_tools_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_config_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        let config_json = serde_json::to_string_pretty(&*app.config)
+        let config_json = serde_json::to_string_pretty(&*host.config())
             .unwrap_or_else(|e| format!("<serialization error: {}>", e));
-        emit_command_output(app, config_json);
+        emit_command_output(host, config_json);
     } else {
         match args[0] {
             "get" => {
                 if args.len() < 2 {
-                    emit_command_output(app, "Usage: /config get <key>");
+                    emit_command_output(host, "Usage: /config get <key>");
                 } else {
                     let key = args[1];
-                    let value = get_config_value(app, key);
+                    let value = get_config_value(host, key);
                     match value {
-                        Some(v) => emit_command_output(app, format!("{} = {}", key, v)),
+                        Some(v) => emit_command_output(host, format!("{} = {}", key, v)),
                         None => emit_command_output(
-                            app,
+                            host,
                             format!("Key '{}' not found in configuration.", key),
                         ),
                     }
@@ -646,20 +640,20 @@ pub(crate) fn handle_config_command(
             }
             "set" => {
                 if args.len() < 3 {
-                    emit_command_output(app, "Usage: /config set <key> <value>");
+                    emit_command_output(host, "Usage: /config set <key> <value>");
                 } else {
                     let key = args[1];
                     let value = args[2..].join(" ");
-                    if set_config_value(app, key, &value) {
-                        emit_command_output(app, format!("Set {} = {}", key, value));
+                    if set_config_value(host, key, &value) {
+                        emit_command_output(host, format!("Set {} = {}", key, value));
                     } else {
-                        emit_command_output(app, format!("Unknown configuration key: {}", key));
+                        emit_command_output(host, format!("Unknown configuration key: {}", key));
                     }
                 }
             }
             _ => {
                 emit_command_output(
-                    app,
+                    host,
                     format!("Unknown config action '{}'. Use 'get' or 'set'.", args[0]),
                 );
             }
@@ -668,43 +662,43 @@ pub(crate) fn handle_config_command(
     Ok(CommandResult::Handled)
 }
 
-fn get_config_value(app: &App, key: &str) -> Option<String> {
+fn get_config_value(host: &impl crate::app::ModelRuntime, key: &str) -> Option<String> {
     match key {
-        "model" => app.config.model.clone(),
-        "personality" => app.config.personality.clone(),
-        "max_turns" => Some(app.config.max_turns.to_string()),
-        "system_prompt" => app.config.system_prompt.clone(),
+        "model" => host.config().model.clone(),
+        "personality" => host.config().personality.clone(),
+        "max_turns" => Some(host.config().max_turns.to_string()),
+        "system_prompt" => host.config().system_prompt.clone(),
         _ => None,
     }
 }
 
-fn set_config_value(app: &mut App, key: &str, value: &str) -> bool {
+fn set_config_value(host: &mut impl crate::app::SlashCommandHost, key: &str, value: &str) -> bool {
     match key {
         "model" => {
-            app.config = Arc::new({
-                let mut cfg = (*app.config).clone();
+            host.set_config(Arc::new({
+                let mut cfg = host.config().as_ref().clone();
                 cfg.model = Some(value.to_string());
                 cfg
-            });
-            app.switch_model(value);
+            }));
+            host.switch_model(value);
             true
         }
         "personality" => {
-            app.config = Arc::new({
-                let mut cfg = (*app.config).clone();
+            host.set_config(Arc::new({
+                let mut cfg = host.config().as_ref().clone();
                 cfg.personality = Some(value.to_string());
                 cfg
-            });
-            app.switch_personality(value);
+            }));
+            host.switch_personality(value);
             true
         }
         "max_turns" => {
             if let Ok(turns) = value.parse::<u32>() {
-                app.config = Arc::new({
-                    let mut cfg = (*app.config).clone();
+                host.set_config(Arc::new({
+                    let mut cfg = host.config().as_ref().clone();
                     cfg.max_turns = turns;
                     cfg
-                });
+                }));
                 true
             } else {
                 false
@@ -718,12 +712,14 @@ fn set_config_value(app: &mut App, key: &str, value: &str) -> bool {
 // /usage
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_usage_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let display = app.agent.session_usage_display();
+pub(crate) fn handle_usage_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let display = host.agent().session_usage_display();
     let mut body = hermes_agent::format_usage_command_text(&display);
     if display.calls == 0 {
-        let estimated_tokens: usize = app
-            .messages
+        let estimated_tokens: usize = host
+            .messages()
             .iter()
             .map(|m| m.content.as_ref().map_or(0, |c| c.len()) / 4)
             .sum();
@@ -732,7 +728,7 @@ pub(crate) fn handle_usage_command(app: &mut App) -> Result<CommandResult, Agent
             estimated_tokens
         ));
     }
-    emit_command_output(app, body);
+    emit_command_output(host, body);
     Ok(CommandResult::Handled)
 }
 
@@ -740,10 +736,12 @@ pub(crate) fn handle_usage_command(app: &mut App) -> Result<CommandResult, Agent
 // /stop
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_stop_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    app.interrupt_controller.interrupt(None);
+pub(crate) fn handle_stop_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    host.interrupt_controller_mut().interrupt(None);
     emit_command_output(
-        app,
+        host,
         "[Stopping current agent execution]\nAgent execution halted. You can continue typing or use /retry.",
     );
     Ok(CommandResult::Handled)
@@ -753,22 +751,24 @@ pub(crate) fn handle_stop_command(app: &mut App) -> Result<CommandResult, AgentE
 // /status
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_status_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let msg_count = app.messages.len();
-    let turns = app
-        .messages
+pub(crate) fn handle_status_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let msg_count = host.messages().len();
+    let turns = host
+        .messages()
         .iter()
         .filter(|m| m.role == MessageRole::User)
         .count();
-    let usage = app.agent.session_usage_metrics();
+    let usage = host.agent().session_usage_metrics();
     let token_line = if usage.api_calls > 0 {
         format!(
             "  Session tokens: {} total ({} in / {} out, {} API calls)",
             usage.total_tokens, usage.input_tokens, usage.output_tokens, usage.api_calls
         )
     } else {
-        let estimated_tokens: usize = app
-            .messages
+        let estimated_tokens: usize = host
+            .messages()
             .iter()
             .map(|m| m.content.as_ref().map_or(0, |c| c.len()) / 4)
             .sum();
@@ -776,16 +776,16 @@ pub(crate) fn handle_status_command(app: &mut App) -> Result<CommandResult, Agen
     };
 
     emit_command_output(
-        app,
+        host,
         format!(
             "Session Status\n  ID:            {}\n  Model:         {}\n  Personality:   {}\n  Turns:         {}\n  Messages:      {}\n{}\n  Max turns:     {}",
-            app.session_id,
-            app.current_model,
-            app.current_personality.as_deref().unwrap_or("(none)"),
+            host.session_id(),
+            host.current_model(),
+            host.current_personality().unwrap_or("(none)"),
             turns,
             msg_count,
             token_line,
-            app.config.max_turns
+            host.config().max_turns
         ),
     );
     Ok(CommandResult::Handled)
@@ -905,15 +905,17 @@ fn parse_sync_report_metadata(path: &Path) -> (HashMap<String, String>, usize) {
     (meta, pending_commit_lines)
 }
 
-pub(crate) fn handle_about_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_about_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let mut out = String::new();
     let _ = writeln!(out, "Hermes Agent Ultra — About");
     let _ = writeln!(out, "  Version:         {}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(out, "  Session model:   {}", app.current_model);
+    let _ = writeln!(out, "  Session model:   {}", host.current_model());
     let _ = writeln!(
         out,
         "  Personality:     {}",
-        app.current_personality.as_deref().unwrap_or("(none)")
+        host.current_personality().unwrap_or("(none)")
     );
     if let Ok(exe) = std::env::current_exe() {
         let _ = writeln!(out, "  Binary:          {}", exe.display());
@@ -922,7 +924,7 @@ pub(crate) fn handle_about_command(app: &mut App) -> Result<CommandResult, Agent
         let _ = writeln!(out, "  Current dir:     {}", cwd.display());
     }
 
-    let raw_mode = app.tool_registry.raw_mode_state();
+    let raw_mode = host.tool_registry().raw_mode_state();
     let policy_mode = std::env::var("HERMES_TOOL_POLICY_MODE")
         .ok()
         .filter(|v| !v.trim().is_empty())
@@ -932,7 +934,7 @@ pub(crate) fn handle_about_command(app: &mut App) -> Result<CommandResult, Agent
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| "off".to_string());
 
-    let has_contextlattice_mcp = app.config.mcp_servers.iter().any(|entry| {
+    let has_contextlattice_mcp = host.config().mcp_servers.iter().any(|entry| {
         let name_hit = entry.name.to_ascii_lowercase().contains("contextlattice");
         let url_hit = entry
             .url
@@ -958,20 +960,20 @@ pub(crate) fn handle_about_command(app: &mut App) -> Result<CommandResult, Agent
     let _ = writeln!(
         out,
         "  - Code indexing: {} (max_files={}, max_symbols={})",
-        yes_no(app.config.agent.code_index_enabled),
-        app.config.agent.code_index_max_files,
-        app.config.agent.code_index_max_symbols
+        yes_no(host.config().agent.code_index_enabled),
+        host.config().agent.code_index_max_files,
+        host.config().agent.code_index_max_symbols
     );
     let _ = writeln!(
         out,
         "  - LSP context injection: {} (max_chars={})",
-        yes_no(app.config.agent.lsp_context_enabled),
-        app.config.agent.lsp_context_max_chars
+        yes_no(host.config().agent.lsp_context_enabled),
+        host.config().agent.lsp_context_max_chars
     );
     let _ = writeln!(
         out,
         "  - Background review loop: {}",
-        yes_no(app.config.agent.background_review_enabled)
+        yes_no(host.config().agent.background_review_enabled)
     );
     let _ = writeln!(out, "  - Multi-registry skills: yes");
     let _ = writeln!(out, "  - Skill security scanning: yes");
@@ -1093,7 +1095,7 @@ pub(crate) fn handle_about_command(app: &mut App) -> Result<CommandResult, Agent
         );
     }
 
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -1558,7 +1560,7 @@ fn subconscious_guard_allows(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_subconscious_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -1594,12 +1596,12 @@ pub(crate) fn handle_subconscious_command(
             out.push_str(
                 "\nUsage: /subconscious add <prompt> | approve <id> | reject <id> | run [n] [--dry-run] [profile=<strict|balanced|dev>] | profile [status|list|strict|balanced|dev|clear] | clear",
             );
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "add" => {
             let prompt = args.get(1..).unwrap_or(&[]).join(" ").trim().to_string();
             if prompt.is_empty() {
-                emit_command_output(app, "Usage: /subconscious add <prompt>");
+                emit_command_output(host, "Usage: /subconscious add <prompt>");
                 return Ok(CommandResult::Handled);
             }
             let (risk, requires_approval) = risk_for_prompt(&prompt);
@@ -1633,7 +1635,7 @@ pub(crate) fn handle_subconscious_command(
             state.tasks.push(task.clone());
             save_subconscious_state(&state)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Queued subconscious task {}\nstatus={} score={:.2} risk={}\n{}",
                     task.id,
@@ -1650,7 +1652,7 @@ pub(crate) fn handle_subconscious_command(
         }
         "approve" | "reject" => {
             let Some(task_id) = args.get(1).copied() else {
-                emit_command_output(app, format!("Usage: /subconscious {} <id>", action));
+                emit_command_output(host, format!("Usage: /subconscious {} <id>", action));
                 return Ok(CommandResult::Handled);
             };
             let mut state = load_subconscious_state();
@@ -1668,11 +1670,11 @@ pub(crate) fn handle_subconscious_command(
                 }
             }
             if !found {
-                emit_command_output(app, format!("Task not found: {}", task_id));
+                emit_command_output(host, format!("Task not found: {}", task_id));
                 return Ok(CommandResult::Handled);
             }
             save_subconscious_state(&state)?;
-            emit_command_output(app, format!("Subconscious task {} {}", task_id, action));
+            emit_command_output(host, format!("Subconscious task {} {}", task_id, action));
         }
         "run" => {
             let mut limit = 1usize;
@@ -1731,7 +1733,7 @@ pub(crate) fn handle_subconscious_command(
                 save_subconscious_state(&state)?;
             }
             emit_command_output(
-                app,
+                host,
                 format!(
                     "{} subconscious run profile={}\nreviewed={} dispatched={} blocked={}\n{}\nUse `/background status` and `/subconscious status` for tracking.",
                     if dry_run { "Dry-run" } else { "Executed" },
@@ -1755,34 +1757,34 @@ pub(crate) fn handle_subconscious_command(
                 .to_ascii_lowercase();
             match token.as_str() {
                 "status" | "show" => emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Subconscious profile: {}\nUse `/subconscious profile list` or `/subconscious profile strict|balanced|dev`.",
                         subconscious_profile_env().as_str()
                     ),
                 ),
                 "list" => emit_command_output(
-                    app,
+                    host,
                     "Subconscious profiles:\n- strict: only low-risk non-approval tasks auto-dispatch\n- balanced: low/medium dispatch, high-risk blocked\n- dev: permit all pending tasks\nSet with `/subconscious profile <name>`.",
                 ),
                 "clear" => {
                     env_vars::remove_var("HERMES_SUBCONSCIOUS_PROFILE");
                     emit_command_output(
-                        app,
+                        host,
                         "Cleared subconscious profile override (default=balanced).",
                     );
                 }
                 other => {
                     let Some(next) = SubconsciousProfile::parse(other) else {
                         emit_command_output(
-                            app,
+                            host,
                             "Usage: /subconscious profile [status|list|strict|balanced|dev|clear]",
                         );
                         return Ok(CommandResult::Handled);
                     };
                     env_vars::set_var("HERMES_SUBCONSCIOUS_PROFILE", next.as_str());
                     emit_command_output(
-                        app,
+                        host,
                         format!("Subconscious profile set to {}.", next.as_str()),
                     );
                 }
@@ -1795,10 +1797,10 @@ pub(crate) fn handle_subconscious_command(
                     AgentError::Io(format!("Failed to remove {}: {}", path.display(), e))
                 })?;
             }
-            emit_command_output(app, "Cleared subconscious queue.");
+            emit_command_output(host, "Cleared subconscious queue.");
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /subconscious [status|add <prompt>|approve <id>|reject <id>|run [n] [--dry-run] [profile=<strict|balanced|dev>]|profile [status|list|strict|balanced|dev|clear]|clear]",
         ),
     }
@@ -1810,7 +1812,7 @@ pub(crate) fn handle_subconscious_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_trigger_triage_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -1821,7 +1823,7 @@ pub(crate) fn handle_trigger_triage_command(
     match action.as_str() {
         "status" => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Trigger triage mode: {}\n{}\nUsage: /triage eval <source> <payload> | /triage queue <source> <payload> | /triage feedback <source> <outcome> <payload>",
                     trigger_triage_mode(),
@@ -1831,7 +1833,7 @@ pub(crate) fn handle_trigger_triage_command(
         }
         "list" | "rules" => {
             emit_command_output(
-                app,
+                host,
                 "Trigger triage heuristics\n\
                  - high severity: panic/outage/secret leak/drawdown/halt -> escalate\n\
                  - medium severity: repeated errors/blocked/timeout -> agent-run\n\
@@ -1843,23 +1845,23 @@ pub(crate) fn handle_trigger_triage_command(
         }
         "feedback" => {
             let Some(source) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /triage feedback <source> <outcome> <payload>");
+                emit_command_output(host, "Usage: /triage feedback <source> <outcome> <payload>");
                 return Ok(CommandResult::Handled);
             };
             let Some(outcome) = args.get(2).copied() else {
-                emit_command_output(app, "Usage: /triage feedback <source> <outcome> <payload>");
+                emit_command_output(host, "Usage: /triage feedback <source> <outcome> <payload>");
                 return Ok(CommandResult::Handled);
             };
             let payload = args.get(3..).unwrap_or(&[]).join(" ").trim().to_string();
             if payload.is_empty() {
-                emit_command_output(app, "Usage: /triage feedback <source> <outcome> <payload>");
+                emit_command_output(host, "Usage: /triage feedback <source> <outcome> <payload>");
                 return Ok(CommandResult::Handled);
             }
             let assessment = evaluate_trigger_triage(source, &payload);
             let entry = append_triage_learning_feedback(source, &payload, outcome, &assessment)?;
             let (bias_now, _) = triage_learning_bias(source, &payload);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Recorded triage feedback.\nsource={} outcome={} delta={:+} decision={} severity={}\nsource_bias_now={:+}",
                     entry.source,
@@ -1874,14 +1876,14 @@ pub(crate) fn handle_trigger_triage_command(
         "eval" | "queue" => {
             let Some(source) = args.get(1).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /triage eval <source> <payload>\nUsage: /triage queue <source> <payload>",
                 );
                 return Ok(CommandResult::Handled);
             };
             let payload = args.get(2..).unwrap_or(&[]).join(" ");
             if payload.trim().is_empty() {
-                emit_command_output(app, "Payload cannot be empty.");
+                emit_command_output(host, "Payload cannot be empty.");
                 return Ok(CommandResult::Handled);
             }
             let assessment = evaluate_trigger_triage(source, &payload);
@@ -1935,10 +1937,10 @@ pub(crate) fn handle_trigger_triage_command(
                     }
                 }
             }
-            emit_command_output(app, out);
+            emit_command_output(host, out);
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /triage [status|list|eval <source> <payload>|queue <source> <payload>|feedback <source> <outcome> <payload>]",
         ),
     }
@@ -1949,16 +1951,18 @@ pub(crate) fn handle_trigger_triage_command(
 // /verbose
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_verbose_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_verbose_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let current = tracing::enabled!(tracing::Level::DEBUG);
     if current {
         emit_command_output(
-            app,
+            host,
             "Verbose mode: OFF (switching to info level)\n(Runtime log level changes require restart — use `hermes -v` for verbose)",
         );
     } else {
         emit_command_output(
-            app,
+            host,
             "Verbose mode: ON (switching to debug level)\n(Runtime log level changes require restart — use `hermes -v` for verbose)",
         );
     }
@@ -1969,24 +1973,26 @@ pub(crate) fn handle_verbose_command(app: &mut App) -> Result<CommandResult, Age
 // /yolo
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_yolo_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let currently_required = app.config.approval.require_approval;
+pub(crate) fn handle_yolo_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let currently_required = host.config().approval.require_approval;
     let new_val = !currently_required;
 
-    app.config = Arc::new({
-        let mut cfg = (*app.config).clone();
+    host.set_config(Arc::new({
+        let mut cfg = host.config().as_ref().clone();
         cfg.approval.require_approval = new_val;
         cfg
-    });
+    }));
 
     if !new_val {
         emit_command_output(
-            app,
+            host,
             "YOLO mode: ON — tool executions will not require approval.\nBe careful! The agent can now execute tools without confirmation.",
         );
     } else {
         emit_command_output(
-            app,
+            host,
             "YOLO mode: OFF — tool executions will require approval.",
         );
     }
@@ -2144,19 +2150,19 @@ fn provider_reasoning_effort(cfg: &hermes_config::GatewayConfig, provider: &str)
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_reasoning_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         let enabled = toggle_reasoning_display();
         if enabled {
             emit_command_output(
-                app,
+                host,
                 "Reasoning display: ON — model reasoning will be shown.",
             );
         } else {
             emit_command_output(
-                app,
+                host,
                 "Reasoning display: OFF — model reasoning will be hidden.",
             );
         }
@@ -2165,11 +2171,11 @@ pub(crate) fn handle_reasoning_command(
 
     match args[0].trim().to_ascii_lowercase().as_str() {
         "status" => {
-            let (provider, _) = split_provider_model(&app.current_model);
-            let effort = provider_reasoning_effort(&app.config, provider)
+            let (provider, _) = split_provider_model(host.current_model());
+            let effort = provider_reasoning_effort(&host.config(), provider)
                 .unwrap_or_else(|| "auto".to_string());
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Reasoning status\n- display: {}\n- effort: {}\n- provider: {}",
                     if reasoning_display_enabled() {
@@ -2185,7 +2191,7 @@ pub(crate) fn handle_reasoning_command(
         "toggle" => {
             let enabled = toggle_reasoning_display();
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Reasoning display: {} — model reasoning will be {}.",
                     if enabled { "ON" } else { "OFF" },
@@ -2196,37 +2202,37 @@ pub(crate) fn handle_reasoning_command(
         "on" | "show" => {
             set_reasoning_display(true);
             emit_command_output(
-                app,
+                host,
                 "Reasoning display: ON — model reasoning will be shown.",
             );
         }
         "off" | "hide" => {
             set_reasoning_display(false);
             emit_command_output(
-                app,
+                host,
                 "Reasoning display: OFF — model reasoning will be hidden.",
             );
         }
         "set" | "level" | "effort" => {
             if args.len() < 2 {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /reasoning set <minimal|low|medium|high|xhigh|auto>",
                 );
                 return Ok(CommandResult::Handled);
             }
             let effort = parse_reasoning_effort(args[1])?;
-            let provider = split_provider_model(&app.current_model).0.to_string();
-            let current_model = app.current_model.clone();
-            app.config = Arc::new({
-                let mut cfg = (*app.config).clone();
+            let provider = split_provider_model(host.current_model()).0.to_string();
+            let current_model = host.current_model().to_string();
+            host.set_config(Arc::new({
+                let mut cfg = host.config().as_ref().clone();
                 set_provider_reasoning_effort(&mut cfg, &provider, effort);
                 cfg
-            });
-            app.switch_model(&current_model);
+            }));
+            host.switch_model(&current_model);
             let effort_label = effort.unwrap_or("auto");
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Reasoning effort set to `{}` for provider `{}` (model `{}`).",
                     effort_label, provider, current_model
@@ -2235,7 +2241,7 @@ pub(crate) fn handle_reasoning_command(
         }
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Reasoning controls:\n\
                  - /reasoning                 Toggle reasoning display\n\
                  - /reasoning status          Show display + effort state\n\
@@ -2246,16 +2252,16 @@ pub(crate) fn handle_reasoning_command(
         }
         shorthand => {
             let effort = parse_reasoning_effort(shorthand)?;
-            let provider = split_provider_model(&app.current_model).0.to_string();
-            let current_model = app.current_model.clone();
-            app.config = Arc::new({
-                let mut cfg = (*app.config).clone();
+            let provider = split_provider_model(host.current_model()).0.to_string();
+            let current_model = host.current_model().to_string();
+            host.set_config(Arc::new({
+                let mut cfg = host.config().as_ref().clone();
                 set_provider_reasoning_effort(&mut cfg, &provider, effort);
                 cfg
-            });
-            app.switch_model(&current_model);
+            }));
+            host.switch_model(&current_model);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Reasoning effort set to `{}` for provider `{}` (model `{}`).",
                     effort.unwrap_or("auto"),
@@ -2273,19 +2279,19 @@ pub(crate) fn handle_reasoning_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_raw_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args
         .first()
         .is_some_and(|sub| sub.eq_ignore_ascii_case("trace"))
     {
-        let replay_path = super::replay_log_path_for_session(&app.session_id);
+        let replay_path = super::replay_log_path_for_session(host.session_id());
         let sub = args.get(1).map(|s| s.trim().to_ascii_lowercase());
         match sub.as_deref() {
             None | Some("status") => {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay trace: {}{}\nSession: {}\nPath: {}\nUsage: /raw trace [on|off|toggle|status|tail [N]|focus <trace-id> [N]|graph [N]|verify|export [N] [PATH]|path]",
                         if replay_enabled_runtime() {
@@ -2298,13 +2304,13 @@ pub(crate) fn handle_raw_command(
                         } else {
                             " (no log yet)"
                         },
-                        app.session_id,
+                        host.session_id(),
                         replay_path.display()
                     ),
                 );
             }
             Some("path") => {
-                emit_command_output(app, format!("Replay path: {}", replay_path.display()));
+                emit_command_output(host, format!("Replay path: {}", replay_path.display()));
             }
             Some("tail") => {
                 let limit = args
@@ -2314,7 +2320,7 @@ pub(crate) fn handle_raw_command(
                     .clamp(1, 200);
                 if !replay_path.exists() {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Replay log not found for current session yet: {}",
                             replay_path.display()
@@ -2323,11 +2329,11 @@ pub(crate) fn handle_raw_command(
                     return Ok(CommandResult::Handled);
                 }
                 let rendered = render_replay_trace_tail(&replay_path, limit)?;
-                emit_command_output(app, rendered);
+                emit_command_output(host, rendered);
             }
             Some("focus") => {
                 let Some(trace_id) = args.get(2).copied() else {
-                    emit_command_output(app, "Usage: /raw trace focus <trace-id> [N]");
+                    emit_command_output(host, "Usage: /raw trace focus <trace-id> [N]");
                     return Ok(CommandResult::Handled);
                 };
                 let limit = args
@@ -2337,7 +2343,7 @@ pub(crate) fn handle_raw_command(
                     .clamp(1, 1000);
                 if !replay_path.exists() {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Replay log not found for current session yet: {}",
                             replay_path.display()
@@ -2346,7 +2352,7 @@ pub(crate) fn handle_raw_command(
                     return Ok(CommandResult::Handled);
                 }
                 let rendered = render_replay_trace_focus(&replay_path, trace_id, limit)?;
-                emit_command_output(app, rendered);
+                emit_command_output(host, rendered);
             }
             Some("graph") => {
                 let limit = args
@@ -2356,7 +2362,7 @@ pub(crate) fn handle_raw_command(
                     .clamp(1, 500);
                 if !replay_path.exists() {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Replay log not found for current session yet: {}",
                             replay_path.display()
@@ -2365,12 +2371,12 @@ pub(crate) fn handle_raw_command(
                     return Ok(CommandResult::Handled);
                 }
                 let rendered = render_replay_trace_graph(&replay_path, limit)?;
-                emit_command_output(app, rendered);
+                emit_command_output(host, rendered);
             }
             Some("verify") => {
                 if !replay_path.exists() {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Replay log not found for current session yet: {}",
                             replay_path.display()
@@ -2382,7 +2388,7 @@ pub(crate) fn handle_raw_command(
                     super::replay_trace_integrity(&replay_path)?;
                 let ok = parse_errors == 0 && chain_breaks == 0;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay integrity: {}\nentries: {}\nparse_errors: {}\nchain_breaks: {}\npath: {}",
                         if ok { "PASS" } else { "FAIL" },
@@ -2404,11 +2410,11 @@ pub(crate) fn handle_raw_command(
                         .join("logs")
                         .join("replay")
                         .join("exports")
-                        .join(format!("{}-tail.json", app.session_id))
+                        .join(format!("{}-tail.json", host.session_id()))
                 });
                 if !replay_path.exists() {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Replay log not found for current session yet: {}",
                             replay_path.display()
@@ -2418,7 +2424,7 @@ pub(crate) fn handle_raw_command(
                 }
                 let written = export_replay_trace_json(&replay_path, limit, &output_path)?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay export written.\nrows: {}\nsource: {}\noutput: {}",
                         written,
@@ -2436,7 +2442,7 @@ pub(crate) fn handle_raw_command(
                 };
                 env_vars::set_var("HERMES_REPLAY_ENABLED", if next { "1" } else { "0" });
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay trace mode: {}.\nThis applies to new turns in the current process.",
                         if next { "ON" } else { "OFF" }
@@ -2444,22 +2450,22 @@ pub(crate) fn handle_raw_command(
                 );
             }
             Some("help") | Some("--help") | Some("-h") => emit_command_output(
-                app,
+                host,
                 "Replay trace controls:\n  /raw trace status              Show enabled state + current log path\n  /raw trace on|off              Enable or disable deterministic replay trace logs\n  /raw trace toggle              Toggle replay trace logs\n  /raw trace tail [N]            Show latest trace events with lineage hashes\n  /raw trace focus <id> [N]      Filter replay rows by trace_id\n  /raw trace graph [N]           Show lineage edges for recent rows\n  /raw trace verify              Validate replay hash-chain integrity\n  /raw trace export [N] [PATH]   Export tail events to JSON\n  /raw trace path                Show trace log file for current session",
             ),
             _ => emit_command_output(
-                app,
+                host,
                 "Usage: /raw trace [on|off|toggle|status|tail [N]|focus <trace-id> [N]|graph [N]|verify|export [N] [PATH]|path]",
             ),
         }
         return Ok(CommandResult::Handled);
     }
 
-    let state = app.tool_registry.raw_mode_state();
-    let log_dir = app.tool_registry.rtk_log_dir();
+    let state = host.tool_registry().raw_mode_state();
+    let log_dir = host.tool_registry().rtk_log_dir();
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         emit_command_output(
-            app,
+            host,
             format!(
                 "RTK raw mode: {}{}\nDual logs: {}\nReplay trace: {}\nUsage: /raw [on|off|toggle|once|status|trace]",
                 if state.enabled { "ON" } else { "OFF" },
@@ -2481,13 +2487,13 @@ pub(crate) fn handle_raw_command(
 
     match args[0].trim().to_ascii_lowercase().as_str() {
         "help" => emit_command_output(
-            app,
+            host,
             "RTK raw controls:\n  /raw status        Show current mode + log path\n  /raw on            Disable output filtering for all tool calls\n  /raw off           Re-enable RTK output filtering\n  /raw toggle        Toggle global raw mode\n  /raw once          Raw pass-through for next tool call only\n  /raw trace ...     Deterministic replay trace controls",
         ),
         "once" => {
-            app.tool_registry.set_raw_mode_once();
+            host.tool_registry().set_raw_mode_once();
             emit_command_output(
-                app,
+                host,
                 "RTK raw mode armed for next tool call only. It auto-resets after one dispatch.",
             );
         }
@@ -2498,10 +2504,10 @@ pub(crate) fn handle_raw_command(
                 "toggle" => !state.enabled,
                 _ => state.enabled,
             };
-            app.tool_registry.set_raw_mode(next);
+            host.tool_registry().set_raw_mode(next);
             env_vars::set_var("HERMES_RTK_RAW", if next { "1" } else { "0" });
             emit_command_output(
-                app,
+                host,
                 format!(
                     "RTK raw mode: {} (dual logs: {})",
                     if next { "ON" } else { "OFF" },
@@ -2509,7 +2515,7 @@ pub(crate) fn handle_raw_command(
                 ),
             );
         }
-        _ => emit_command_output(app, "Usage: /raw [on|off|toggle|once|status|trace]"),
+        _ => emit_command_output(host, "Usage: /raw [on|off|toggle|once|status|trace]"),
     }
     Ok(CommandResult::Handled)
 }
@@ -2670,10 +2676,12 @@ fn export_replay_trace_json(
 // /history
 // ---------------------------------------------------------------------------
 
-pub(crate) fn handle_history_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let sp = session::session_db(app);
-    let db_messages = if sp.ensure_db().is_ok() && !app.session_id.is_empty() {
-        sp.load_session(&app.session_id).ok()
+pub(crate) fn handle_history_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let sp = session::session_db(host);
+    let db_messages = if sp.ensure_db().is_ok() && !host.session_id().is_empty() {
+        sp.load_session(host.session_id()).ok()
     } else {
         None
     };
@@ -2682,10 +2690,10 @@ pub(crate) fn handle_history_command(app: &mut App) -> Result<CommandResult, Age
         .as_ref()
         .filter(|m| !m.is_empty())
         .cloned()
-        .unwrap_or_else(|| app.transcript_messages());
+        .unwrap_or_else(|| host.transcript_messages());
 
     if transcript.is_empty() {
-        emit_command_output(app, "No conversation history yet.");
+        emit_command_output(host, "No conversation history yet.");
         return Ok(CommandResult::Handled);
     }
 
@@ -2714,7 +2722,7 @@ pub(crate) fn handle_history_command(app: &mut App) -> Result<CommandResult, Age
         };
         let _ = writeln!(out, "{:>3}. {:<7} {}", idx + 1, role, clipped);
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -2723,7 +2731,7 @@ pub(crate) fn handle_history_command(app: &mut App) -> Result<CommandResult, Age
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_recap_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let requested = args
@@ -2731,9 +2739,9 @@ pub(crate) fn handle_recap_command(
         .and_then(|raw| raw.trim().parse::<usize>().ok())
         .unwrap_or(24)
         .clamp(1, 200);
-    let transcript = app.transcript_messages();
+    let transcript = host.transcript_messages();
     if transcript.is_empty() {
-        emit_command_output(app, "No activity yet. Start with a prompt first.");
+        emit_command_output(host, "No activity yet. Start with a prompt first.");
         return Ok(CommandResult::Handled);
     }
 
@@ -2774,7 +2782,7 @@ pub(crate) fn handle_recap_command(
 
     let approx_tokens = (char_count / 4).max(1);
     emit_command_output(
-        app,
+        host,
         format!(
             "Session recap (last {} messages)\n\
              model: {}\n\
@@ -2784,7 +2792,7 @@ pub(crate) fn handle_recap_command(
              latest_user: {}\n\
              latest_hermes: {}",
             window.len(),
-            app.current_model,
+            host.current_model(),
             user_msgs,
             assistant_msgs,
             tool_msgs,
@@ -2803,7 +2811,7 @@ pub(crate) fn handle_recap_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_context_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -2813,19 +2821,19 @@ pub(crate) async fn handle_context_command(
         .to_ascii_lowercase();
     match action.as_str() {
         "status" => {
-            let transcript = app.transcript_messages();
+            let transcript = host.transcript_messages();
             let total_chars: usize = transcript
                 .iter()
                 .map(|m| m.content.as_deref().map(str::len).unwrap_or(0))
                 .sum();
             let approx_tokens = (total_chars / 4).max(1);
-            let context_files = if app.config.agent.skip_context_files {
+            let context_files = if host.config().agent.skip_context_files {
                 "disabled"
             } else {
                 "enabled"
             };
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Context status\n\
                      model: {}\n\
@@ -2833,7 +2841,7 @@ pub(crate) async fn handle_context_command(
                      approx_tokens: {}\n\
                      context_files: {}\n\
                      hint: run `/context breakdown` for per-message footprint or `/context compress` for immediate compaction",
-                    app.current_model,
+                    host.current_model(),
                     transcript.len(),
                     approx_tokens,
                     context_files
@@ -2841,9 +2849,9 @@ pub(crate) async fn handle_context_command(
             );
         }
         "breakdown" => {
-            let transcript = app.transcript_messages();
+            let transcript = host.transcript_messages();
             if transcript.is_empty() {
-                emit_command_output(app, "No transcript yet.");
+                emit_command_output(host, "No transcript yet.");
                 return Ok(CommandResult::Handled);
             }
             let mut out = String::from("Context breakdown (recent)\n");
@@ -2874,14 +2882,14 @@ pub(crate) async fn handle_context_command(
                     truncate_chars(preview, 70)
                 );
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "compress" | "compact" => {
-            return compress::handle_compress_command(app, &[]).await;
+            return compress::handle_compress_command(host, &[]).await;
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /context [status|breakdown|compress]\nAlias: /summary -> /recap",
             );
         }
@@ -2893,25 +2901,27 @@ pub(crate) async fn handle_context_command(
 // /provider
 // ---------------------------------------------------------------------------
 
-pub(crate) async fn handle_provider_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) async fn handle_provider_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let providers = curated_provider_slugs();
     if providers.is_empty() {
-        emit_command_output(app, "No providers registered.");
+        emit_command_output(host, "No providers registered.");
         return Ok(CommandResult::Handled);
     }
     let entries = provider_catalog_entries(&providers, 4).await;
     if entries.is_empty() {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Configured providers: {}\nCurrent model: {}",
                 providers.join(", "),
-                app.current_model
+                host.current_model()
             ),
         );
         return Ok(CommandResult::Handled);
     }
-    let mut out = format!("Current model: {}\n\nProviders:\n", app.current_model);
+    let mut out = format!("Current model: {}\n\nProviders:\n", host.current_model());
     for entry in entries {
         let preview = entry.models.join(", ");
         let suffix = if entry.total_models > entry.models.len() {
@@ -2921,7 +2931,7 @@ pub(crate) async fn handle_provider_command(app: &mut App) -> Result<CommandResu
         };
         let _ = writeln!(out, "  - {:<14} {}{}", entry.provider, preview, suffix);
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -2930,20 +2940,20 @@ pub(crate) async fn handle_provider_command(app: &mut App) -> Result<CommandResu
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_runbook_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args.first().copied().unwrap_or("list").to_ascii_lowercase();
     if action == "list" || action == "status" {
         emit_command_output(
-            app,
+            host,
             "Runbooks\n- auth-refresh: provider auth/session rejected\n- model-not-found: catalog drift / unknown model\n- contextlattice-connect: local memory integration bootstrap\n- tool-policy-deny: blocked by policy or sandbox profile\n- stream-finalization: stream done but transcript not finalized\n\nUse `/runbook show <name>`.",
         );
         return Ok(CommandResult::Handled);
     }
     if action == "show" {
         let Some(name) = args.get(1).map(|v| v.to_ascii_lowercase()) else {
-            emit_command_output(app, "Usage: /runbook show <name>");
+            emit_command_output(host, "Usage: /runbook show <name>");
             return Ok(CommandResult::Handled);
         };
         let body = match name.as_str() {
@@ -2964,7 +2974,7 @@ pub(crate) fn handle_runbook_command(
             }
             _ => {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Unknown runbook `{}`. Use `/runbook list` for available entries.",
                         name
@@ -2973,9 +2983,9 @@ pub(crate) fn handle_runbook_command(
                 return Ok(CommandResult::Handled);
             }
         };
-        emit_command_output(app, body);
+        emit_command_output(host, body);
         return Ok(CommandResult::Handled);
     }
-    emit_command_output(app, "Usage: /runbook [list|show <name>]");
+    emit_command_output(host, "Usage: /runbook [list|show <name>]");
     Ok(CommandResult::Handled)
 }

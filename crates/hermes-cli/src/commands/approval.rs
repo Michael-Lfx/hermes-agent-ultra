@@ -4,16 +4,15 @@ use std::fmt::Write as _;
 
 use hermes_core::AgentError;
 
-use crate::app::App;
 use crate::commands::{CommandResult, emit_command_output};
 use crate::pairing_store::{PairingStatus, PairingStore};
 
 pub(crate) async fn handle_gquota_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     _args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let provider = app
-        .current_model
+    let provider = host
+        .current_model()
         .split_once(':')
         .map(|(p, _)| p.trim().to_ascii_lowercase())
         .unwrap_or_else(|| "unknown".to_string());
@@ -70,11 +69,14 @@ pub(crate) async fn handle_gquota_command(
         out,
         "  - live quota API: unavailable in local CLI; check provider dashboard for hard usage limits."
     );
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_approve_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let store = PairingStore::open_default();
     if args.is_empty() || args[0].eq_ignore_ascii_case("list") {
         let pending: Vec<_> = store
@@ -85,7 +87,7 @@ pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<Com
             .collect();
         if pending.is_empty() {
             emit_command_output(
-                app,
+                host,
                 "No pending devices to approve. Use `hermes pairing list` for full inventory.",
             );
             return Ok(CommandResult::Handled);
@@ -99,7 +101,7 @@ pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<Com
             ));
         }
         out.push_str("Approve one with `/approve <device-id>` or all with `/approve all`.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
@@ -110,13 +112,13 @@ pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<Com
                 approved += 1;
             }
         }
-        emit_command_output(app, format!("Approved {} pending device(s).", approved));
+        emit_command_output(host, format!("Approved {} pending device(s).", approved));
         return Ok(CommandResult::Handled);
     }
 
     match store.approve(args[0]) {
         Ok(dev) => emit_command_output(
-            app,
+            host,
             format!(
                 "Approved device '{}' (name={}).",
                 dev.device_id,
@@ -124,7 +126,7 @@ pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<Com
             ),
         ),
         Err(err) => emit_command_output(
-            app,
+            host,
             format!(
                 "Approve failed: {}. Use `/approve list` or `hermes pairing list`.",
                 err
@@ -134,7 +136,10 @@ pub(crate) fn handle_approve_command(app: &mut App, args: &[&str]) -> Result<Com
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_deny_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_deny_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let store = PairingStore::open_default();
     if args.is_empty() || args[0].eq_ignore_ascii_case("list") {
         let entries = store.list().unwrap_or_default();
@@ -147,15 +152,15 @@ pub(crate) fn handle_deny_command(app: &mut App, args: &[&str]) -> Result<Comman
             }
         }
         out.push_str("Revoke one with `/deny <device-id>` or purge pending with `/deny pending`.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
     if args[0].eq_ignore_ascii_case("pending") || args[0].eq_ignore_ascii_case("clear-pending") {
         match store.clear_pending() {
-            Ok(count) => emit_command_output(app, format!("Removed {} pending device(s).", count)),
+            Ok(count) => emit_command_output(host, format!("Removed {} pending device(s).", count)),
             Err(err) => {
-                emit_command_output(app, format!("Failed clearing pending devices: {}", err))
+                emit_command_output(host, format!("Failed clearing pending devices: {}", err))
             }
         }
         return Ok(CommandResult::Handled);
@@ -163,7 +168,7 @@ pub(crate) fn handle_deny_command(app: &mut App, args: &[&str]) -> Result<Comman
 
     match store.revoke(args[0]) {
         Ok(dev) => emit_command_output(
-            app,
+            host,
             format!(
                 "Revoked device '{}' (name={}).",
                 dev.device_id,
@@ -171,7 +176,7 @@ pub(crate) fn handle_deny_command(app: &mut App, args: &[&str]) -> Result<Comman
             ),
         ),
         Err(err) => emit_command_output(
-            app,
+            host,
             format!(
                 "Deny failed: {}. Use `/deny list` or `hermes pairing list`.",
                 err

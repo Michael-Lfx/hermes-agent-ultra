@@ -217,26 +217,26 @@ async fn run_skills_subcommand_via_cli(
 }
 
 pub(crate) async fn handle_skills_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if !args.is_empty() {
         let invocation = match parse_skills_slash_invocation(args) {
             Ok(v) => v,
             Err(msg) => {
-                emit_command_output(app, msg);
+                emit_command_output(host, msg);
                 return Ok(CommandResult::Handled);
             }
         };
         let output = run_skills_subcommand_via_cli(&invocation).await?;
-        emit_command_output(app, output);
+        emit_command_output(host, output);
         return Ok(CommandResult::Handled);
     }
 
     let skills_dir = hermes_config::hermes_home().join("skills");
     if !skills_dir.exists() {
         emit_command_output(
-            app,
+            host,
             format!(
                 "No skills directory found at {}. Run `hermes setup` first.",
                 skills_dir.display()
@@ -273,7 +273,7 @@ pub(crate) async fn handle_skills_command(
 
     if skills.is_empty() {
         emit_command_output(
-            app,
+            host,
             format!(
                 "No installed skills found in {}.\nInstall skills with `hermes skills install <name>`.",
                 skills_dir.display()
@@ -286,7 +286,7 @@ pub(crate) async fn handle_skills_command(
         }
         out.push_str("\nUse `hermes skills inspect <name>` for details.");
         out.push_str("\nUse `/skills quality` for score + fallback recommendations.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
     }
     Ok(CommandResult::Handled)
 }

@@ -110,7 +110,10 @@ fn infer_plan_requirements(task: &str) -> ModelCapabilityRequirements {
     req
 }
 
-fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
+fn plan_capability_preflight(
+    host: &impl crate::app::ModelRuntime,
+    task: &str,
+) -> (Option<String>, bool) {
     let mode = plan_capability_mode();
     if matches!(mode, PlanCapabilityMode::Off) {
         return (None, true);
@@ -121,7 +124,7 @@ fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
         return (None, true);
     }
 
-    let (provider, model_id) = split_provider_model(&app.current_model);
+    let (provider, model_id) = split_provider_model(host.current_model());
     let client = default_client();
     let caps = resolve_model_capabilities(provider, model_id, client);
     let unmet = unmet_model_requirements(caps, req);
@@ -130,7 +133,7 @@ fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
             Some(format!(
                 "planner capability preflight: PASS ({}) for `{}`",
                 req.summary(),
-                app.current_model
+                host.current_model()
             )),
             true,
         );
@@ -138,7 +141,7 @@ fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
 
     let explain_hint = format!(
         "/model explain {} --cap tools,reasoning --min-context 128000",
-        app.current_model
+        host.current_model()
     );
     let message = format!(
         "planner capability preflight: {} ({}) for `{}`.\nmissing: {}\nhint: run `{}` or switch with `/model` before queuing this task.",
@@ -148,7 +151,7 @@ fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
             "WARN"
         },
         req.summary(),
-        app.current_model,
+        host.current_model(),
         unmet.join(", "),
         explain_hint
     );
@@ -157,14 +160,17 @@ fn plan_capability_preflight(app: &App, task: &str) -> (Option<String>, bool) {
     (Some(message), allowed)
 }
 
-pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_plan_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.is_empty()
         || args
             .first()
             .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "help" | "usage"))
     {
         emit_command_output(
-            app,
+            host,
             "Planner controls:\n  /plan <task>          Queue a planning/research task in background\n  /plan status          Show queue health + active steering\n  /plan list            Show queue health + active steering\n  /plan clear           Clear queued/running status records\n  /plan caps [mode]     Optional capability router (`off|advisory|enforce`)\n  /plan depth [profile] Task-depth governor (`status|list|shallow|balanced|deep|max|clear`)",
         );
         return Ok(CommandResult::Handled);
@@ -180,7 +186,7 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
         match next.as_str() {
             "status" | "show" => {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "planner capability router mode={}\nUse `/plan caps [off|advisory|enforce]`.",
                         plan_capability_mode().as_str()
@@ -192,12 +198,12 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
                     let mode_label = mode.as_str();
                     crate::env_vars::set_var("HERMES_PLAN_CAPABILITY_ROUTER", mode_label);
                     emit_command_output(
-                        app,
+                        host,
                         format!("planner capability router set to `{}`.", mode_label),
                     );
                 }
             }
-            _ => emit_command_output(app, "Usage: /plan caps [status|off|advisory|enforce]"),
+            _ => emit_command_output(host, "Usage: /plan caps [status|off|advisory|enforce]"),
         }
         return Ok(CommandResult::Handled);
     }
@@ -208,9 +214,9 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
             .unwrap_or("status")
             .to_ascii_lowercase();
         match next.as_str() {
-            "status" | "show" => emit_command_output(app, ops::task_depth_runtime_summary()),
+            "status" | "show" => emit_command_output(host, ops::task_depth_runtime_summary()),
             "list" => emit_command_output(
-                app,
+                host,
                 "Task depth profiles:\n- shallow: quickest turn cadence; strict exploration trim\n- balanced: default profile for most sessions\n- deep: larger turn budget + lower concurrency for heavier analysis\n- max: exhaustive mode for very complex objective work\nUse `/plan depth <profile>` to apply.",
             ),
             "clear" => {
@@ -228,7 +234,7 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
                 }
                 ops::apply_task_depth_profile(ops::TaskDepthProfile::Balanced);
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Task depth reset to defaults.\n{}",
                         ops::task_depth_runtime_summary()
@@ -238,14 +244,14 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
             _ => {
                 let Some(profile) = ops::TaskDepthProfile::parse(&next) else {
                     emit_command_output(
-                        app,
+                        host,
                         "Usage: /plan depth [status|list|shallow|balanced|deep|max|clear]",
                     );
                     return Ok(CommandResult::Handled);
                 };
                 ops::apply_task_depth_profile(profile);
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Task depth profile set to `{}`.\n{}",
                         profile.as_str(),
@@ -265,12 +271,12 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
             "  queued={} running={} completed={} failed={}",
             queued, running, completed, failed
         );
-        if let Some(steer) = objective::current_session_steer(app) {
+        if let Some(steer) = objective::current_session_steer(host) {
             let _ = writeln!(out, "  steering={}", truncate_chars(&steer, 160));
         } else {
             let _ = writeln!(out, "  steering=(none)");
         }
-        if let Some(objective) = app.session_objective.as_deref() {
+        if let Some(objective) = host.session_objective() {
             let _ = writeln!(out, "  objective={}", truncate_chars(objective, 160));
         } else {
             let _ = writeln!(out, "  objective=(none)");
@@ -281,21 +287,21 @@ pub(crate) fn handle_plan_command(app: &mut App, args: &[&str]) -> Result<Comman
             plan_capability_mode().as_str()
         );
         let _ = writeln!(out, "  {}", ops::task_depth_runtime_summary());
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
     if sub == "clear" {
-        return background::handle_clear_queue_command(app);
+        return background::handle_clear_queue_command(host);
     }
     let task = args.join(" ");
     if !task.trim().is_empty() {
-        let (note, allowed) = plan_capability_preflight(app, &task);
+        let (note, allowed) = plan_capability_preflight(host, &task);
         if let Some(msg) = note {
-            emit_command_output(app, msg);
+            emit_command_output(host, msg);
         }
         if !allowed {
             return Ok(CommandResult::Handled);
         }
     }
-    background::handle_background_command(app, args)
+    background::handle_background_command(host, args)
 }

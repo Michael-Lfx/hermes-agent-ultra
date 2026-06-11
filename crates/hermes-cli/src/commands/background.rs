@@ -624,12 +624,12 @@ pub(crate) fn queue_background_job(task: &str) -> Result<QueuedBackgroundJob, Ag
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_background_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /background <message>\n\
              - /background status|list\n\
              - /background tail <job-id> [N]\n\
@@ -641,7 +641,7 @@ pub(crate) fn handle_background_command(
     }
     let sub = args[0].trim().to_ascii_lowercase();
     if sub == "status" || sub == "list" {
-        emit_command_output(app, render_background_status(12));
+        emit_command_output(host, render_background_status(12));
         return Ok(CommandResult::Handled);
     }
     if sub == "tail" || sub == "log" || sub == "logs" || sub == "show" {
@@ -662,14 +662,14 @@ pub(crate) fn handle_background_command(
             });
         let Some(id_or_prefix) = requested_id else {
             emit_command_output(
-                app,
+                host,
                 "Usage: /background tail <job-id> [N]\nNo jobs available yet.",
             );
             return Ok(CommandResult::Handled);
         };
         let Some(job) = resolve_background_job(&id_or_prefix) else {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Background job '{}' not found. Use `/background status`.",
                     id_or_prefix
@@ -683,7 +683,7 @@ pub(crate) fn handle_background_command(
             "(log file does not exist yet)".to_string()
         };
         emit_command_output(
-            app,
+            host,
             format!(
                 "Background job\nid: {}\nstatus: {}\nattempts: {}\ncreated_at: {}\nstarted_at: {}\nfinished_at: {}\nstatus_file: {}\nlog_file: {}\n\n--- log tail ({}) ---\n{}",
                 job.id,
@@ -732,22 +732,22 @@ pub(crate) fn handle_background_command(
             });
         let Some(id_or_prefix) = requested_id else {
             emit_command_output(
-                app,
+                host,
                 "Usage: /background stop <job-id>\nNo running/queued jobs found.",
             );
             return Ok(CommandResult::Handled);
         };
-        emit_command_output(app, terminate_background_job(&id_or_prefix)?);
+        emit_command_output(host, terminate_background_job(&id_or_prefix)?);
         return Ok(CommandResult::Handled);
     }
     if sub == "event" {
         let Some(source) = args.get(1).copied() else {
-            emit_command_output(app, "Usage: /background event <source> <payload>");
+            emit_command_output(host, "Usage: /background event <source> <payload>");
             return Ok(CommandResult::Handled);
         };
         let payload = args.get(2..).unwrap_or(&[]).join(" ");
         if payload.trim().is_empty() {
-            emit_command_output(app, "Usage: /background event <source> <payload>");
+            emit_command_output(host, "Usage: /background event <source> <payload>");
             return Ok(CommandResult::Handled);
         }
         let triage_args = vec!["queue", source];
@@ -756,11 +756,11 @@ pub(crate) fn handle_background_command(
             payload.split_whitespace().map(|s| s.to_string()).collect();
         let payload_refs: Vec<&str> = payload_parts.iter().map(String::as_str).collect();
         merged.extend(payload_refs);
-        return super::handle_trigger_triage_command(app, &merged);
+        return super::handle_trigger_triage_command(host, &merged);
     }
     let job = queue_background_job(&args.join(" "))?;
     emit_command_output(
-        app,
+        host,
         format!(
             "[Background task queued: \"{}\"]\nJob ID: {}\nStatus: {}\nLogs:   {}\nThis task runs in a detached `hermes chat --query ...` process.",
             job.task,
@@ -773,26 +773,28 @@ pub(crate) fn handle_background_command(
 }
 
 pub(crate) fn handle_queue_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /queue <prompt>\nUse `/queue status` to inspect queued/running background jobs.",
         );
         return Ok(CommandResult::Handled);
     }
 
     if args[0].eq_ignore_ascii_case("status") || args[0].eq_ignore_ascii_case("list") {
-        emit_command_output(app, render_background_status(12));
+        emit_command_output(host, render_background_status(12));
         return Ok(CommandResult::Handled);
     }
 
-    handle_background_command(app, args)
+    handle_background_command(host, args)
 }
 
-pub(crate) fn handle_clear_queue_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_clear_queue_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let jobs_dir = hermes_config::hermes_home().join("background_jobs");
     let mut removed = 0usize;
     if let Ok(read_dir) = std::fs::read_dir(&jobs_dir) {
@@ -833,7 +835,7 @@ pub(crate) fn handle_clear_queue_command(app: &mut App) -> Result<CommandResult,
         }
     }
     emit_command_output(
-        app,
+        host,
         format!("Cleared {} queued/background status file(s).", removed),
     );
     Ok(CommandResult::Handled)
@@ -844,7 +846,7 @@ pub(crate) fn handle_clear_queue_command(app: &mut App) -> Result<CommandResult,
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_mission_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -864,7 +866,7 @@ pub(crate) async fn handle_mission_command(
                 let _ = writeln!(details, "- {}", path.display());
             }
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Mission runtime initialized.\n{}\nUse `/mission status` to inspect active loops.",
                     details.trim_end()
@@ -875,7 +877,7 @@ pub(crate) async fn handle_mission_command(
         "recover" => {
             let recovered = recover_orphan_loop_events(600)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Mission queue recovery complete. Marked {} orphaned running event(s).",
                     recovered
@@ -890,7 +892,7 @@ pub(crate) async fn handle_mission_command(
                 .unwrap_or(32);
             let replayed = replay_loop_queue(limit)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Mission queue replay complete. Replayed {} event(s) (limit={}).",
                     replayed, limit
@@ -901,7 +903,7 @@ pub(crate) async fn handle_mission_command(
         "enqueue" => {
             if args.len() < 4 {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /mission enqueue <loop-id> <event-type> <payload text>",
                 );
                 return Ok(CommandResult::Handled);
@@ -911,7 +913,7 @@ pub(crate) async fn handle_mission_command(
             let payload = args[3..].join(" ");
             let event = enqueue_loop_event(loop_id, event_type, &payload)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Queued mission event {} loop={} type={} status={}",
                     event.id, event.loop_id, event.event_type, event.status
@@ -928,18 +930,18 @@ pub(crate) async fn handle_mission_command(
             match sub.as_str() {
                 "status" | "show" => {
                     let report = load_last_trading_alpha_report()?;
-                    emit_command_output(app, render_trading_alpha_board(&report));
+                    emit_command_output(host, render_trading_alpha_board(&report));
                     Ok(CommandResult::Handled)
                 }
                 "refresh" | "run" | "scan" => {
                     let report = refresh_trading_alpha_report()?;
-                    emit_command_output(app, render_trading_alpha_board(&report));
+                    emit_command_output(host, render_trading_alpha_board(&report));
                     Ok(CommandResult::Handled)
                 }
                 "postmortem" => {
                     let report = load_last_trading_alpha_report()?;
                     emit_command_output(
-                        app,
+                        host,
                         format!("Trading postmortem\n\n{}", report.postmortem),
                     );
                     Ok(CommandResult::Handled)
@@ -977,7 +979,7 @@ pub(crate) async fn handle_mission_command(
                     for row in report.meta_ranking.iter().take(20) {
                         let _ = writeln!(out, "- {}", row);
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "allocator" => {
@@ -996,13 +998,13 @@ pub(crate) async fn handle_mission_command(
                             row.throttle_factor
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "governor" => {
                     let report = load_last_trading_alpha_report()?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Portfolio Risk Governor\n\nmode={}\nhalt_new_entries={}\nmax_portfolio_drawdown_pct={:.4}\nmax_project_drawdown_pct={:.4}\nmax_ruin_probability={:.4}\nreason={}",
                             report.risk_governor.mode,
@@ -1032,7 +1034,7 @@ pub(crate) async fn handle_mission_command(
                             row.changed_since_baseline
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "audit" => {
@@ -1054,7 +1056,7 @@ pub(crate) async fn handle_mission_command(
                             }
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "provenance" => {
@@ -1077,7 +1079,7 @@ pub(crate) async fn handle_mission_command(
                             row.decision
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "replay" => {
@@ -1092,7 +1094,7 @@ pub(crate) async fn handle_mission_command(
                             row.project_id, row.sample_size, row.pass_rate, row.decision
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "runbook" => {
@@ -1107,7 +1109,7 @@ pub(crate) async fn handle_mission_command(
                             row.priority, row.project_id, row.title, row.command, row.rationale
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 "sources" => {
@@ -1122,12 +1124,12 @@ pub(crate) async fn handle_mission_command(
                             row.project_id, row.source, row.found, row.items, row.path
                         );
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     Ok(CommandResult::Handled)
                 }
                 _ => {
                     emit_command_output(
-                        app,
+                        host,
                         "Usage: /mission trading [status|refresh|postmortem|autoresearch|allocator|governor|drift|audit|provenance|replay|runbook|sources]",
                     );
                     Ok(CommandResult::Handled)
@@ -1138,8 +1140,8 @@ pub(crate) async fn handle_mission_command(
             let loops = load_alpha_loops()?;
             let (queued, running, completed, failed) = background_job_counts();
             let board = render_mission_board(
-                &app.current_model,
-                app.session_objective.as_deref(),
+                host.current_model(),
+                host.session_objective(),
                 (queued, running, completed, failed),
             )
             .await?;
@@ -1164,12 +1166,12 @@ pub(crate) async fn handle_mission_command(
             out.push_str("- /mission trading [status|refresh|postmortem|autoresearch|allocator|governor|drift|audit|provenance|replay|runbook|sources]\n");
             out.push_str("- /objective <text>\n");
             out.push_str("- /background <task>\n");
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             Ok(CommandResult::Handled)
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /mission [status|init|recover|replay [limit]|enqueue <loop-id> <event-type> <payload>|trading ...]",
             );
             Ok(CommandResult::Handled)

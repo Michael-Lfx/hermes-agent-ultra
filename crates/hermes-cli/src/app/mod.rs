@@ -52,8 +52,9 @@ pub use provider::{
     provider_api_key_from_env,
 };
 pub use traits::{
-    AgentCoordinator, AgentDriver, AuthRuntime, ModelRuntime, SessionRuntime, SessionRuntimeAsync,
-    SlashCommandHost, TranscriptRuntime,
+    AcpServerRuntime, AgentCoordinator, AgentDriver, AuthRuntime, ModelRuntime, SessionRuntime,
+    SessionRuntimeAsync, SessionSnapshotRuntime, SlashCommandHost, TranscriptRuntime,
+    UiChromeRuntime,
 };
 
 use pet::{load_pet_settings, persist_pet_settings};

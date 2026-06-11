@@ -300,7 +300,7 @@ pub(crate) fn unmet_model_requirements(
 // ---------------------------------------------------------------------------
 
 async fn handle_model_explain_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
     strict_why_not: bool,
 ) -> Result<CommandResult, AgentError> {
@@ -317,9 +317,9 @@ async fn handle_model_explain_command(
         }
     }
     let target = if positional.is_empty() {
-        app.current_model.clone()
+        host.current_model().to_string()
     } else {
-        normalize_model_target(&app.current_model, &positional[0])?
+        normalize_model_target(host.current_model(), &positional[0])?
     };
     let (guarded, remap_note) = guard_provider_model_selection(&target).await?;
     let (provider, model_id) = split_provider_model(&guarded);
@@ -421,7 +421,7 @@ async fn handle_model_explain_command(
         );
     }
 
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -643,30 +643,34 @@ fn normalize_model_target(current_model: &str, raw: &str) -> Result<String, Agen
 
 /// Run `curses_select` safely from both plain CLI and active TUI sessions.
 fn run_model_picker_select(
-    app: &App,
+    host: &impl crate::app::TranscriptRuntime,
     title: &str,
     items: &[String],
     initial_index: usize,
 ) -> SelectResult {
-    if app.stream_handle.is_some() {
+    if host.stream_attached() {
         curses_select_embedded(title, items, initial_index)
     } else {
         curses_select(title, items, initial_index)
     }
 }
 
-fn persist_current_model_selection(app: &App) -> Result<PathBuf, AgentError> {
-    let cfg_path = app.state_root.join("config.yaml");
+fn persist_current_model_selection(
+    host: &(impl crate::app::SessionRuntime + crate::app::ModelRuntime),
+) -> Result<PathBuf, AgentError> {
+    let cfg_path = host.state_root().join("config.yaml");
     let mut disk = hermes_config::load_user_config_file(&cfg_path)
         .map_err(|e| AgentError::Config(e.to_string()))?;
-    disk.model = Some(app.current_model.clone());
+    disk.model = Some(host.current_model().to_string());
     hermes_config::save_config_yaml(&cfg_path, &disk)
         .map_err(|e| AgentError::Config(e.to_string()))?;
     Ok(cfg_path)
 }
 
-fn format_model_persistence_note(app: &App) -> String {
-    match persist_current_model_selection(app) {
+fn format_model_persistence_note(
+    host: &(impl crate::app::SessionRuntime + crate::app::ModelRuntime),
+) -> String {
+    match persist_current_model_selection(host) {
         Ok(path) => format!("Persisted default model in {}.", path.display()),
         Err(err) => format!(
             "Warning: switched for this session, but failed to persist default model: {}",
@@ -677,7 +681,7 @@ fn format_model_persistence_note(app: &App) -> String {
 
 /// Interactive model picker for a specific provider.
 async fn pick_model_for_provider(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     provider: &str,
     current_model: &str,
     requirements: ModelCapabilityRequirements,
@@ -685,7 +689,7 @@ async fn pick_model_for_provider(
     let models = provider_model_ids(provider).await;
     if models.is_empty() {
         emit_command_output(
-            app,
+            host,
             format!("No models available for provider '{}'.", provider),
         );
         return Ok(false);
@@ -710,7 +714,7 @@ async fn pick_model_for_provider(
 
     if filtered_models.is_empty() {
         emit_command_output(
-            app,
+            host,
             format!(
                 "No models for provider '{}' satisfy required capabilities: {}.",
                 provider,
@@ -727,22 +731,22 @@ async fn pick_model_for_provider(
         .unwrap_or(0);
     let labels: Vec<String> = filtered_models.clone();
     let title = format!("Select {} model ({} available)", provider, labels.len());
-    let pick = run_model_picker_select(app, &title, &labels, default_index);
+    let pick = run_model_picker_select(host, &title, &labels, default_index);
     if !pick.confirmed || pick.index >= filtered_models.len() {
-        emit_command_output(app, "Model switch cancelled.");
+        emit_command_output(host, "Model switch cancelled.");
         return Ok(false);
     }
     let provider_model = format!("{}:{}", provider, filtered_models[pick.index].trim());
     let (guarded, note) = guard_provider_model_selection(&provider_model).await?;
-    app.switch_model(&guarded);
+    host.switch_model(&guarded);
     let mut msg = format!("Model switched to: {}", guarded);
     if let Some(n) = note {
         msg.push_str("\n");
         msg.push_str(&n);
     }
     msg.push_str("\n");
-    msg.push_str(&format_model_persistence_note(app));
-    emit_command_output(app, msg);
+    msg.push_str(&format_model_persistence_note(host));
+    emit_command_output(host, msg);
     Ok(true)
 }
 
@@ -789,7 +793,7 @@ fn read_failover_chain_from_env() -> Vec<String> {
 }
 
 fn handle_model_failover_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -807,7 +811,7 @@ fn handle_model_failover_command(
                 chain_items.join(", ")
             };
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Failover fabric\nprimary_fallback: {}\nchain: {}\nusage: `/model failover set provider:model[,provider:model...]` or `/model failover clear`",
                     fallback, chain
@@ -817,9 +821,9 @@ fn handle_model_failover_command(
         "clear" | "reset" => {
             env_vars::remove_var("HERMES_FALLBACK_MODEL");
             env_vars::remove_var("HERMES_FALLBACK_MODELS");
-            let current = app.current_model.clone();
-            app.switch_model(&current);
-            emit_command_output(app, "Cleared retry failover chain.");
+            let current = host.current_model().to_string();
+            host.switch_model(&current);
+            emit_command_output(host, "Cleared retry failover chain.");
         }
         "set" => {
             let raw = args
@@ -840,13 +844,13 @@ fn handle_model_failover_command(
             if let Some(first) = chain.first() {
                 env_vars::set_var("HERMES_FALLBACK_MODEL", first);
             }
-            let current = app.current_model.clone();
-            app.switch_model(&current);
-            emit_command_output(app, format!("Failover chain set: {}", chain.join(", ")));
+            let current = host.current_model().to_string();
+            host.switch_model(&current);
+            emit_command_output(host, format!("Failover chain set: {}", chain.join(", ")));
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /model failover [status|set provider:model[,provider:model...]|clear]",
             );
         }
@@ -1089,10 +1093,10 @@ fn model_current_provider_and_id(model: &str) -> (String, String) {
 // ---------------------------------------------------------------------------
 
 async fn handle_model_harness_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let (current_provider, current_model_id) = model_current_provider_and_id(&app.current_model);
+    let (current_provider, current_model_id) = model_current_provider_and_id(host.current_model());
     let target = args.first().copied().unwrap_or_default().trim();
     let (provider, requested_model) = if target.is_empty() {
         (current_provider.clone(), current_model_id.clone())
@@ -1189,7 +1193,7 @@ async fn handle_model_harness_command(
             ),
         );
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -1197,22 +1201,25 @@ async fn handle_model_harness_command(
 // handle_model_backend_command
 // ---------------------------------------------------------------------------
 
-fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+fn handle_model_backend_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let action = args.first().copied().unwrap_or("list").to_ascii_lowercase();
     match action.as_str() {
         "list" | "status" => {
             let provider = args.get(1).copied();
-            emit_command_output(app, render_backend_profiles(provider));
+            emit_command_output(host, render_backend_profiles(provider));
         }
         "show" => {
             let Some(provider) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /model backend show <provider> [profile]");
+                emit_command_output(host, "Usage: /model backend show <provider> [profile]");
                 return Ok(CommandResult::Handled);
             };
             let profile = args.get(2).copied();
             let Some(row) = backend_profile_lookup(provider, profile) else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "No backend profile found for {}:{}.",
                         provider,
@@ -1222,7 +1229,7 @@ fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandR
                 return Ok(CommandResult::Handled);
             };
             emit_command_output(
-                app,
+                host,
                 format!(
                     "{}:{}\n{}\nlaunch: {}\nenv: {}",
                     row.provider,
@@ -1239,13 +1246,13 @@ fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandR
         }
         "apply" => {
             let Some(provider) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /model backend apply <provider> [profile]");
+                emit_command_output(host, "Usage: /model backend apply <provider> [profile]");
                 return Ok(CommandResult::Handled);
             };
             let profile = args.get(2).copied().unwrap_or("balanced");
             let Some(row) = backend_profile_lookup(provider, Some(profile)) else {
                 emit_command_output(
-                    app,
+                    host,
                     format!("No backend profile found for {}:{}.", provider, profile),
                 );
                 return Ok(CommandResult::Handled);
@@ -1257,13 +1264,13 @@ fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandR
             env_vars::set_var("HERMES_LOCAL_BACKEND_PROVIDER", row.provider);
             let persisted =
                 persist_backend_profile_env(row.provider, row.profile, row.env_overrides)?;
-            let (current_provider, _) = model_current_provider_and_id(&app.current_model);
+            let (current_provider, _) = model_current_provider_and_id(host.current_model());
             if current_provider == row.provider {
-                let current = app.current_model.clone();
-                app.switch_model(&current);
+                let current = host.current_model().to_string();
+                host.switch_model(&current);
             }
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Applied backend profile {}:{}.\nlaunch: {}\npersisted_env_file: {}\nUse `set -a && source {}` before launching external backend processes.",
                     row.provider,
@@ -1275,7 +1282,7 @@ fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandR
             );
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /model backend [list|status [provider]|show <provider> [profile]|apply <provider> [profile]]",
         ),
     }
@@ -1287,27 +1294,27 @@ fn handle_model_backend_command(app: &mut App, args: &[&str]) -> Result<CommandR
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_model_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if let Some(sub) = args.first().map(|v| v.trim()) {
         if sub.eq_ignore_ascii_case("failover") {
-            return handle_model_failover_command(app, &args[1..]);
+            return handle_model_failover_command(host, &args[1..]);
         }
         if sub.eq_ignore_ascii_case("backend") {
-            return handle_model_backend_command(app, &args[1..]);
+            return handle_model_backend_command(host, &args[1..]);
         }
         if sub.eq_ignore_ascii_case("harness") {
-            return handle_model_harness_command(app, &args[1..]).await;
+            return handle_model_harness_command(host, &args[1..]).await;
         }
         if sub.eq_ignore_ascii_case("explain") {
-            return handle_model_explain_command(app, &args[1..], false).await;
+            return handle_model_explain_command(host, &args[1..], false).await;
         }
         if sub.eq_ignore_ascii_case("why-not")
             || sub.eq_ignore_ascii_case("whynot")
             || sub.eq_ignore_ascii_case("diagnose")
         {
-            return handle_model_explain_command(app, &args[1..], true).await;
+            return handle_model_explain_command(host, &args[1..], true).await;
         }
     }
 
@@ -1327,7 +1334,7 @@ pub(crate) async fn handle_model_command(
     let known_providers = curated_provider_slugs();
     match parse_model_switch_request(&positional_refs, &known_providers) {
         ModelSwitchRequest::SetDirect(raw) => {
-            let provider_model = normalize_model_target(&app.current_model, &raw)?;
+            let provider_model = normalize_model_target(host.current_model(), &raw)?;
             let (guarded, note) = guard_provider_model_selection(&provider_model).await?;
             if !requirements.is_empty() {
                 let (provider, model_id) = split_provider_model(&guarded);
@@ -1342,7 +1349,7 @@ pub(crate) async fn handle_model_command(
                     )));
                 }
             }
-            app.switch_model(&guarded);
+            host.switch_model(&guarded);
             let mut msg = format!("Model switched to: {}", guarded);
             if let Some(n) = note {
                 msg.push_str("\n");
@@ -1356,34 +1363,38 @@ pub(crate) async fn handle_model_command(
                 ));
             }
             msg.push_str("\n");
-            msg.push_str(&format_model_persistence_note(app));
-            emit_command_output(app, msg);
+            msg.push_str(&format_model_persistence_note(host));
+            emit_command_output(host, msg);
         }
         ModelSwitchRequest::PickModelFromProvider(provider) => {
-            let current_model = app.current_model.clone();
-            pick_model_for_provider(app, &provider, &current_model, requirements).await?;
+            let current_model = host.current_model().to_string();
+            pick_model_for_provider(host, &provider, &current_model, requirements).await?;
         }
         ModelSwitchRequest::PickProviderThenModel => {
-            emit_command_output(app, format!("Current model: {}", app.current_model));
+            emit_command_output(host, format!("Current model: {}", host.current_model()));
             let providers: Vec<String> = known_providers.iter().map(|p| (*p).to_string()).collect();
             if providers.is_empty() {
-                emit_command_output(app, "No providers are registered for selection.");
+                emit_command_output(host, "No providers are registered for selection.");
                 return Ok(CommandResult::Handled);
             }
-            let (current_provider, _) = split_provider_model(&app.current_model);
+            let (current_provider, _) = split_provider_model(host.current_model());
             let default_provider_index = providers
                 .iter()
                 .position(|p| p.eq_ignore_ascii_case(current_provider))
                 .unwrap_or(0);
-            let provider_pick =
-                run_model_picker_select(app, "Select provider", &providers, default_provider_index);
+            let provider_pick = run_model_picker_select(
+                host,
+                "Select provider",
+                &providers,
+                default_provider_index,
+            );
             if !provider_pick.confirmed || provider_pick.index >= providers.len() {
-                emit_command_output(app, "Model switch cancelled.");
+                emit_command_output(host, "Model switch cancelled.");
                 return Ok(CommandResult::Handled);
             }
             let provider = providers[provider_pick.index].as_str();
-            let current_model = app.current_model.clone();
-            pick_model_for_provider(app, provider, &current_model, requirements).await?;
+            let current_model = host.current_model().to_string();
+            pick_model_for_provider(host, provider, &current_model, requirements).await?;
         }
     }
     Ok(CommandResult::Handled)

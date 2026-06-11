@@ -83,7 +83,7 @@ pub(crate) async fn browser_probe(endpoint: &str) -> Result<String, AgentError> 
 }
 
 pub(crate) async fn handle_browser_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -96,9 +96,9 @@ pub(crate) async fn handle_browser_command(
             let endpoint = std::env::var("CHROME_CDP_URL")
                 .unwrap_or_else(|_| "http://localhost:9222".to_string());
             match browser_probe(&endpoint).await {
-                Ok(summary) => emit_command_output(app, summary),
+                Ok(summary) => emit_command_output(host, summary),
                 Err(err) => emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Browser status (configured endpoint: {})\nProbe error: {}\nTip: `/browser connect [ws://host:port or http://host:port]`",
                         endpoint, err
@@ -113,7 +113,7 @@ pub(crate) async fn handle_browser_command(
             persist_browser_cdp_url(Some(endpoint))?;
             match browser_probe(endpoint).await {
                 Ok(summary) => emit_command_output(
-                    app,
+                    host,
                     format!(
                         "{}\n\nSaved CHROME_CDP_URL to {}/.env",
                         summary,
@@ -121,7 +121,7 @@ pub(crate) async fn handle_browser_command(
                     ),
                 ),
                 Err(err) => emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Saved CHROME_CDP_URL={}, but probe failed: {}\nStart Chrome with --remote-debugging-port=9222 and retry `/browser status`.",
                         endpoint, err
@@ -134,14 +134,14 @@ pub(crate) async fn handle_browser_command(
             crate::env_vars::remove_var("CHROME_CDP_URL");
             persist_browser_cdp_url(None)?;
             emit_command_output(
-                app,
+                host,
                 "Browser CDP override removed. Runtime will fall back to default local endpoint (http://localhost:9222) unless configured elsewhere.",
             );
             Ok(CommandResult::Handled)
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /browser [status|connect [ws://host:port|http://host:port]|disconnect]",
             );
             Ok(CommandResult::Handled)

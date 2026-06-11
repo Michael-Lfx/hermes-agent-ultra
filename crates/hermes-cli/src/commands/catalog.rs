@@ -32,16 +32,16 @@ pub(crate) fn detect_repo_root_from_cwd() -> Option<PathBuf> {
 }
 
 pub(crate) fn handle_experiment_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        let active = super::objective::current_session_steer(app)
+        let active = super::objective::current_session_steer(host)
             .filter(|value| value.to_ascii_lowercase().starts_with("experiment: "))
             .map(|value| value.trim_start_matches("Experiment: ").to_string())
             .unwrap_or_else(|| "(none)".to_string());
         emit_command_output(
-            app,
+            host,
             format!(
                 "Experiment steering: {}\nUsage: /experiment <label or instruction> | /experiment clear",
                 active
@@ -50,15 +50,15 @@ pub(crate) fn handle_experiment_command(
         return Ok(CommandResult::Handled);
     }
     if args[0].eq_ignore_ascii_case("clear") {
-        let active = super::objective::current_session_steer(app)
+        let active = super::objective::current_session_steer(host)
             .map(|value| value.to_ascii_lowercase().starts_with("experiment: "))
             .unwrap_or(false);
         if active {
-            super::objective::set_session_steer(app, None);
-            emit_command_output(app, "Cleared experiment steering context.");
+            super::objective::set_session_steer(host, None);
+            emit_command_output(host, "Cleared experiment steering context.");
         } else {
             emit_command_output(
-                app,
+                host,
                 "No experiment steering context active. Use `/experiment <instruction>`.",
             );
         }
@@ -67,15 +67,15 @@ pub(crate) fn handle_experiment_command(
     let hint = args.join(" ").trim().to_string();
     if hint.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /experiment <label or instruction> | /experiment clear",
         );
         return Ok(CommandResult::Handled);
     }
     let steer = format!("Experiment: {hint}");
-    super::objective::set_session_steer(app, Some(steer.clone()));
+    super::objective::set_session_steer(host, Some(steer.clone()));
     emit_command_output(
-        app,
+        host,
         format!(
             "Experiment steering applied.\n{}\nUse `/model` to switch variants, then `/retry` to re-run the last turn.",
             steer
@@ -91,19 +91,19 @@ pub(crate) fn feedback_log_path() -> PathBuf {
 }
 
 pub(crate) fn handle_feedback_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /feedback <note>\nStores a local feedback record at ~/.hermes-agent-ultra/logs/feedback.ndjson.",
         );
         return Ok(CommandResult::Handled);
     }
     let note = args.join(" ").trim().to_string();
     if note.is_empty() {
-        emit_command_output(app, "Usage: /feedback <note>");
+        emit_command_output(host, "Usage: /feedback <note>");
         return Ok(CommandResult::Handled);
     }
     let path = feedback_log_path();
@@ -113,8 +113,8 @@ pub(crate) fn handle_feedback_command(
     }
     let record = serde_json::json!({
         "at": chrono::Utc::now().to_rfc3339(),
-        "session_id": app.session_id,
-        "model": app.current_model,
+        "session_id": host.session_id(),
+        "model": host.current_model(),
         "note": note,
     });
     let mut writer = std::fs::OpenOptions::new()
@@ -125,12 +125,12 @@ pub(crate) fn handle_feedback_command(
     writer
         .write_all(format!("{}\n", record).as_bytes())
         .map_err(|e| AgentError::Io(format!("Failed to append {}: {}", path.display(), e)))?;
-    emit_command_output(app, format!("Feedback captured in {}", path.display()));
+    emit_command_output(host, format!("Feedback captured in {}", path.display()));
     Ok(CommandResult::Handled)
 }
 
 pub(crate) fn handle_restart_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let preserve_model = args.first().is_some_and(|v| {
@@ -139,23 +139,24 @@ pub(crate) fn handle_restart_command(
             "keep-model" | "--keep-model"
         )
     });
-    let previous_model = app.current_model.clone();
-    app.new_session();
-    if preserve_model && !previous_model.eq_ignore_ascii_case(&app.current_model) {
-        app.switch_model(&previous_model);
+    let previous_model = host.current_model().to_string();
+    host.new_session();
+    if preserve_model && !previous_model.eq_ignore_ascii_case(host.current_model()) {
+        host.switch_model(&previous_model);
     }
     emit_command_output(
-        app,
+        host,
         format!(
             "Session restarted.\n  new_session_id: {}\n  model: {}",
-            app.session_id, app.current_model
+            host.session_id(),
+            host.current_model()
         ),
     );
     Ok(CommandResult::Handled)
 }
 
 pub(crate) async fn handle_update_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let check_only = args
@@ -171,7 +172,7 @@ pub(crate) async fn handle_update_command(
     if !check_only {
         let _ = writeln!(out, "\nTo perform the update, exit and run: hermes update");
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -352,7 +353,7 @@ fn render_command_catalog(filter: Option<&str>) -> String {
 }
 
 pub(crate) fn handle_commands_catalog_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let query = if args.is_empty() {
@@ -372,10 +373,10 @@ pub(crate) fn handle_commands_catalog_command(
             Some(rest)
         }
     };
-    emit_command_output(app, render_command_catalog(query.as_deref()));
+    emit_command_output(host, render_command_catalog(query.as_deref()));
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn print_help(app: &mut App) {
-    emit_command_output(app, render_command_catalog(None));
+pub(crate) fn print_help(host: &mut impl crate::app::SlashCommandHost) {
+    emit_command_output(host, render_command_catalog(None));
 }

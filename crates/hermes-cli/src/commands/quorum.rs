@@ -12,8 +12,8 @@ use crate::app::App;
 use crate::commands::{CommandResult, emit_command_output};
 use crate::model_switch::{normalize_provider_model, provider_model_ids};
 
-pub(crate) fn clear_quorum_system_hints(app: &mut App) {
-    app.messages.retain(|m| {
+pub(crate) fn clear_quorum_system_hints(host: &mut impl crate::app::SlashCommandHost) {
+    host.messages_mut().retain(|m| {
         if m.role != hermes_core::MessageRole::System {
             return true;
         }
@@ -24,21 +24,25 @@ pub(crate) fn clear_quorum_system_hints(app: &mut App) {
     });
 }
 
-pub(crate) fn install_quorum_system_hint(app: &mut App, voters: usize, models: &[String]) {
-    clear_quorum_system_hints(app);
+pub(crate) fn install_quorum_system_hint(
+    host: &mut impl crate::app::SlashCommandHost,
+    voters: usize,
+    models: &[String],
+) {
+    clear_quorum_system_hints(host);
     let model_hint = if models.is_empty() {
         "current-model-only".to_string()
     } else {
         models.join(", ")
     };
-    app.messages.push(hermes_core::Message::system(format!(
+    host.messages_mut().push(hermes_core::Message::system(format!(
         "[QUORUM_MODE] Quorum reasoning is enabled. For complex decisions, evaluate at least {} independent hypotheses and present: (1) strongest case, (2) strongest counter-case, (3) final synthesis with explicit confidence. Preferred voter models: {}.",
         voters, model_hint
     )));
 }
 
 pub(crate) async fn handle_quorum_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -51,7 +55,7 @@ pub(crate) async fn handle_quorum_command(
         "status" => {
             let policy = load_quorum_policy()?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Quorum policy\nenabled={}\nmode={}\nvoters={}\nmodels={}\narmed_once={}\nupdated_at={}\n\nQuorum is optional and off by default to control token cost.",
                     policy.enabled,
@@ -62,7 +66,7 @@ pub(crate) async fn handle_quorum_command(
                     } else {
                         policy.models.join(", ")
                     },
-                    app.quorum_armed_once,
+                    host.quorum_armed_once(),
                     policy.updated_at
                 ),
             );
@@ -70,10 +74,10 @@ pub(crate) async fn handle_quorum_command(
         "on" | "enable" | "true" | "1" => {
             let policy = set_quorum_policy(true, None, None)?;
             crate::env_vars::set_var("HERMES_QUORUM_ENABLED", "1");
-            install_quorum_system_hint(app, policy.voters, &policy.models);
-            app.quorum_armed_once = false;
+            install_quorum_system_hint(host, policy.voters, &policy.models);
+            host.set_quorum_armed_once(false);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Quorum mode enabled (optional deep reasoning).\nvoters={}\nmodels={}",
                     policy.voters,
@@ -88,10 +92,10 @@ pub(crate) async fn handle_quorum_command(
         "off" | "disable" | "false" | "0" => {
             let policy = set_quorum_policy(false, None, None)?;
             crate::env_vars::set_var("HERMES_QUORUM_ENABLED", "0");
-            clear_quorum_system_hints(app);
-            app.quorum_armed_once = false;
+            clear_quorum_system_hints(host);
+            host.set_quorum_armed_once(false);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Quorum mode disabled.\nvoters={}\nmodels={}",
                     policy.voters,
@@ -105,21 +109,21 @@ pub(crate) async fn handle_quorum_command(
         }
         "voters" => {
             let Some(raw) = args.get(1) else {
-                emit_command_output(app, "Usage: /quorum voters <2..8>");
+                emit_command_output(host, "Usage: /quorum voters <2..8>");
                 return Ok(CommandResult::Handled);
             };
             let voters = raw.parse::<usize>().ok().unwrap_or(3).clamp(2, 8);
             let current = load_quorum_policy()?;
             let policy = set_quorum_policy(current.enabled, Some(voters), None)?;
             if policy.enabled {
-                install_quorum_system_hint(app, policy.voters, &policy.models);
+                install_quorum_system_hint(host, policy.voters, &policy.models);
             }
-            emit_command_output(app, format!("Quorum voters updated to {}.", policy.voters));
+            emit_command_output(host, format!("Quorum voters updated to {}.", policy.voters));
         }
         "models" => {
             if args.len() < 2 {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /quorum models <provider:model[,provider:model,...]>",
                 );
                 return Ok(CommandResult::Handled);
@@ -130,7 +134,7 @@ pub(crate) async fn handle_quorum_command(
                 .map(|m| m.trim().to_string())
                 .filter(|m| !m.is_empty())
                 .collect();
-            let (default_provider, _) = split_provider_model(&app.current_model);
+            let (default_provider, _) = split_provider_model(host.current_model());
             let default_provider = default_provider.trim().to_ascii_lowercase();
             let mut models: Vec<String> = Vec::new();
             let mut notes: Vec<String> = Vec::new();
@@ -179,10 +183,10 @@ pub(crate) async fn handle_quorum_command(
             let current = load_quorum_policy()?;
             let policy = set_quorum_policy(current.enabled, None, Some(models))?;
             if policy.enabled {
-                install_quorum_system_hint(app, policy.voters, &policy.models);
+                install_quorum_system_hint(host, policy.voters, &policy.models);
             }
             emit_command_output(
-                app,
+                host,
                 if notes.is_empty() {
                     format!(
                         "Quorum models updated: {}",
@@ -209,20 +213,20 @@ pub(crate) async fn handle_quorum_command(
             let policy = load_quorum_policy()?;
             if !policy.enabled {
                 emit_command_output(
-                    app,
+                    host,
                     "Quorum mode is OFF. Run `/quorum on` first (kept optional to control token cost).",
                 );
                 return Ok(CommandResult::Handled);
             }
-            install_quorum_system_hint(app, policy.voters, &policy.models);
-            app.quorum_armed_once = true;
+            install_quorum_system_hint(host, policy.voters, &policy.models);
+            host.set_quorum_armed_once(true);
             emit_command_output(
-                app,
+                host,
                 "Quorum deep-reasoning armed for subsequent turns.\nNext user prompt will run multi-voter fan-out across configured models and return synthesis (plus persisted quorum artifact).",
             );
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /quorum [status|on|off|voters <2..8>|models <a,b,c>|run]",
         ),
     }

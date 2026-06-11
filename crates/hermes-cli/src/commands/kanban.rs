@@ -171,10 +171,10 @@ pub(crate) fn parse_kanban_add(args: &[&str]) -> Result<NewKanbanTaskInput, Agen
 // ---------------------------------------------------------------------------
 
 pub(super) fn handle_kanban_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    emit_command_output(app, run_kanban_command(args)?);
+    emit_command_output(host, run_kanban_command(args)?);
     Ok(CommandResult::Handled)
 }
 

@@ -468,7 +468,7 @@ fn shell_escape(input: &str) -> String {
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_dashboard_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -492,15 +492,15 @@ pub(crate) async fn handle_dashboard_command(
         params["insecure"] = serde_json::json!(true);
     }
 
-    let raw = app
-        .tool_registry
+    let raw = host
+        .tool_registry()
         .dispatch_async("dashboard_control", params)
         .await;
     let parsed: serde_json::Value =
         serde_json::from_str(&raw).unwrap_or_else(|_| serde_json::json!({"result": raw}));
 
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-        emit_command_output(app, format!("Dashboard command failed: {err}"));
+        emit_command_output(host, format!("Dashboard command failed: {err}"));
         return Ok(CommandResult::Handled);
     }
 
@@ -547,7 +547,7 @@ pub(crate) async fn handle_dashboard_command(
                 .unwrap_or("unknown")
         ),
     };
-    emit_command_output(app, rendered);
+    emit_command_output(host, rendered);
     Ok(CommandResult::Handled)
 }
 
@@ -556,13 +556,13 @@ pub(crate) async fn handle_dashboard_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_simulate_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
-        let counters = app.tool_registry.policy_counters();
+        let counters = host.tool_registry().policy_counters();
         emit_command_output(
-            app,
+            host,
             format!(
                 "Tool-policy simulation\n\
                  usage: /simulate <tool_name> [json-params]\n\
@@ -580,7 +580,7 @@ pub(crate) fn handle_simulate_command(
 
     let tool_name = args[0].trim();
     if tool_name.is_empty() {
-        emit_command_output(app, "Usage: /simulate <tool_name> [json-params]");
+        emit_command_output(host, "Usage: /simulate <tool_name> [json-params]");
         return Ok(CommandResult::Handled);
     }
     let params = if args.len() > 1 {
@@ -588,12 +588,12 @@ pub(crate) fn handle_simulate_command(
         match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(v) if v.is_object() => v,
             Ok(_) => {
-                emit_command_output(app, "simulate params must be a JSON object.");
+                emit_command_output(host, "simulate params must be a JSON object.");
                 return Ok(CommandResult::Handled);
             }
             Err(err) => {
                 emit_command_output(
-                    app,
+                    host,
                     format!("simulate params parse error: {}\nraw={}", err, raw),
                 );
                 return Ok(CommandResult::Handled);
@@ -603,8 +603,8 @@ pub(crate) fn handle_simulate_command(
         serde_json::json!({})
     };
 
-    let decision = app
-        .tool_registry
+    let decision = host
+        .tool_registry()
         .evaluate_policy_preview(tool_name, &params);
     let payload = serde_json::json!({
         "tool": tool_name,
@@ -620,7 +620,7 @@ pub(crate) fn handle_simulate_command(
         }
     });
     emit_command_output(
-        app,
+        host,
         serde_json::to_string_pretty(&payload)
             .map_err(|e| AgentError::Config(format!("serialize simulate result: {e}")))?,
     );
@@ -725,11 +725,14 @@ fn summarize_route_health_details(path: &Path) -> Option<String> {
 // /ops budget
 // ---------------------------------------------------------------------------
 
-fn handle_ops_budget_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+fn handle_ops_budget_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         let budget = RepoReviewBudgetRuntime::from_env();
         emit_command_output(
-            app,
+            host,
             format!(
                 "repo_review_budget profile={}\n\
                  repeat_threshold={} low_signal_threshold={} keep_repeat={} keep_low_signal={} min_signal_score={:.2}",
@@ -745,7 +748,7 @@ fn handle_ops_budget_command(app: &mut App, args: &[&str]) -> Result<CommandResu
     }
     match args[0].to_ascii_lowercase().as_str() {
         "list" => emit_command_output(
-            app,
+            host,
             "Repo-review budget profiles:\n- balanced: default trim cadence\n- aggressive: trim repetitive discovery quickly\n- relaxed: allow broader exploration before trimming\n- off: effectively disable trimming",
         ),
         "clear" => {
@@ -759,12 +762,12 @@ fn handle_ops_budget_command(app: &mut App, args: &[&str]) -> Result<CommandResu
             ] {
                 crate::env_vars::remove_var(key);
             }
-            emit_command_output(app, "Cleared repo-review budget runtime overrides.");
+            emit_command_output(host, "Cleared repo-review budget runtime overrides.");
         }
         profile_raw => {
             let Some(profile) = RepoReviewBudgetProfile::parse(profile_raw) else {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /ops budget [status|list|balanced|aggressive|relaxed|off|clear]",
                 );
                 return Ok(CommandResult::Handled);
@@ -772,7 +775,7 @@ fn handle_ops_budget_command(app: &mut App, args: &[&str]) -> Result<CommandResu
             apply_repo_review_budget_profile(profile);
             let budget = RepoReviewBudgetRuntime::from_env();
             emit_command_output(
-                app,
+                host,
                 format!(
                     "repo_review_budget set to '{}' (repeat={} low_signal={} keep_repeat={} keep_low_signal={} min_signal={:.2})",
                     profile.as_str(),
@@ -793,7 +796,7 @@ fn handle_ops_budget_command(app: &mut App, args: &[&str]) -> Result<CommandResu
 // ---------------------------------------------------------------------------
 
 fn handle_ops_tool_profile_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let mode = std::env::var("HERMES_REPO_REVIEW_TOOL_PROFILE_MODE")
@@ -806,7 +809,7 @@ fn handle_ops_tool_profile_command(
             .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "status" | "show"))
     {
         emit_command_output(
-            app,
+            host,
             format!(
                 "repo_review_tool_profile mode={}\nUse `/ops tool-profile [off|balanced|focus]`.\nEscape hatch: include `allow all tools` or `disable narrowing` in your request.",
                 mode
@@ -816,7 +819,7 @@ fn handle_ops_tool_profile_command(
     }
     if args[0].eq_ignore_ascii_case("list") {
         emit_command_output(
-            app,
+            host,
             "Repo-review tool profile modes:\n- off: disable narrowing (open tool lane)\n- balanced: filter messaging/non-repo noise only\n- focus: balanced + stricter repo-first filtering",
         );
         return Ok(CommandResult::Handled);
@@ -824,7 +827,7 @@ fn handle_ops_tool_profile_command(
     if args[0].eq_ignore_ascii_case("clear") {
         crate::env_vars::remove_var("HERMES_REPO_REVIEW_TOOL_PROFILE_MODE");
         emit_command_output(
-            app,
+            host,
             "Cleared repo-review tool profile override (default=balanced).",
         );
         return Ok(CommandResult::Handled);
@@ -832,14 +835,14 @@ fn handle_ops_tool_profile_command(
     let next = args[0].to_ascii_lowercase();
     if !matches!(next.as_str(), "off" | "balanced" | "focus") {
         emit_command_output(
-            app,
+            host,
             "Usage: /ops tool-profile [status|list|off|balanced|focus|clear]",
         );
         return Ok(CommandResult::Handled);
     }
     crate::env_vars::set_var("HERMES_REPO_REVIEW_TOOL_PROFILE_MODE", next.as_str());
     emit_command_output(
-        app,
+        host,
         format!("repo_review_tool_profile mode set to `{}`", next),
     );
     Ok(CommandResult::Handled)
@@ -850,7 +853,7 @@ fn handle_ops_tool_profile_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_ops_eval_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -860,7 +863,7 @@ pub(crate) async fn handle_ops_eval_command(
         .to_ascii_lowercase();
     let Some(repo_root) = discover_repo_root_for_about() else {
         emit_command_output(
-            app,
+            host,
             "Eval controls are unavailable outside source checkout.",
         );
         return Ok(CommandResult::Handled);
@@ -874,14 +877,14 @@ pub(crate) async fn handle_ops_eval_command(
                 let summary = summarize_gate_report(&path, "eval")
                     .unwrap_or_else(|| format!("latest eval report: {}", path.display()));
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "{summary}\nRun `/ops eval run` to generate a fresh session-backed report."
                     ),
                 );
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     "No eval reports found yet. Run `/ops eval run` to generate one.",
                 );
             }
@@ -892,20 +895,20 @@ pub(crate) async fn handle_ops_eval_command(
                 "python3 scripts/run-session-eval-harness.py --repo-root . --json",
             )
             .await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "latest" => {
             let Some(path) = latest_json_report(&report_dir, "session-eval-harness-")
                 .or_else(|| latest_json_report(&report_dir, "eval-trend-gate-"))
             else {
-                emit_command_output(app, "No eval reports found.");
+                emit_command_output(host, "No eval reports found.");
                 return Ok(CommandResult::Handled);
             };
             let raw = std::fs::read_to_string(&path)
                 .map_err(|e| AgentError::Io(format!("read {}: {}", path.display(), e)))?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Latest eval report: {}\n{}",
                     path.file_name()
@@ -917,7 +920,7 @@ pub(crate) async fn handle_ops_eval_command(
             Ok(CommandResult::Handled)
         }
         _ => {
-            emit_command_output(app, "Usage: /ops eval [status|run|latest]");
+            emit_command_output(host, "Usage: /ops eval [status|run|latest]");
             Ok(CommandResult::Handled)
         }
     }
@@ -928,7 +931,7 @@ pub(crate) async fn handle_ops_eval_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_qos_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -986,12 +989,12 @@ pub(crate) async fn handle_qos_command(
                 out,
                 "  actions: /qos health | /qos autotune plan | /qos autotune apply"
             );
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             Ok(CommandResult::Handled)
         }
         "health" => {
             let out = run_current_hermes_cli_command(&["route-health", "--json"]).await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "autotune" => {
@@ -1010,19 +1013,19 @@ pub(crate) async fn handle_qos_command(
                     .await?
                 }
                 _ => {
-                    emit_command_output(app, "Usage: /qos autotune [plan|apply]");
+                    emit_command_output(host, "Usage: /qos autotune [plan|apply]");
                     return Ok(CommandResult::Handled);
                 }
             };
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "help" => {
-            emit_command_output(app, "Usage: /qos [status|health|autotune [plan|apply]]");
+            emit_command_output(host, "Usage: /qos [status|health|autotune [plan|apply]]");
             Ok(CommandResult::Handled)
         }
         _ => {
-            emit_command_output(app, "Usage: /qos [status|health|autotune [plan|apply]]");
+            emit_command_output(host, "Usage: /qos [status|health|autotune [plan|apply]]");
             Ok(CommandResult::Handled)
         }
     }
@@ -1033,12 +1036,12 @@ pub(crate) async fn handle_qos_command(
 // ---------------------------------------------------------------------------
 
 fn handle_ops_skills_tier_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         emit_command_output(
-            app,
+            host,
             format!(
                 "skills_tier={} (bypass={})",
                 skills::skills_execution_tier().as_str(),
@@ -1054,14 +1057,14 @@ fn handle_ops_skills_tier_command(
 
     let Some(next) = skills::SkillsExecutionTier::parse(args[0]) else {
         emit_command_output(
-            app,
+            host,
             "Usage: /ops skills-tier [status|trusted|balanced|open]",
         );
         return Ok(CommandResult::Handled);
     };
     crate::env_vars::set_var("HERMES_SKILLS_EXECUTION_TIER", next.as_str());
     emit_command_output(
-        app,
+        host,
         format!(
             "skills_tier set to '{}' for this runtime process.",
             next.as_str()
@@ -1075,7 +1078,7 @@ fn handle_ops_skills_tier_command(
 // ---------------------------------------------------------------------------
 
 async fn handle_ops_gate_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -1096,9 +1099,9 @@ async fn handle_ops_gate_command(
                 let elite = latest_json_report(&report_dir, "elite-sync-gate-")
                     .and_then(|p| summarize_gate_report(&p, "elite_sync_gate"))
                     .unwrap_or_else(|| "elite_sync_gate=unknown".to_string());
-                emit_command_output(app, format!("{}\n{}\n{}", eval, slo, elite));
+                emit_command_output(host, format!("{}\n{}\n{}", eval, slo, elite));
             } else {
-                emit_command_output(app, "Gate status unavailable outside source checkout.");
+                emit_command_output(host, "Gate status unavailable outside source checkout.");
             }
             Ok(CommandResult::Handled)
         }
@@ -1107,13 +1110,13 @@ async fn handle_ops_gate_command(
                 "python3 scripts/run-eval-trend-gate.py --allow-missing-baseline --json",
             )
             .await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "elite" => {
             let out =
                 run_ops_shell_command("python3 scripts/run-elite-sync-gate.py --json").await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "slo" => {
@@ -1121,7 +1124,7 @@ async fn handle_ops_gate_command(
             let rollback_cmd = std::env::var("HERMES_SLO_ROLLBACK_CMD").ok();
             let (Some(check), Some(rollback)) = (check_cmd, rollback_cmd) else {
                 emit_command_output(
-                    app,
+                    host,
                     "Set HERMES_SLO_CHECK_CMD and HERMES_SLO_ROLLBACK_CMD, then run `/ops gate slo`.",
                 );
                 return Ok(CommandResult::Handled);
@@ -1132,11 +1135,11 @@ async fn handle_ops_gate_command(
                 shell_escape(&rollback)
             );
             let out = run_ops_shell_command(&cmd).await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         _ => {
-            emit_command_output(app, "Usage: /ops gate [status|eval|elite|slo]");
+            emit_command_output(host, "Usage: /ops gate [status|eval|elite|slo]");
             Ok(CommandResult::Handled)
         }
     }
@@ -1147,7 +1150,7 @@ async fn handle_ops_gate_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_ops_evolve_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -1157,7 +1160,7 @@ pub(crate) async fn handle_ops_evolve_command(
         .to_ascii_lowercase();
     let Some(repo_root) = discover_repo_root_for_about() else {
         emit_command_output(
-            app,
+            host,
             "Self-evolution controls are unavailable outside source checkout.",
         );
         return Ok(CommandResult::Handled);
@@ -1169,7 +1172,7 @@ pub(crate) async fn handle_ops_evolve_command(
                 .and_then(|p| summarize_self_evolution_report(&p, "self_evolution"))
                 .unwrap_or_else(|| "self_evolution=unknown (no reports yet)".to_string());
             emit_command_output(
-                app,
+                host,
                 format!(
                     "{}\nRun `/ops evolve run` to execute the loop now.",
                     summary
@@ -1178,7 +1181,7 @@ pub(crate) async fn handle_ops_evolve_command(
             Ok(CommandResult::Handled)
         }
         "run" => {
-            let cmd = if let Some(obj) = app.session_objective.as_deref() {
+            let cmd = if let Some(obj) = host.session_objective() {
                 format!(
                     "python3 scripts/run-self-evolution-loop.py --json --objective {}",
                     shell_escape(obj)
@@ -1187,13 +1190,13 @@ pub(crate) async fn handle_ops_evolve_command(
                 "python3 scripts/run-self-evolution-loop.py --json".to_string()
             };
             let out = run_ops_shell_command(&cmd).await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "recommend" | "recs" => {
             let Some(path) = latest_json_report(&report_dir, "self-evolution-loop-") else {
                 emit_command_output(
-                    app,
+                    host,
                     "No self-evolution reports found. Run `/ops evolve run` first.",
                 );
                 return Ok(CommandResult::Handled);
@@ -1201,7 +1204,7 @@ pub(crate) async fn handle_ops_evolve_command(
             let recs = self_evolution_recommendations(&path);
             if recs.is_empty() {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "No recommendations found in {}.",
                         path.file_name()
@@ -1215,7 +1218,7 @@ pub(crate) async fn handle_ops_evolve_command(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Self-evolution recommendations ({file_label}):\n{}",
                         recs.join("\n")
@@ -1225,7 +1228,7 @@ pub(crate) async fn handle_ops_evolve_command(
             Ok(CommandResult::Handled)
         }
         _ => {
-            emit_command_output(app, "Usage: /ops evolve [status|run|recommend]");
+            emit_command_output(host, "Usage: /ops evolve [status|run|recommend]");
             Ok(CommandResult::Handled)
         }
     }
@@ -1236,7 +1239,7 @@ pub(crate) async fn handle_ops_evolve_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_ops_autopilot_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -1255,7 +1258,7 @@ pub(crate) async fn handle_ops_autopilot_command(
 
     let Some(repo_root) = discover_repo_root_for_about() else {
         emit_command_output(
-            app,
+            host,
             "Autopilot controls are unavailable outside source checkout.",
         );
         return Ok(CommandResult::Handled);
@@ -1270,7 +1273,7 @@ pub(crate) async fn handle_ops_autopilot_command(
                 .and_then(|p| summarize_performance_autopilot_report(p, "autopilot"))
                 .unwrap_or_else(|| "autopilot=unknown (no reports yet)".to_string());
             emit_command_output(
-                app,
+                host,
                 format!(
                     "{}\nmode={} profile={}\nUse `/ops autopilot run` then `/ops autopilot recommend`.",
                     summary, mode, profile
@@ -1283,13 +1286,13 @@ pub(crate) async fn handle_ops_autopilot_command(
                 "python3 scripts/run-performance-autopilot.py --repo-root . --json",
             )
             .await?;
-            emit_command_output(app, out);
+            emit_command_output(host, out);
             Ok(CommandResult::Handled)
         }
         "recommend" | "recs" => {
             let Some(path) = latest else {
                 emit_command_output(
-                    app,
+                    host,
                     "No performance autopilot reports found. Run `/ops autopilot run` first.",
                 );
                 return Ok(CommandResult::Handled);
@@ -1297,7 +1300,7 @@ pub(crate) async fn handle_ops_autopilot_command(
             let recs = performance_autopilot_recommendations(&path);
             if recs.is_empty() {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "No recommendations found in {}.",
                         path.file_name()
@@ -1311,7 +1314,7 @@ pub(crate) async fn handle_ops_autopilot_command(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Autopilot recommendations ({file_label}):\n{}",
                         recs.join("\n")
@@ -1321,8 +1324,10 @@ pub(crate) async fn handle_ops_autopilot_command(
             Ok(CommandResult::Handled)
         }
         "apply" => {
-            let env_path =
-                report_dir.join(format!("performance-autopilot-env-{}.env", app.session_id));
+            let env_path = report_dir.join(format!(
+                "performance-autopilot-env-{}.env",
+                host.session_id()
+            ));
             let cmd = format!(
                 "python3 scripts/run-performance-autopilot.py --repo-root . --apply-env {} --json",
                 shell_escape(&env_path.display().to_string())
@@ -1339,7 +1344,13 @@ pub(crate) async fn handle_ops_autopilot_command(
                     applied.push((k, v));
                 }
             }
-            write_autopilot_runtime_event(&report_dir, &app.session_id, &mode, &profile, &applied);
+            write_autopilot_runtime_event(
+                &report_dir,
+                host.session_id(),
+                &mode,
+                &profile,
+                &applied,
+            );
             let applied_keys = if applied.is_empty() {
                 "(none)".to_string()
             } else {
@@ -1350,7 +1361,7 @@ pub(crate) async fn handle_ops_autopilot_command(
                     .join(", ")
             };
             emit_command_output(
-                app,
+                host,
                 format!(
                     "{out}\n\nApplied safe runtime knobs: {applied_keys}\nmode={mode} profile={profile}\nlog: {}",
                     report_dir
@@ -1364,20 +1375,20 @@ pub(crate) async fn handle_ops_autopilot_command(
             let next = args.get(1).map(|v| v.to_ascii_lowercase());
             match next.as_deref() {
                 None | Some("status") => {
-                    emit_command_output(app, format!("autopilot profile={profile} (mode={mode})"))
+                    emit_command_output(host, format!("autopilot profile={profile} (mode={mode})"))
                 }
                 Some("list") => emit_command_output(
-                    app,
+                    host,
                     "Autopilot profiles:\n- balanced: default stability/perf mix\n- throughput: lower latency and tighter loop cadence\n- quality: stronger verification and replay focus\n- reliability: prioritize retries/recovery and degraded-source tolerance\n- safety: strictest gate posture with conservative policy knobs",
                 ),
                 Some("balanced" | "throughput" | "quality" | "reliability" | "safety") => {
                     let value = next.unwrap_or_else(|| "off".to_string());
                     crate::env_vars::set_var("HERMES_PERF_AUTOPILOT_PROFILE", &value);
-                    emit_command_output(app, format!("autopilot profile set to '{}'", value));
+                    emit_command_output(host, format!("autopilot profile set to '{}'", value));
                 }
                 Some(other) => {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Unknown profile '{}'. Use `/ops autopilot profile list`.",
                             other
@@ -1390,19 +1401,21 @@ pub(crate) async fn handle_ops_autopilot_command(
         "mode" => {
             let next = args.get(1).map(|v| v.to_ascii_lowercase());
             match next.as_deref() {
-                None | Some("status") => emit_command_output(app, format!("autopilot mode={mode}")),
+                None | Some("status") => {
+                    emit_command_output(host, format!("autopilot mode={mode}"))
+                }
                 Some("list") => emit_command_output(
-                    app,
+                    host,
                     "Autopilot modes:\n- off: disabled\n- advisory: report + recommendations only\n- enforce: intended to pair with `/ops autopilot apply` during incidents",
                 ),
                 Some("off" | "advisory" | "enforce") => {
                     let value = next.unwrap_or_else(|| "advisory".to_string());
                     crate::env_vars::set_var("HERMES_PERF_AUTOPILOT_MODE", &value);
-                    emit_command_output(app, format!("autopilot mode set to '{}'", value));
+                    emit_command_output(host, format!("autopilot mode set to '{}'", value));
                 }
                 Some(other) => {
                     emit_command_output(
-                        app,
+                        host,
                         format!("Unknown mode '{}'. Use `/ops autopilot mode list`.", other),
                     );
                 }
@@ -1414,14 +1427,14 @@ pub(crate) async fn handle_ops_autopilot_command(
             crate::env_vars::remove_var("HERMES_PERF_AUTOPILOT_PROFILE");
             crate::env_vars::remove_var("HERMES_PERF_AUTOPILOT_STATUS");
             emit_command_output(
-                app,
+                host,
                 "Cleared autopilot runtime overrides (mode/profile/status).",
             );
             Ok(CommandResult::Handled)
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /ops autopilot [status|run|recommend|apply|profile [status|list|balanced|throughput|quality|reliability|safety]|mode [status|list|off|advisory|enforce]|clear]",
             );
             Ok(CommandResult::Handled)
@@ -1434,14 +1447,14 @@ pub(crate) async fn handle_ops_autopilot_command(
 // ---------------------------------------------------------------------------
 
 async fn handle_ops_cockpit_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     _args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let counters = app.tool_registry.policy_counters();
+    let counters = host.tool_registry().policy_counters();
     let budget = RepoReviewBudgetRuntime::from_env();
     let board = render_mission_board(
-        &app.current_model,
-        app.session_objective.as_deref(),
+        host.current_model(),
+        host.session_objective(),
         background::background_job_counts(),
     )
     .await?;
@@ -1460,8 +1473,8 @@ async fn handle_ops_cockpit_command(
     let mut out = String::new();
     out.push_str("Ops Cockpit\n");
     out.push_str("===========\n");
-    let _ = writeln!(out, "session: {}", app.session_id);
-    let _ = writeln!(out, "model: {}", app.current_model);
+    let _ = writeln!(out, "session: {}", host.session_id());
+    let _ = writeln!(out, "model: {}", host.current_model());
     let _ = writeln!(
         out,
         "policy: profile={} mode={} preset={} sandbox={} skills_tier={}",
@@ -1512,7 +1525,7 @@ async fn handle_ops_cockpit_command(
     let _ = writeln!(out, "eval: {}", eval_summary);
     out.push('\n');
     out.push_str(&board);
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -1521,11 +1534,11 @@ async fn handle_ops_cockpit_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_ops_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
-        let yolo = !app.config.approval.require_approval;
+        let yolo = !host.config().approval.require_approval;
         let policy_mode = std::env::var("HERMES_TOOL_POLICY_MODE")
             .ok()
             .filter(|v| !v.trim().is_empty())
@@ -1534,10 +1547,10 @@ pub(crate) async fn handle_ops_command(
             .ok()
             .filter(|v| !v.trim().is_empty())
             .unwrap_or_else(|| "off".to_string());
-        let counters = app.tool_registry.policy_counters();
+        let counters = host.tool_registry().policy_counters();
         let dashboard_status = {
-            let raw = app
-                .tool_registry
+            let raw = host
+                .tool_registry()
                 .dispatch_async("dashboard_control", serde_json::json!({"action":"status"}))
                 .await;
             let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(
@@ -1624,11 +1637,11 @@ pub(crate) async fn handle_ops_command(
                /ops cockpit\n\
                /mission [status|init]\n\
                /ops help",
-            app.session_id,
-            app.current_model,
-            app.current_personality.as_deref().unwrap_or("(none)"),
+            host.session_id(),
+            host.current_model(),
+            host.current_personality().unwrap_or("(none)"),
             if yolo { "ON" } else { "OFF" },
-            if app.mouse_enabled() { "ON" } else { "OFF" },
+            if host.mouse_enabled() { "ON" } else { "OFF" },
             policy_mode,
             policy_preset,
             autopilot_mode,
@@ -1655,14 +1668,14 @@ pub(crate) async fn handle_ops_command(
             dashboard_status,
             gate_status,
         );
-        emit_command_output(app, out);
+        emit_command_output(host, out);
         return Ok(CommandResult::Handled);
     }
 
     match args[0].to_ascii_lowercase().as_str() {
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Operator control plane commands:\n\
                  - /ops status\n\
                  - /ops model [provider|provider:model]\n\
@@ -1687,29 +1700,29 @@ pub(crate) async fn handle_ops_command(
             );
             Ok(CommandResult::Handled)
         }
-        "model" => super::model::handle_model_command(app, &args[1..]).await,
-        "mode" => policy::handle_policy_command(app, &args[1..]),
-        "personality" => super::handle_personality_command(app, &args[1..]),
-        "mouse" => super::runtime_ui::handle_mouse_command(app, &args[1..]),
-        "yolo" => super::handle_yolo_command(app),
-        "reasoning" => super::handle_reasoning_command(app, &args[1..]),
-        "raw" => super::handle_raw_command(app, &args[1..]),
-        "verbose" => super::handle_verbose_command(app),
-        "statusbar" => super::runtime_ui::handle_statusbar_command(app),
-        "dashboard" => handle_dashboard_command(app, &args[1..]).await,
-        "skills-tier" => handle_ops_skills_tier_command(app, &args[1..]),
+        "model" => super::model::handle_model_command(host, &args[1..]).await,
+        "mode" => policy::handle_policy_command(host, &args[1..]),
+        "personality" => super::handle_personality_command(host, &args[1..]),
+        "mouse" => super::runtime_ui::handle_mouse_command(host, &args[1..]),
+        "yolo" => super::handle_yolo_command(host),
+        "reasoning" => super::handle_reasoning_command(host, &args[1..]),
+        "raw" => super::handle_raw_command(host, &args[1..]),
+        "verbose" => super::handle_verbose_command(host),
+        "statusbar" => super::runtime_ui::handle_statusbar_command(host),
+        "dashboard" => handle_dashboard_command(host, &args[1..]).await,
+        "skills-tier" => handle_ops_skills_tier_command(host, &args[1..]),
         "tool-profile" | "toolprofile" | "tool_profile" => {
-            handle_ops_tool_profile_command(app, &args[1..])
+            handle_ops_tool_profile_command(host, &args[1..])
         }
-        "budget" => handle_ops_budget_command(app, &args[1..]),
-        "evolve" => handle_ops_evolve_command(app, &args[1..]).await,
-        "eval" => handle_ops_eval_command(app, &args[1..]).await,
-        "autopilot" => handle_ops_autopilot_command(app, &args[1..]).await,
-        "gate" => handle_ops_gate_command(app, &args[1..]).await,
-        "cockpit" => handle_ops_cockpit_command(app, &args[1..]).await,
+        "budget" => handle_ops_budget_command(host, &args[1..]),
+        "evolve" => handle_ops_evolve_command(host, &args[1..]).await,
+        "eval" => handle_ops_eval_command(host, &args[1..]).await,
+        "autopilot" => handle_ops_autopilot_command(host, &args[1..]).await,
+        "gate" => handle_ops_gate_command(host, &args[1..]).await,
+        "cockpit" => handle_ops_cockpit_command(host, &args[1..]).await,
         other => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Unknown /ops target '{}'. Try `/ops help` for available controls.",
                     other

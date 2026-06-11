@@ -15,7 +15,6 @@ use hermes_acp_server::{
 use hermes_agent::{AgentLoop, RunConversationParams};
 use hermes_core::{AgentError, Message, ToolSchema};
 
-use crate::app::App;
 use crate::commands::{CommandResult, emit_command_output};
 
 // ---------------------------------------------------------------------------
@@ -190,46 +189,46 @@ impl PromptExecutor for HermesExecutor {
 // ---------------------------------------------------------------------------
 
 pub(crate) async fn handle_acp_command(
-    app: &mut App,
+    host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime),
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args.first().copied().unwrap_or("auto");
 
     // logs command shows events without draining them first.
     if action == "logs" {
-        show_acp_logs(app);
+        show_acp_logs(host);
         return Ok(CommandResult::Handled);
     }
 
-    drain_acp_events(app);
+    drain_acp_events(host);
 
     match action {
-        "start" => start_acp_server(app),
-        "stop" => stop_acp_server(app),
+        "start" => start_acp_server(host),
+        "stop" => stop_acp_server(host),
         "status" => {
-            show_acp_status(app);
+            show_acp_status(host);
             Ok(CommandResult::Handled)
         }
         "restart" => {
-            stop_acp_server(app)?;
-            start_acp_server(app)
+            stop_acp_server(host)?;
+            start_acp_server(host)
         }
         "connections" => {
-            show_acp_connections(app);
+            show_acp_connections(host);
             Ok(CommandResult::Handled)
         }
         "auto" => {
             // Smart default: start if not running, otherwise show status.
-            if app.acp_server.is_none() {
-                start_acp_server(app)
+            if host.acp_server().is_none() {
+                start_acp_server(host)
             } else {
-                show_acp_status(app);
+                show_acp_status(host);
                 Ok(CommandResult::Handled)
             }
         }
         _ => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /acp_server [start|stop|status|restart|connections|logs]",
             );
             Ok(CommandResult::Handled)
@@ -270,27 +269,29 @@ fn format_acp_event(event: &AcpServerEvent) -> String {
     }
 }
 
-fn drain_acp_events(app: &mut App) {
-    if let Some(buffer) = app.acp_event_buffer.take() {
+fn drain_acp_events(host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime)) {
+    if let Some(buffer) = host.acp_event_buffer_mut().take() {
         if let Ok(mut buf) = buffer.lock() {
             for line in buf.drain(..) {
-                emit_command_output(app, line);
+                emit_command_output(host, line);
             }
         }
-        app.acp_event_buffer = Some(buffer);
+        *host.acp_event_buffer_mut() = Some(buffer);
     }
 }
 
-fn start_acp_server(app: &mut App) -> Result<CommandResult, AgentError> {
-    if app.acp_server.is_some() {
-        emit_command_output(app, "[ACP server already running]");
-        show_acp_status(app);
+fn start_acp_server(
+    host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime),
+) -> Result<CommandResult, AgentError> {
+    if host.acp_server().is_some() {
+        emit_command_output(host, "[ACP server already running]");
+        show_acp_status(host);
         return Ok(CommandResult::Handled);
     }
 
     let executor = Arc::new(HermesExecutor {
-        agent: app.agent.clone(),
-        tool_schemas: app.tool_schemas.clone(),
+        agent: host.agent().clone(),
+        tool_schemas: host.tool_schemas().to_vec(),
     });
 
     let pipe_path = hermes_acp_server::default_pipe_path();
@@ -339,12 +340,12 @@ fn start_acp_server(app: &mut App) -> Result<CommandResult, AgentError> {
         }
     });
 
-    app.acp_server = Some(server_arc);
-    app.acp_event_buffer = Some(event_buffer);
+    *host.acp_server_mut() = Some(server_arc);
+    *host.acp_event_buffer_mut() = Some(event_buffer);
 
-    emit_command_output(app, format!("[ACP server started on {}]", pipe_path));
+    emit_command_output(host, format!("[ACP server started on {}]", pipe_path));
     emit_command_output(
-        app,
+        host,
         "\n┌─ ACP Server Controls ───────────────────────────┐\n\
          │  /acp_server status      → Show status           │\n\
          │  /acp_server stop        → Stop server           │\n\
@@ -356,46 +357,48 @@ fn start_acp_server(app: &mut App) -> Result<CommandResult, AgentError> {
     Ok(CommandResult::Handled)
 }
 
-fn stop_acp_server(app: &mut App) -> Result<CommandResult, AgentError> {
+fn stop_acp_server(
+    host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime),
+) -> Result<CommandResult, AgentError> {
     // Drain any remaining events before stopping.
-    if let Some(buffer) = app.acp_event_buffer.take() {
+    if let Some(buffer) = host.acp_event_buffer_mut().take() {
         if let Ok(mut buf) = buffer.lock() {
             for line in buf.drain(..) {
-                emit_command_output(app, line);
+                emit_command_output(host, line);
             }
         }
     }
 
-    match app.acp_server.take() {
+    match host.acp_server_mut().take() {
         Some(server) => {
             server.shutdown();
-            emit_command_output(app, "[ACP server stopped]");
+            emit_command_output(host, "[ACP server stopped]");
             Ok(CommandResult::Handled)
         }
         None => {
-            emit_command_output(app, "[ACP server not running]");
+            emit_command_output(host, "[ACP server not running]");
             Ok(CommandResult::Handled)
         }
     }
 }
 
-fn show_acp_logs(app: &mut App) {
-    if let Some(buffer) = app.acp_event_buffer.take() {
+fn show_acp_logs(host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime)) {
+    if let Some(buffer) = host.acp_event_buffer_mut().take() {
         if let Ok(buf) = buffer.lock() {
             if buf.is_empty() {
-                emit_command_output(app, "[No ACP events]");
+                emit_command_output(host, "[No ACP events]");
             } else {
-                emit_command_output(app, buf.join("\n"));
+                emit_command_output(host, buf.join("\n"));
             }
         }
-        app.acp_event_buffer = Some(buffer);
+        *host.acp_event_buffer_mut() = Some(buffer);
     } else {
-        emit_command_output(app, "[ACP server not running]");
+        emit_command_output(host, "[ACP server not running]");
     }
 }
 
-fn show_acp_status(app: &mut App) {
-    match &app.acp_server {
+fn show_acp_status(host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime)) {
+    match host.acp_server() {
         Some(server) => {
             let conns = server.connection_count();
             let max = server.max_connections();
@@ -407,20 +410,22 @@ fn show_acp_status(app: &mut App) {
                 format!("Connections: {}/{}", conns, max),
                 format!("Cherry client: {}", if cherry { "online" } else { "none" }),
             ];
-            emit_command_output(app, lines.join("\n"));
+            emit_command_output(host, lines.join("\n"));
         }
         None => {
-            emit_command_output(app, "ACP Server: stopped\nUse /acp_server to start.");
+            emit_command_output(host, "ACP Server: stopped\nUse /acp_server to start.");
         }
     }
 }
 
-fn show_acp_connections(app: &mut App) {
-    match &app.acp_server {
+fn show_acp_connections(
+    host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime),
+) {
+    match host.acp_server() {
         Some(server) => {
             let conns: Vec<ConnectionInfo> = server.connections();
             if conns.is_empty() {
-                emit_command_output(app, "[No active connections]");
+                emit_command_output(host, "[No active connections]");
                 return;
             }
             let mut lines = Vec::new();
@@ -437,10 +442,10 @@ fn show_acp_connections(app: &mut App) {
                     c.session_id.as_deref().unwrap_or("-"),
                 ));
             }
-            emit_command_output(app, lines.join("\n"));
+            emit_command_output(host, lines.join("\n"));
         }
         None => {
-            emit_command_output(app, "[ACP server not running]");
+            emit_command_output(host, "[ACP server not running]");
         }
     }
 }

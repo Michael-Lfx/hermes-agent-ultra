@@ -255,7 +255,7 @@ fn resolve_compression_plane_path(target: &str) -> Result<PathBuf, AgentError> {
 // ---------------------------------------------------------------------------
 
 fn recommend_compression_policy_for_app(
-    app: &App,
+    host: &impl crate::app::SessionRuntime,
     base: &CompressionRenderPolicy,
 ) -> CompressionRenderPolicy {
     let mut next = base.clone();
@@ -267,7 +267,7 @@ fn recommend_compression_policy_for_app(
     let mut tool_peak_line_chars = 0usize;
     let mut tool_total_chars = 0usize;
 
-    for msg in &app.messages {
+    for msg in host.messages() {
         let Some(content) = msg.content.as_ref() else {
             continue;
         };
@@ -324,7 +324,7 @@ fn recommend_compression_policy_for_app(
         }
     }
 
-    if app.messages.len() >= 140 {
+    if host.messages().len() >= 140 {
         next.max_assistant_render_lines = next.max_assistant_render_lines.min(240).max(40);
         next.max_tool_output_total_chars = next.max_tool_output_total_chars.min(64_000).max(2000);
     }
@@ -369,7 +369,7 @@ fn render_compression_recommendation(
 // ---------------------------------------------------------------------------
 
 fn handle_compress_rules_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -379,16 +379,16 @@ fn handle_compress_rules_command(
         .to_ascii_lowercase();
     match action.as_str() {
         "status" | "show" | "preview" => {
-            emit_command_output(app, render_compression_policy_status());
+            emit_command_output(host, render_compression_policy_status());
         }
         "recommend" => {
             let (merged, _, _) = merged_compression_policy();
-            let rec = recommend_compression_policy_for_app(app, &merged);
-            emit_command_output(app, render_compression_recommendation(&merged, &rec));
+            let rec = recommend_compression_policy_for_app(host, &merged);
+            emit_command_output(host, render_compression_recommendation(&merged, &rec));
         }
         "autotune" => {
             let (merged, _, _) = merged_compression_policy();
-            let rec = recommend_compression_policy_for_app(app, &merged);
+            let rec = recommend_compression_policy_for_app(host, &merged);
             if args
                 .get(1)
                 .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "apply" | "--apply"))
@@ -397,7 +397,7 @@ fn handle_compress_rules_command(
                 let path = match resolve_compression_plane_path(&target) {
                     Ok(path) => path,
                     Err(err) => {
-                        emit_command_output(app, err.to_string());
+                        emit_command_output(host, err.to_string());
                         return Ok(CommandResult::Handled);
                     }
                 };
@@ -410,7 +410,7 @@ fn handle_compress_rules_command(
                 save_compression_plane(&path, &plane)?;
                 apply_compression_policy_env(&rec);
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "{}\n\nAutotune applied to {} plane ({}) and runtime env updated.",
                         render_compression_recommendation(&merged, &rec),
@@ -420,7 +420,7 @@ fn handle_compress_rules_command(
                 );
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "{}\n\nDry-run only. Add `apply` to persist: `/compress rules autotune apply [user|project]`.",
                         render_compression_recommendation(&merged, &rec)
@@ -432,7 +432,7 @@ fn handle_compress_rules_command(
             let (merged, _, _) = merged_compression_policy();
             apply_compression_policy_env(&merged);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Applied compression policy to runtime env.\n\
                      HERMES_TUI_MAX_ASSISTANT_RENDER_LINES={}\n\
@@ -449,21 +449,21 @@ fn handle_compress_rules_command(
         "set" => {
             let Some(plane_name) = args.get(1).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /compress rules set <user|project> <key> <value>",
                 );
                 return Ok(CommandResult::Handled);
             };
             let Some(key) = args.get(2).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /compress rules set <user|project> <key> <value>",
                 );
                 return Ok(CommandResult::Handled);
             };
             let Some(value_raw) = args.get(3).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /compress rules set <user|project> <key> <value>",
                 );
                 return Ok(CommandResult::Handled);
@@ -478,7 +478,7 @@ fn handle_compress_rules_command(
             let path = match resolve_compression_plane_path(&target) {
                 Ok(path) => path,
                 Err(err) => {
-                    emit_command_output(app, err.to_string());
+                    emit_command_output(host, err.to_string());
                     return Ok(CommandResult::Handled);
                 }
             };
@@ -486,7 +486,7 @@ fn handle_compress_rules_command(
             set_compression_rule_field(&mut plane, key, value)?;
             save_compression_plane(&path, &plane)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Updated {} compression rule: {}={} ({})",
                     target,
@@ -498,14 +498,14 @@ fn handle_compress_rules_command(
         }
         "clear" => {
             let Some(plane_name) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /compress rules clear <user|project>");
+                emit_command_output(host, "Usage: /compress rules clear <user|project>");
                 return Ok(CommandResult::Handled);
             };
             let target = plane_name.trim().to_ascii_lowercase();
             let path = match resolve_compression_plane_path(&target) {
                 Ok(path) => path,
                 Err(err) => {
-                    emit_command_output(app, err.to_string());
+                    emit_command_output(host, err.to_string());
                     return Ok(CommandResult::Handled);
                 }
             };
@@ -514,15 +514,15 @@ fn handle_compress_rules_command(
                     AgentError::Io(format!("Failed to remove {}: {}", path.display(), e))
                 })?;
                 emit_command_output(
-                    app,
+                    host,
                     format!("Cleared {} plane rules at {}.", target, path.display()),
                 );
             } else {
-                emit_command_output(app, format!("{} plane rules already clear.", target));
+                emit_command_output(host, format!("{} plane rules already clear.", target));
             }
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /compress rules [status|preview|recommend|autotune [apply [user|project]]|apply|set <user|project> <key> <value>|clear <user|project>]",
         ),
     }
@@ -530,7 +530,7 @@ fn handle_compress_rules_command(
 }
 
 pub(crate) async fn handle_compress_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args
@@ -538,27 +538,29 @@ pub(crate) async fn handle_compress_command(
         .map(|v| v.eq_ignore_ascii_case("rules"))
         .unwrap_or(false)
     {
-        return handle_compress_rules_command(app, &args[1..]);
+        return handle_compress_rules_command(host, &args[1..]);
     }
-    let (pre_len, post_len, did_compress) = app.compress_conversation_context().await?;
+    let (pre_len, post_len, did_compress) = host.compress_conversation_context().await?;
     if pre_len <= 2 {
         emit_command_output(
-            app,
+            host,
             format!("Context too small to compress ({} messages).", pre_len),
         );
         return Ok(CommandResult::Handled);
     }
     if did_compress {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Compressed context: {} messages -> {} (session_id={}).",
-                pre_len, post_len, app.session_id
+                pre_len,
+                post_len,
+                host.session_id()
             ),
         );
     } else {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Compression skipped or no-op ({} messages unchanged). \
                  Context may be below threshold or another path holds the compression lock.",
@@ -608,7 +610,7 @@ pub(crate) fn compaction_governance_mode() -> CompactionGovernanceMode {
 }
 
 pub(crate) async fn handle_autocompact_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -619,7 +621,7 @@ pub(crate) async fn handle_autocompact_command(
         "status" | "show" => {
             let mode = compaction_governance_mode();
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Auto-compaction: enabled.\n\
                  Trigger policy: when context exceeds 80% of budget.\n\
@@ -631,11 +633,11 @@ pub(crate) async fn handle_autocompact_command(
             );
             Ok(CommandResult::Handled)
         }
-        "now" | "run" => handle_compress_command(app, &[]).await,
+        "now" | "run" => handle_compress_command(host, &[]).await,
         "governance" | "govern" => {
             let Some(next) = args.get(1).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Compaction governance: {}.\nUsage: `/autocompact governance [off|advisory|enforce]`",
                         compaction_governance_mode().as_str()
@@ -645,7 +647,7 @@ pub(crate) async fn handle_autocompact_command(
             };
             let Some(mode) = CompactionGovernanceMode::parse(next) else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Unknown governance mode '{}'. Use `off`, `advisory`, or `enforce`.",
                         next
@@ -655,14 +657,14 @@ pub(crate) async fn handle_autocompact_command(
             };
             crate::env_vars::set_var("HERMES_CONTEXTLATTICE_COMPACTION_GOVERNANCE", mode.as_str());
             emit_command_output(
-                app,
+                host,
                 format!("Compaction governance mode set to `{}`.", mode.as_str()),
             );
             Ok(CommandResult::Handled)
         }
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Usage: `/autocompact [status|now|governance]`\n\
                  - `status`: show current auto-compaction behavior\n\
                  - `now`: run immediate compaction pass\n\
@@ -672,7 +674,7 @@ pub(crate) async fn handle_autocompact_command(
         }
         other => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Unknown /autocompact action '{}'. Use `status`, `now`, `governance`, or `help`.",
                     other
@@ -714,10 +716,10 @@ mod tests {
                 "--ignore-rules".to_string(),
             ])
             .expect("parse cli");
-            let mut app = App::new(cli).await.expect("build app");
+            let mut host = App::new(cli).await.expect("build host");
             let (tx, _rx) = mpsc::unbounded_channel::<crate::tui::Event>();
-            app.set_stream_handle(Some(tx.into()));
-            app
+            host.set_stream_handle(Some(tx.into()));
+            host
         }
     }
 
@@ -769,8 +771,8 @@ mod tests {
         }
     }
 
-    fn latest_ui_assistant_text(app: &App) -> String {
-        app.ui_messages
+    fn latest_ui_assistant_text(host: &impl crate::app::SessionRuntime) -> String {
+        host.ui_messages()
             .iter()
             .rev()
             .find(|row| row.message.role == hermes_core::MessageRole::Assistant)
@@ -783,24 +785,24 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuardInCompress::new(tmp.path());
-        let mut app = build_test_app_with_stream_in_compress(tmp.path()).await;
+        let mut host = build_test_app_with_stream_in_compress(tmp.path()).await;
         crate::env_vars::remove_var("HERMES_TUI_MAX_ASSISTANT_RENDER_LINES");
 
         handle_slash_command(
-            &mut app,
+            &mut host,
             "/compress",
             &["rules", "set", "user", "assistant_lines", "320"],
         )
         .await
         .expect("compress rules set user");
-        let set_output = latest_ui_assistant_text(&app);
+        let set_output = latest_ui_assistant_text(&host);
         assert!(set_output.contains("Updated user compression rule"));
         assert!(set_output.contains("assistant_lines=320"));
 
-        handle_slash_command(&mut app, "/compress", &["rules", "apply"])
+        handle_slash_command(&mut host, "/compress", &["rules", "apply"])
             .await
             .expect("compress rules apply");
-        let applied = latest_ui_assistant_text(&app);
+        let applied = latest_ui_assistant_text(&host);
         assert!(applied.contains("Applied compression policy to runtime env"));
         assert_eq!(
             std::env::var("HERMES_TUI_MAX_ASSISTANT_RENDER_LINES")
@@ -815,17 +817,17 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuardInCompress::new(tmp.path());
-        let mut app = build_test_app_with_stream_in_compress(tmp.path()).await;
+        let mut host = build_test_app_with_stream_in_compress(tmp.path()).await;
         crate::env_vars::remove_var("HERMES_TUI_MAX_TOOL_OUTPUT_TOTAL_CHARS");
 
         handle_slash_command(
-            &mut app,
+            &mut host,
             "/compress",
             &["rules", "autotune", "apply", "user"],
         )
         .await
         .expect("compress autotune apply");
-        let out = latest_ui_assistant_text(&app);
+        let out = latest_ui_assistant_text(&host);
         assert!(out.contains("Autotune applied"));
         assert!(
             std::env::var("HERMES_TUI_MAX_TOOL_OUTPUT_TOTAL_CHARS")

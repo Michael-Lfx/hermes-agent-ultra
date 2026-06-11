@@ -20,11 +20,11 @@ use crate::App;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_save_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let path = app.persist_session_snapshot(args.first().copied())?;
-    emit_command_output(app, format!("Session saved to {}", path.display()));
+    let path = host.persist_session_snapshot(args.first().copied())?;
+    emit_command_output(host, format!("Session saved to {}", path.display()));
     Ok(CommandResult::Handled)
 }
 
@@ -267,18 +267,18 @@ pub(crate) fn summarize_branch_diff(
 // State.db session helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn session_db(app: &App) -> SessionPersistence {
-    SessionPersistence::new(&app.state_root)
+pub(crate) fn session_db(host: &impl crate::app::SessionRuntime) -> SessionPersistence {
+    SessionPersistence::new(&host.state_root())
 }
 
 /// Try to restore a session from `state.db`. Returns `Ok(None)` when DB is
 /// unavailable or target not found.
 pub(crate) fn try_load_session_from_db(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     target: Option<&str>,
     resume_mode: bool,
 ) -> Result<Option<CommandResult>, AgentError> {
-    let sp = session_db(app);
+    let sp = session_db(host);
     if sp.ensure_db().is_err() {
         return Ok(None);
     }
@@ -312,46 +312,45 @@ pub(crate) fn try_load_session_from_db(
         .unwrap_or_else(|| resolved.clone());
     let model = meta.as_ref().and_then(|s| s.model.clone());
 
-    let old_session_id = app.session_id.clone();
-    app.messages = messages;
-    app.ui_messages.clear();
+    let old_session_id = host.session_id().to_string();
+    *host.messages_mut() = messages;
+    host.ui_messages_mut().clear();
 
     if resume_mode {
         if resolved != old_session_id {
-            app.notify_memory_session_switch(&resolved, &old_session_id, false, "resume");
+            host.notify_memory_session_switch(&resolved, &old_session_id, false, "resume");
         } else {
-            app.agent.set_runtime_session_id(&resolved);
+            host.sync_agent_runtime_session_id(&resolved);
         }
-        app.session_id = resolved.clone();
+        *host.session_id_mut() = resolved.clone();
         let _ = sp.reopen_session(&resolved);
     }
 
     let mut model_note = String::new();
     if let Some(restored_model) = model.as_deref().filter(|s| !s.is_empty()) {
-        if !restored_model.eq_ignore_ascii_case(&app.current_model) {
-            let previous = app.current_model.clone();
-            app.switch_model(restored_model);
-            model_note = format!("\nModel restored: {} -> {}", previous, app.current_model);
+        if !restored_model.eq_ignore_ascii_case(host.current_model()) {
+            let previous = host.current_model().to_string();
+            host.switch_model(restored_model);
+            model_note = format!("\nModel restored: {} -> {}", previous, host.current_model());
         }
     }
 
     let verb = if resume_mode { "Resumed" } else { "Loaded" };
+    let message_count = host.messages().len();
     emit_command_output(
-        app,
+        host,
         format!(
             "{} session '{}' from state.db ({} messages; session_id={}){}",
-            verb,
-            display,
-            app.messages.len(),
-            resolved,
-            model_note
+            verb, display, message_count, resolved, model_note
         ),
     );
     Ok(Some(CommandResult::Handled))
 }
 
-pub(crate) fn format_db_session_list(app: &App) -> Result<Option<String>, AgentError> {
-    let sp = session_db(app);
+pub(crate) fn format_db_session_list(
+    host: &impl crate::app::SessionRuntime,
+) -> Result<Option<String>, AgentError> {
+    let sp = session_db(host);
     if sp.ensure_db().is_err() {
         return Ok(None);
     }
@@ -379,7 +378,7 @@ pub(crate) fn format_db_session_list(app: &App) -> Result<Option<String>, AgentE
 // ---------------------------------------------------------------------------
 
 pub(crate) fn load_session_from_path(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     session_name: &str,
     path: &Path,
     resume_mode: bool,
@@ -390,15 +389,15 @@ pub(crate) fn load_session_from_path(
         .map_err(|e| AgentError::Config(format!("Failed to parse session: {}", e)))?;
 
     let Some(messages) = data.get("messages").and_then(|m| m.as_array()) else {
-        emit_command_output(app, "Session file has no messages array.");
+        emit_command_output(host, "Session file has no messages array.");
         return Ok(CommandResult::Handled);
     };
 
-    let old_session_id = app.session_id.clone();
-    app.messages.clear();
-    app.ui_messages.clear();
+    let old_session_id = host.session_id().to_string();
+    host.messages_mut().clear();
+    host.ui_messages_mut().clear();
     for msg in messages {
-        app.messages.push(message_from_snapshot_entry(msg));
+        host.messages_mut().push(message_from_snapshot_entry(msg));
     }
 
     let session_info = data.get("session_info");
@@ -410,11 +409,11 @@ pub(crate) fn load_session_from_path(
             .filter(|s| !s.is_empty())
         {
             if restored_id != old_session_id {
-                app.notify_memory_session_switch(restored_id, &old_session_id, false, "resume");
+                host.notify_memory_session_switch(restored_id, &old_session_id, false, "resume");
             } else {
-                app.agent.set_runtime_session_id(restored_id);
+                host.sync_agent_runtime_session_id(restored_id);
             }
-            app.session_id = restored_id.to_string();
+            *host.session_id_mut() = restored_id.to_string();
         }
     }
 
@@ -425,10 +424,10 @@ pub(crate) fn load_session_from_path(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        if !restored_model.eq_ignore_ascii_case(&app.current_model) {
-            let previous = app.current_model.clone();
-            app.switch_model(restored_model);
-            model_note = format!("\nModel restored: {} -> {}", previous, app.current_model);
+        if !restored_model.eq_ignore_ascii_case(host.current_model()) {
+            let previous = host.current_model().to_string();
+            host.switch_model(restored_model);
+            model_note = format!("\nModel restored: {} -> {}", previous, host.current_model());
         }
     }
 
@@ -438,18 +437,19 @@ pub(crate) fn load_session_from_path(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        app.current_personality = Some(personality.to_string());
+        host.switch_personality(personality);
     }
 
     let verb = if resume_mode { "Resumed" } else { "Loaded" };
+    let message_count = host.messages().len();
     emit_command_output(
-        app,
+        host,
         format!(
             "{} session '{}' ({} messages; session_id={}){}",
             verb,
             session_name,
-            app.messages.len(),
-            app.session_id,
+            message_count,
+            host.session_id(),
             model_note
         ),
     );
@@ -461,12 +461,12 @@ pub(crate) fn load_session_from_path(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_load_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        if let Some(db_list) = format_db_session_list(app)? {
-            emit_command_output(app, db_list);
+        if let Some(db_list) = format_db_session_list(host)? {
+            emit_command_output(host, db_list);
             return Ok(CommandResult::Handled);
         }
     }
@@ -475,12 +475,12 @@ pub(crate) fn handle_load_command(
 
     if args.is_empty() {
         if !sessions_dir.exists() {
-            emit_command_output(app, "No saved sessions found.");
+            emit_command_output(host, "No saved sessions found.");
             return Ok(CommandResult::Handled);
         }
         let entries = enumerate_saved_sessions(&sessions_dir);
         if entries.is_empty() {
-            emit_command_output(app, "No saved sessions found.");
+            emit_command_output(host, "No saved sessions found.");
         } else {
             let mut out = String::from("Saved sessions:\n");
             for (idx, (name, _, _)) in entries.iter().enumerate() {
@@ -504,24 +504,24 @@ pub(crate) fn handle_load_command(
                 }
             }
             out.push_str("\nUsage: `/load <session-name>` or `/resume [session-name]`");
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         return Ok(CommandResult::Handled);
     }
 
     let name = args[0];
-    if let Some(result) = try_load_session_from_db(app, Some(name), false)? {
+    if let Some(result) = try_load_session_from_db(host, Some(name), false)? {
         return Ok(result);
     }
     let path = sessions_dir.join(format!("{}.json", name));
     if !path.exists() {
         emit_command_output(
-            app,
+            host,
             format!("Session '{}' not found at {}", name, path.display()),
         );
         return Ok(CommandResult::Handled);
     }
-    load_session_from_path(app, name, &path, false)
+    load_session_from_path(host, name, &path, false)
 }
 
 // ---------------------------------------------------------------------------
@@ -529,21 +529,21 @@ pub(crate) fn handle_load_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_resume_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        if let Some(result) = try_load_session_from_db(app, None, true)? {
+        if let Some(result) = try_load_session_from_db(host, None, true)? {
             return Ok(result);
         }
-    } else if let Some(result) = try_load_session_from_db(app, Some(args[0]), true)? {
+    } else if let Some(result) = try_load_session_from_db(host, Some(args[0]), true)? {
         return Ok(result);
     }
 
     let sessions_dir = hermes_config::hermes_home().join("sessions");
     if !sessions_dir.exists() {
         emit_command_output(
-            app,
+            host,
             format_session_db_unavailable(
                 "No saved sessions found and session database not available",
             ),
@@ -553,7 +553,7 @@ pub(crate) fn handle_resume_command(
     let entries = enumerate_saved_sessions(&sessions_dir);
     if entries.is_empty() {
         emit_command_output(
-            app,
+            host,
             format_session_db_unavailable(
                 "No saved sessions found and session database not available",
             ),
@@ -582,10 +582,10 @@ pub(crate) fn handle_resume_command(
                     .find(|(_, path, _)| inspect_snapshot_integrity(path).valid)
             });
         if let Some((name, path, _)) = pick {
-            return load_session_from_path(app, name, path, true);
+            return load_session_from_path(host, name, path, true);
         }
         emit_command_output(
-            app,
+            host,
             "No valid saved sessions found (all snapshots are malformed). Use `/sessions` to inspect and `/save` to create a fresh checkpoint.",
         );
         return Ok(CommandResult::Handled);
@@ -597,7 +597,7 @@ pub(crate) fn handle_resume_command(
             let integrity = inspect_snapshot_integrity(path);
             if !integrity.valid {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Session '{}' is present but invalid: {}.\nUse `/sessions` to inspect snapshot health.",
                         requested,
@@ -608,11 +608,11 @@ pub(crate) fn handle_resume_command(
                 );
                 return Ok(CommandResult::Handled);
             }
-            load_session_from_path(app, name, path, true)
+            load_session_from_path(host, name, path, true)
         }
         Err(err) if err.starts_with("not_found:") => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Session '{}' not found. Use `/load` to list saved sessions.",
                     requested
@@ -622,7 +622,7 @@ pub(crate) fn handle_resume_command(
         }
         Err(err) => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Session name '{}' is ambiguous. Matches: {}",
                     requested,
@@ -639,18 +639,18 @@ pub(crate) fn handle_resume_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_sessions_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        return handle_load_command(app, args);
+        return handle_load_command(host, args);
     }
     let action = args[0].to_ascii_lowercase();
     if action == "doctor" || action == "verify" {
         let sessions_dir = hermes_config::hermes_home().join("sessions");
         let entries = enumerate_saved_sessions(&sessions_dir);
         if entries.is_empty() {
-            emit_command_output(app, "No saved sessions found.");
+            emit_command_output(host, "No saved sessions found.");
             return Ok(CommandResult::Handled);
         }
         let mut invalid = Vec::new();
@@ -693,10 +693,10 @@ pub(crate) fn handle_sessions_command(
             }
         }
         out.push_str("Recommendation: `/save` now to create a fresh canonical checkpoint.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
-    handle_resume_command(app, args)
+    handle_resume_command(host, args)
 }
 
 // ---------------------------------------------------------------------------
@@ -704,14 +704,14 @@ pub(crate) fn handle_sessions_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_snapshot_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sessions_dir = hermes_config::hermes_home().join("sessions");
     if args.is_empty() || args[0].eq_ignore_ascii_case("list") {
         if !sessions_dir.exists() {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "No snapshots found in {}.\nUse `/snapshot save [name]` to create one.",
                     sessions_dir.display()
@@ -722,7 +722,7 @@ pub(crate) fn handle_snapshot_command(
         let entries = enumerate_saved_sessions(&sessions_dir);
         if entries.is_empty() {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "No snapshots found in {}.\nUse `/snapshot save [name]` to create one.",
                     sessions_dir.display()
@@ -740,7 +740,7 @@ pub(crate) fn handle_snapshot_command(
             out,
             "\nUse `/snapshot save [name]` to create, `/rollback latest` to restore latest, or `/load <snapshot-name>` to load a specific snapshot."
         );
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
@@ -749,8 +749,8 @@ pub(crate) fn handle_snapshot_command(
     } else {
         args.first().copied()
     };
-    let path = app.persist_session_snapshot(save_name)?;
-    emit_command_output(app, format!("Snapshot saved: {}", path.display()));
+    let path = host.persist_session_snapshot(save_name)?;
+    emit_command_output(host, format!("Snapshot saved: {}", path.display()));
     Ok(CommandResult::Handled)
 }
 
@@ -759,7 +759,7 @@ pub(crate) fn handle_snapshot_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_rollback_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("list") {
@@ -777,7 +777,7 @@ pub(crate) fn handle_rollback_command(
                 out.push_str(&format!("    - {}\n", name));
             }
         }
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
@@ -792,10 +792,10 @@ pub(crate) fn handle_rollback_command(
         };
         let bounded = steps.clamp(1, 64);
         for _ in 0..bounded {
-            app.undo_last();
+            host.undo_last();
         }
         emit_command_output(
-            app,
+            host,
             format!("Rolled back {} exchange(s) via undo.", bounded),
         );
         return Ok(CommandResult::Handled);
@@ -805,21 +805,21 @@ pub(crate) fn handle_rollback_command(
         let sessions_dir = hermes_config::hermes_home().join("sessions");
         let entries = enumerate_saved_sessions(&sessions_dir);
         let Some((name, path, _)) = entries.first() else {
-            emit_command_output(app, "No snapshots available to rollback.");
+            emit_command_output(host, "No snapshots available to rollback.");
             return Ok(CommandResult::Handled);
         };
-        return load_session_from_path(app, name, path, false);
+        return load_session_from_path(host, name, path, false);
     }
 
     if sub.eq_ignore_ascii_case("load") {
         let Some(name) = args.get(1).copied() else {
-            emit_command_output(app, "Usage: /rollback load <snapshot-name>");
+            emit_command_output(host, "Usage: /rollback load <snapshot-name>");
             return Ok(CommandResult::Handled);
         };
-        return handle_load_command(app, &[name]);
+        return handle_load_command(host, &[name]);
     }
 
-    handle_load_command(app, &[sub])
+    handle_load_command(host, &[sub])
 }
 
 // ---------------------------------------------------------------------------
@@ -827,16 +827,16 @@ pub(crate) fn handle_rollback_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_timetravel_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        return handle_snapshot_command(app, &["list"]);
+        return handle_snapshot_command(host, &["list"]);
     }
     match args[0].to_ascii_lowercase().as_str() {
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /timetravel [list|latest|goto <snapshot>|undo [n]|branch [label]]\n\
                  - list: show snapshot checkpoints\n\
                  - latest: jump to latest snapshot\n\
@@ -846,26 +846,26 @@ pub(crate) fn handle_timetravel_command(
             );
             Ok(CommandResult::Handled)
         }
-        "list" | "ls" | "show" => handle_snapshot_command(app, &["list"]),
-        "latest" => handle_rollback_command(app, &["latest"]),
+        "list" | "ls" | "show" => handle_snapshot_command(host, &["list"]),
+        "latest" => handle_rollback_command(host, &["latest"]),
         "goto" | "jump" => {
             let Some(name) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /timetravel goto <snapshot-name>");
+                emit_command_output(host, "Usage: /timetravel goto <snapshot-name>");
                 return Ok(CommandResult::Handled);
             };
-            handle_load_command(app, &[name])
+            handle_load_command(host, &[name])
         }
-        "undo" => handle_rollback_command(app, args),
+        "undo" => handle_rollback_command(host, args),
         "branch" | "fork" => {
             let label = args.get(1).copied().unwrap_or("timetravel");
-            handle_branch_command(app, &[label])
+            handle_branch_command(host, &[label])
         }
         other => {
             if other.parse::<usize>().is_ok() {
-                handle_rollback_command(app, args)
+                handle_rollback_command(host, args)
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Unknown /timetravel action '{}'. Use `/timetravel help`.",
                         other
@@ -911,7 +911,7 @@ pub(crate) fn branch_checkpoint_name(session_id: &str, label: Option<&str>) -> S
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_branch_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sessions_dir = hermes_config::hermes_home().join("sessions");
@@ -924,7 +924,7 @@ pub(crate) fn handle_branch_command(
     match action.as_str() {
         "help" => {
             emit_command_output(
-                app,
+                host,
                 "Usage: /branch [label]\n\
                        /branch list\n\
                        /branch diff <left> [right]\n\
@@ -938,7 +938,7 @@ pub(crate) fn handle_branch_command(
         }
         "list" | "ls" | "show" => {
             if entries.is_empty() {
-                emit_command_output(app, "No snapshots found. Use `/branch <label>` first.");
+                emit_command_output(host, "No snapshots found. Use `/branch <label>` first.");
                 return Ok(CommandResult::Handled);
             }
             let mut out = String::from("Branch checkpoints:\n");
@@ -968,24 +968,24 @@ pub(crate) fn handle_branch_command(
             out.push_str(
                 "\nUse `/branch diff <left> [right]` or `/branch merge <source> [target]`.",
             );
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
         "diff" => {
             let Some(left_name) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /branch diff <left> [right]");
+                emit_command_output(host, "Usage: /branch diff <left> [right]");
                 return Ok(CommandResult::Handled);
             };
             let right_name = args.get(2).copied().unwrap_or("latest");
             let left_entry = match resolve_saved_session_entry(&entries, left_name) {
                 Ok(entry) => entry,
                 Err(err) if err.starts_with("not_found:") => {
-                    emit_command_output(app, format!("Snapshot '{}' not found.", left_name));
+                    emit_command_output(host, format!("Snapshot '{}' not found.", left_name));
                     return Ok(CommandResult::Handled);
                 }
                 Err(err) => {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Snapshot '{}' is ambiguous. Matches: {}",
                             left_name,
@@ -999,7 +999,7 @@ pub(crate) fn handle_branch_command(
                 match entries.first() {
                     Some(entry) => entry,
                     None => {
-                        emit_command_output(app, "No snapshots found.");
+                        emit_command_output(host, "No snapshots found.");
                         return Ok(CommandResult::Handled);
                     }
                 }
@@ -1007,12 +1007,12 @@ pub(crate) fn handle_branch_command(
                 match resolve_saved_session_entry(&entries, right_name) {
                     Ok(entry) => entry,
                     Err(err) if err.starts_with("not_found:") => {
-                        emit_command_output(app, format!("Snapshot '{}' not found.", right_name));
+                        emit_command_output(host, format!("Snapshot '{}' not found.", right_name));
                         return Ok(CommandResult::Handled);
                     }
                     Err(err) => {
                         emit_command_output(
-                            app,
+                            host,
                             format!(
                                 "Snapshot '{}' is ambiguous. Matches: {}",
                                 right_name,
@@ -1026,7 +1026,7 @@ pub(crate) fn handle_branch_command(
             let left_messages = load_messages_from_snapshot(&left_entry.1)?;
             let right_messages = load_messages_from_snapshot(&right_entry.1)?;
             emit_command_output(
-                app,
+                host,
                 summarize_branch_diff(
                     &left_entry.0,
                     &left_messages,
@@ -1038,18 +1038,18 @@ pub(crate) fn handle_branch_command(
         }
         "merge" => {
             let Some(source_name) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /branch merge <source> [target]");
+                emit_command_output(host, "Usage: /branch merge <source> [target]");
                 return Ok(CommandResult::Handled);
             };
             let source_entry = match resolve_saved_session_entry(&entries, source_name) {
                 Ok(entry) => entry,
                 Err(err) if err.starts_with("not_found:") => {
-                    emit_command_output(app, format!("Snapshot '{}' not found.", source_name));
+                    emit_command_output(host, format!("Snapshot '{}' not found.", source_name));
                     return Ok(CommandResult::Handled);
                 }
                 Err(err) => {
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Snapshot '{}' is ambiguous. Matches: {}",
                             source_name,
@@ -1061,17 +1061,17 @@ pub(crate) fn handle_branch_command(
             };
 
             let mut target_label = "current".to_string();
-            let mut merged_messages = app.messages.clone();
+            let mut merged_messages = host.messages_mut().clone();
             if let Some(target_name) = args.get(2).copied() {
                 let target_entry = match resolve_saved_session_entry(&entries, target_name) {
                     Ok(entry) => entry,
                     Err(err) if err.starts_with("not_found:") => {
-                        emit_command_output(app, format!("Snapshot '{}' not found.", target_name));
+                        emit_command_output(host, format!("Snapshot '{}' not found.", target_name));
                         return Ok(CommandResult::Handled);
                     }
                     Err(err) => {
                         emit_command_output(
-                            app,
+                            host,
                             format!(
                                 "Snapshot '{}' is ambiguous. Matches: {}",
                                 target_name,
@@ -1096,16 +1096,17 @@ pub(crate) fn handle_branch_command(
                 }
             }
             let merged_total = merged_messages.len();
-            app.messages = merged_messages;
-            app.ui_messages
-                .retain(|msg| msg.insert_at <= app.messages.len());
+            *host.messages_mut() = merged_messages;
+            let message_count = host.messages().len();
+            host.ui_messages_mut()
+                .retain(|msg| msg.insert_at <= message_count);
             let stem = branch_checkpoint_name(
-                &app.session_id,
+                host.session_id(),
                 Some(&format!("merge-{}-into-{}", source_entry.0, target_label)),
             );
-            let path = app.persist_session_snapshot(Some(&stem))?;
+            let path = host.persist_session_snapshot(Some(&stem))?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Branch merge complete.\n  source: {}\n  target: {}\n  appended_unique_messages: {}\n  merged_total_messages: {}\n  snapshot: {}",
                     source_entry.0,
@@ -1125,10 +1126,10 @@ pub(crate) fn handle_branch_command(
     } else {
         Some(args.join(" "))
     };
-    let stem = branch_checkpoint_name(&app.session_id, label.as_deref());
-    match app.persist_session_snapshot(Some(&stem)) {
+    let stem = branch_checkpoint_name(host.session_id(), label.as_deref());
+    match host.persist_session_snapshot(Some(&stem)) {
         Ok(path) => emit_command_output(
-            app,
+            host,
             format!(
                 "Branch checkpoint saved: {}\nContinue in current session or run `/resume {}`.",
                 path.display(),
@@ -1136,7 +1137,7 @@ pub(crate) fn handle_branch_command(
             ),
         ),
         Err(err) => emit_command_output(
-            app,
+            host,
             format!("Branch marker requested, but snapshot failed: {}", err),
         ),
     }
@@ -1148,7 +1149,7 @@ pub(crate) fn handle_branch_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_session_compat_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     cmd: &str,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
@@ -1156,7 +1157,7 @@ pub(crate) fn handle_session_compat_command(
     let msg = match cmd {
         "/title" => {
             if arg_joined.trim().is_empty() {
-                match session_db(app).get_session_title(&app.session_id) {
+                match session_db(host).get_session_title(host.session_id()) {
                     Ok(Some(title)) => format!("Session title: {title}"),
                     Ok(None) => "Session has no title.".to_string(),
                     Err(e) => format!(
@@ -1165,7 +1166,8 @@ pub(crate) fn handle_session_compat_command(
                     ),
                 }
             } else {
-                match session_db(app).set_session_title(&app.session_id, Some(arg_joined.trim())) {
+                match session_db(host).set_session_title(host.session_id(), Some(arg_joined.trim()))
+                {
                     Ok(true) => format!("Session title set to: {}", arg_joined.trim()),
                     Ok(false) => "Session not found in state.db.".to_string(),
                     Err(e) => format!("Failed to set title: {e}"),
@@ -1175,7 +1177,7 @@ pub(crate) fn handle_session_compat_command(
         "/branch" => "Use `/branch` (native) for list/diff/merge/save controls.".to_string(),
         _ => "Compatibility command acknowledged.".to_string(),
     };
-    emit_command_output(app, msg);
+    emit_command_output(host, msg);
     Ok(CommandResult::Handled)
 }
 
@@ -1256,14 +1258,14 @@ mod tests {
             "--ignore-rules".to_string(),
         ])
         .expect("parse cli");
-        let mut app = App::new(cli).await.expect("build app");
+        let mut host = App::new(cli).await.expect("build host");
         let (tx, _rx) = mpsc::unbounded_channel::<crate::tui::Event>();
-        app.set_stream_handle(Some(tx.into()));
-        app
+        host.set_stream_handle(Some(tx.into()));
+        host
     }
 
-    fn latest_ui_assistant_text(app: &App) -> String {
-        app.ui_messages
+    fn latest_ui_assistant_text(host: &impl crate::app::SessionRuntime) -> String {
+        host.ui_messages()
             .iter()
             .rev()
             .find(|row| row.message.role == hermes_core::MessageRole::Assistant)
@@ -1280,12 +1282,12 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
-        let result = handle_snapshot_command(&mut app, &[]).expect("snapshot list");
+        let result = handle_snapshot_command(&mut host, &[]).expect("snapshot list");
         assert_eq!(result, CommandResult::Handled);
 
-        let output = latest_ui_assistant_text(&app);
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("Session snapshots:") || output.contains("No snapshots found in"));
     }
 
@@ -1294,11 +1296,11 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
-        let result = handle_rollback_command(&mut app, &[]).expect("rollback list");
+        let result = handle_rollback_command(&mut host, &[]).expect("rollback list");
         assert_eq!(result, CommandResult::Handled);
-        assert!(latest_ui_assistant_text(&app).contains("Rollback controls:"));
+        assert!(latest_ui_assistant_text(&host).contains("Rollback controls:"));
     }
 
     #[test]

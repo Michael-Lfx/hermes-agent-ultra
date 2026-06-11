@@ -8,19 +8,26 @@ use crate::app::{App, PetDock, PetSettings};
 use crate::commands::{CommandResult, emit_command_output, truncate_chars};
 use crate::skin_engine::{BUILTIN_SKINS, canonical_skin_name};
 
-pub(crate) fn handle_profile_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_profile_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let home = hermes_config::hermes_home();
-    let selected = app.config.profile.current.as_deref().unwrap_or("default");
+    let selected = host
+        .config()
+        .profile
+        .current
+        .as_deref()
+        .unwrap_or("default");
     let mut out = String::new();
     let _ = writeln!(out, "Active profile: {}", selected);
     let _ = writeln!(out, "Hermes home: {}", home.display());
-    let _ = writeln!(out, "Session id: {}", app.session_id);
-    emit_command_output(app, out.trim_end());
+    let _ = writeln!(out, "Session id: {}", host.session_id());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
 pub(crate) fn handle_runtime_ui_mode_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     cmd: &str,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
@@ -58,7 +65,7 @@ pub(crate) fn handle_runtime_ui_mode_command(
                     "Usage: `/skin list` or `/skin <name>`".to_string()
                 } else if let Some(canonical) = canonical_skin_name(requested) {
                     crate::env_vars::set_var("HERMES_THEME", canonical);
-                    app.request_theme_change(canonical);
+                    host.request_theme_change(canonical);
                     format!(
                         "Skin switched to `{}`.\nApplied in this TUI session and exported as HERMES_THEME for child processes.",
                         canonical
@@ -74,12 +81,12 @@ pub(crate) fn handle_runtime_ui_mode_command(
         "/fast" => format!(
             "Fast mode compatibility command received (`{}`).\nCurrent model: {}\nTip: switch to a lower-latency model via `/model`.",
             args.first().copied().unwrap_or("status"),
-            app.current_model
+            host.current_model()
         ),
         "/voice" => "Voice mode uses provider/platform capabilities; no separate TUI voice engine is active in this session.".to_string(),
         _ => "Unsupported runtime UI mode command.".to_string(),
     };
-    emit_command_output(app, msg);
+    emit_command_output(host, msg);
     Ok(CommandResult::Handled)
 }
 
@@ -119,17 +126,20 @@ fn parse_pet_dock(value: &str) -> Option<PetDock> {
     }
 }
 
-pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_pet_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let action = args.first().copied().unwrap_or("status");
-    let mut settings = app.pet_settings().clone();
+    let mut settings = host.pet_settings().clone();
 
     match action.to_ascii_lowercase().as_str() {
         "status" => {
-            emit_command_output(app, render_pet_status(&settings));
+            emit_command_output(host, render_pet_status(&settings));
         }
         "list" => {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Available pets:\n  - species: {}\n  - moods: {}\n  - dock: left, right",
                     PetSettings::species_catalog().join(", "),
@@ -147,9 +157,9 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
             match parse_toggle_arg(normalized_toggle, settings.enabled) {
                 Ok(enabled) => {
                     settings.enabled = enabled;
-                    app.set_pet_settings(settings.clone())?;
+                    host.set_pet_settings(settings.clone())?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Pet {}.\n{}",
                             if settings.enabled {
@@ -162,7 +172,7 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
                     );
                 }
                 Err(_) => emit_command_output(
-                    app,
+                    host,
                     "Usage: /pet [status|on|off|toggle|wake|tuck|list|set <species>|mood <mood>|dock <left|right>|speed <ms>]",
                 ),
             }
@@ -170,7 +180,7 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
         "set" | "species" => {
             let Some(raw) = args.get(1).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Usage: /pet set <species>\nAvailable species: {}",
                         PetSettings::species_catalog().join(", ")
@@ -180,11 +190,11 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
             };
             if let Some(species) = parse_pet_species(raw) {
                 settings.species = species;
-                app.set_pet_settings(settings.clone())?;
-                emit_command_output(app, render_pet_status(&settings));
+                host.set_pet_settings(settings.clone())?;
+                emit_command_output(host, render_pet_status(&settings));
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Unknown species '{}'. Available: {}",
                         raw,
@@ -196,7 +206,7 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
         "mood" => {
             let Some(raw) = args.get(1).copied() else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Usage: /pet mood <mood>\nAvailable moods: {}",
                         PetSettings::mood_catalog().join(", ")
@@ -206,11 +216,11 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
             };
             if let Some(mood) = parse_pet_mood(raw) {
                 settings.mood = mood;
-                app.set_pet_settings(settings.clone())?;
-                emit_command_output(app, render_pet_status(&settings));
+                host.set_pet_settings(settings.clone())?;
+                emit_command_output(host, render_pet_status(&settings));
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Unknown mood '{}'. Available: {}",
                         raw,
@@ -221,33 +231,33 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
         }
         "dock" => {
             let Some(raw) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /pet dock <left|right>");
+                emit_command_output(host, "Usage: /pet dock <left|right>");
                 return Ok(CommandResult::Handled);
             };
             if let Some(dock) = parse_pet_dock(raw) {
                 settings.dock = dock;
-                app.set_pet_settings(settings.clone())?;
-                emit_command_output(app, render_pet_status(&settings));
+                host.set_pet_settings(settings.clone())?;
+                emit_command_output(host, render_pet_status(&settings));
             } else {
-                emit_command_output(app, "Usage: /pet dock <left|right>");
+                emit_command_output(host, "Usage: /pet dock <left|right>");
             }
         }
         "speed" => {
             let Some(raw) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /pet speed <ms>");
+                emit_command_output(host, "Usage: /pet speed <ms>");
                 return Ok(CommandResult::Handled);
             };
             match raw.trim().parse::<u64>() {
                 Ok(ms) => {
                     settings.tick_ms = ms;
-                    app.set_pet_settings(settings.clone())?;
-                    emit_command_output(app, render_pet_status(&settings));
+                    host.set_pet_settings(settings.clone())?;
+                    emit_command_output(host, render_pet_status(&settings));
                 }
-                Err(_) => emit_command_output(app, "Usage: /pet speed <ms>"),
+                Err(_) => emit_command_output(host, "Usage: /pet speed <ms>"),
             }
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /pet [status|on|off|toggle|wake|tuck|list|set <species>|mood <mood>|dock <left|right>|speed <ms>]",
         ),
     }
@@ -255,16 +265,21 @@ pub(crate) fn handle_pet_command(app: &mut App, args: &[&str]) -> Result<Command
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_redraw_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    app.push_ui_assistant("↻ Repaint pulse requested.");
+pub(crate) fn handle_redraw_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    host.push_ui_assistant("↻ Repaint pulse requested.".to_string());
     emit_command_output(
-        app,
+        host,
         "Repaint pulse sent.\nIf the screen still looks stale: press Ctrl+L (lane toggle) or resize the terminal once.",
     );
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_paste_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_paste_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     let text = if let Some(mock) = std::env::var("HERMES_TEST_CLIPBOARD_TEXT")
         .ok()
         .map(|v| v.trim().to_string())
@@ -278,7 +293,7 @@ pub(crate) fn handle_paste_command(app: &mut App, args: &[&str]) -> Result<Comma
     };
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        emit_command_output(app, "Clipboard is empty.");
+        emit_command_output(host, "Clipboard is empty.");
         return Ok(CommandResult::Handled);
     }
     let pastes_dir = hermes_config::hermes_home().join("pastes");
@@ -305,26 +320,32 @@ pub(crate) fn handle_paste_command(app: &mut App, args: &[&str]) -> Result<Comma
         "Use `/background review {}` to process it in isolation.",
         path.display()
     );
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_copy_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let maybe_text = app.transcript_messages().into_iter().rev().find_map(|msg| {
-        if msg.role != MessageRole::Assistant {
-            return None;
-        }
-        let content = msg.content.unwrap_or_default();
-        let trimmed = content.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    });
+pub(crate) fn handle_copy_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let maybe_text = host
+        .transcript_messages()
+        .into_iter()
+        .rev()
+        .find_map(|msg| {
+            if msg.role != MessageRole::Assistant {
+                return None;
+            }
+            let content = msg.content.unwrap_or_default();
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        });
     let Some(text) = maybe_text else {
         emit_command_output(
-            app,
+            host,
             "Copy skipped: no assistant message content available yet.",
         );
         return Ok(CommandResult::Handled);
@@ -332,14 +353,14 @@ pub(crate) fn handle_copy_command(app: &mut App) -> Result<CommandResult, AgentE
 
     match arboard::Clipboard::new().and_then(|mut cb| cb.set_text(text.clone())) {
         Ok(()) => emit_command_output(
-            app,
+            host,
             format!(
                 "Copied latest assistant message ({} chars).",
                 text.chars().count()
             ),
         ),
         Err(err) => emit_command_output(
-            app,
+            host,
             format!(
                 "Clipboard unavailable ({}). Copy directly from transcript as fallback.",
                 err
@@ -349,9 +370,11 @@ pub(crate) fn handle_copy_command(app: &mut App) -> Result<CommandResult, AgentE
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_statusbar_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_statusbar_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     emit_command_output(
-        app,
+        host,
         "Status bar is always enabled in the current TUI renderer.",
     );
     Ok(CommandResult::Handled)
@@ -369,43 +392,46 @@ fn parse_toggle_arg(raw: Option<&str>, current: bool) -> Result<bool, &'static s
     }
 }
 
-pub(crate) fn handle_mouse_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_mouse_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.len() >= 2 && args[0].eq_ignore_ascii_case("set") {
-        match parse_toggle_arg(args.get(1).copied(), app.mouse_enabled()) {
+        match parse_toggle_arg(args.get(1).copied(), host.mouse_enabled()) {
             Ok(next) => {
-                app.set_mouse_enabled(next);
+                host.set_mouse_enabled(next);
                 crate::env_vars::set_var("HERMES_TUI_MOUSE", if next { "1" } else { "0" });
                 emit_command_output(
-                    app,
+                    host,
                     format!("Mouse interactions: {}", if next { "ON" } else { "OFF" }),
                 );
             }
-            Err(usage) => emit_command_output(app, usage),
+            Err(usage) => emit_command_output(host, usage),
         }
         return Ok(CommandResult::Handled);
     }
 
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Mouse interactions: {} (use `/mouse on` or `/mouse off`)",
-                if app.mouse_enabled() { "ON" } else { "OFF" }
+                if host.mouse_enabled() { "ON" } else { "OFF" }
             ),
         );
         return Ok(CommandResult::Handled);
     }
 
-    match parse_toggle_arg(args.first().copied(), app.mouse_enabled()) {
+    match parse_toggle_arg(args.first().copied(), host.mouse_enabled()) {
         Ok(next) => {
-            app.set_mouse_enabled(next);
+            host.set_mouse_enabled(next);
             crate::env_vars::set_var("HERMES_TUI_MOUSE", if next { "1" } else { "0" });
             emit_command_output(
-                app,
+                host,
                 format!("Mouse interactions: {}", if next { "ON" } else { "OFF" }),
             );
         }
-        Err(usage) => emit_command_output(app, usage),
+        Err(usage) => emit_command_output(host, usage),
     }
     Ok(CommandResult::Handled)
 }

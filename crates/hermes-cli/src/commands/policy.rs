@@ -77,22 +77,26 @@ pub(crate) fn current_policy_profile_name() -> &'static str {
     }
 }
 
-pub(crate) fn apply_policy_profile(app: &mut App, profile: PolicyProfile) {
+pub(crate) fn apply_policy_profile(
+    host: &mut impl crate::app::SlashCommandHost,
+    profile: PolicyProfile,
+) {
     crate::env_vars::set_var("HERMES_TOOL_POLICY_PRESET", profile.preset);
     crate::env_vars::set_var("HERMES_TOOL_POLICY_MODE", profile.mode);
     crate::env_vars::set_var("HERMES_EXECUTION_SANDBOX_PROFILE", profile.sandbox);
     crate::env_vars::set_var("HERMES_SKILLS_EXECUTION_TIER", profile.skills_tier);
-    app.tool_registry.set_policy(ToolPolicyEngine::from_env());
+    host.tool_registry()
+        .set_policy(ToolPolicyEngine::from_env());
 }
 
 pub(crate) fn handle_policy_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
-        let counters = app.tool_registry.policy_counters();
+        let counters = host.tool_registry().policy_counters();
         emit_command_output(
-            app,
+            host,
             format!(
                 "Policy profile: {}\nPreset: {}\nMode: {}\nSandbox: {}\nSkills tier: {}\nCounters: allow={} deny={} audit_only={} simulate={} would_block={}\n\nUse `/policy list` or `/policy strict|standard|dev`.",
                 current_policy_profile_name(),
@@ -132,14 +136,14 @@ pub(crate) fn handle_policy_command(
             );
         }
         out.push_str("\nSelect with `/policy strict`, `/policy standard`, or `/policy dev`.");
-        emit_command_output(app, out.trim_end());
+        emit_command_output(host, out.trim_end());
         return Ok(CommandResult::Handled);
     }
 
     if let Some(profile) = resolve_policy_profile(args[0]) {
-        apply_policy_profile(app, profile);
+        apply_policy_profile(host, profile);
         emit_command_output(
-            app,
+            host,
             format!(
                 "Policy profile switched to `{}`.\nPreset={} Mode={} Sandbox={} SkillsTier={}",
                 profile.name, profile.preset, profile.mode, profile.sandbox, profile.skills_tier
@@ -148,7 +152,7 @@ pub(crate) fn handle_policy_command(
         return Ok(CommandResult::Handled);
     }
 
-    emit_command_output(app, "Usage: /policy [status|list|strict|standard|dev]");
+    emit_command_output(host, "Usage: /policy [status|list|strict|standard|dev]");
     Ok(CommandResult::Handled)
 }
 
@@ -373,7 +377,10 @@ fn boot_profile_overall(profile: BootProfile, fail: usize, warn: usize) -> &'sta
     }
 }
 
-async fn collect_boot_readiness_checks(app: &App, quick: bool) -> Vec<ReadinessCheck> {
+async fn collect_boot_readiness_checks(
+    host: &(impl crate::app::SessionRuntime + crate::app::ModelRuntime + crate::app::AgentCoordinator),
+    quick: bool,
+) -> Vec<ReadinessCheck> {
     let mut checks = Vec::new();
     let home = hermes_config::hermes_home();
     let config_path = home.join("config.yaml");
@@ -410,7 +417,7 @@ async fn collect_boot_readiness_checks(app: &App, quick: bool) -> Vec<ReadinessC
         });
     }
 
-    let provider = app.current_runtime_provider();
+    let provider = host.current_runtime_provider();
     let credential_present = crate::app::provider_api_key_from_env(&provider).is_some();
     let oauth_state_present = crate::auth::read_provider_auth_state(&provider)
         .ok()
@@ -451,7 +458,7 @@ async fn collect_boot_readiness_checks(app: &App, quick: bool) -> Vec<ReadinessC
     }
 
     if !quick {
-        let tools = app.tool_registry.list_tools();
+        let tools = host.tool_registry().list_tools();
         checks.push(ReadinessCheck {
             name: "Tool registry".to_string(),
             state: if tools.is_empty() {
@@ -574,7 +581,7 @@ fn render_boot_readiness_report(checks: &[ReadinessCheck], quick: bool) -> Strin
 }
 
 pub(crate) async fn handle_boot_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args
@@ -588,30 +595,30 @@ pub(crate) async fn handle_boot_command(
             .to_ascii_lowercase();
         match token.as_str() {
             "status" | "show" => emit_command_output(
-                app,
+                host,
                 format!(
                     "Boot profile: {}\nUse `/boot profile list` or `/boot profile dev|standard|prod`.",
                     boot_profile_env().as_str()
                 ),
             ),
             "list" => emit_command_output(
-                app,
+                host,
                 "Boot profiles:\n- dev: warnings are advisory; only FAIL blocks overall\n- standard: current balanced pass/warn/fail behavior\n- prod: warnings and fails both block overall PASS",
             ),
             "clear" => {
                 crate::env_vars::remove_var("HERMES_BOOT_PROFILE");
-                emit_command_output(app, "Cleared boot profile override (default=standard).");
+                emit_command_output(host, "Cleared boot profile override (default=standard).");
             }
             other => {
                 let Some(profile) = BootProfile::parse(other) else {
                     emit_command_output(
-                        app,
+                        host,
                         "Usage: /boot profile [status|list|dev|standard|prod|clear]",
                     );
                     return Ok(CommandResult::Handled);
                 };
                 crate::env_vars::set_var("HERMES_BOOT_PROFILE", profile.as_str());
-                emit_command_output(app, format!("Boot profile set to {}.", profile.as_str()));
+                emit_command_output(host, format!("Boot profile set to {}.", profile.as_str()));
             }
         }
         return Ok(CommandResult::Handled);
@@ -621,8 +628,8 @@ pub(crate) async fn handle_boot_command(
         .first()
         .map(|v| matches!(v.to_ascii_lowercase().as_str(), "quick" | "--quick"))
         .unwrap_or(false);
-    let checks = collect_boot_readiness_checks(app, quick).await;
-    emit_command_output(app, render_boot_readiness_report(&checks, quick));
+    let checks = collect_boot_readiness_checks(host, quick).await;
+    emit_command_output(host, render_boot_readiness_report(&checks, quick));
     Ok(CommandResult::Handled)
 }
 
@@ -924,7 +931,7 @@ fn render_walkthrough_insights(state: &WalkthroughState) -> String {
 }
 
 pub(crate) fn handle_walkthrough_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -938,8 +945,8 @@ pub(crate) fn handle_walkthrough_command(
             if state.mode.trim().is_empty() {
                 state.mode = "quick".to_string();
             }
-            let _ = append_walkthrough_event(&app.session_id, "status", &state, None);
-            emit_command_output(app, render_walkthrough_status(&state));
+            let _ = append_walkthrough_event(host.session_id(), "status", &state, None);
+            emit_command_output(host, render_walkthrough_status(&state));
         }
         "start" => {
             let mode = args.get(1).copied().unwrap_or("quick").to_ascii_lowercase();
@@ -951,11 +958,11 @@ pub(crate) fn handle_walkthrough_command(
                 updated_at: chrono::Utc::now().to_rfc3339(),
             };
             save_walkthrough_state(&state)?;
-            let _ = append_walkthrough_event(&app.session_id, "start", &state, None);
+            let _ = append_walkthrough_event(host.session_id(), "start", &state, None);
             let steps = walkthrough_steps_for_mode(selected);
             let first = steps.first().copied();
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Started {} walkthrough ({} steps).{}\nUse `/walkthrough done <step-id>` after each step.",
                     selected,
@@ -971,7 +978,7 @@ pub(crate) fn handle_walkthrough_command(
             if state.mode.trim().is_empty() {
                 state.mode = "quick".to_string();
             }
-            let _ = append_walkthrough_event(&app.session_id, "next", &state, None);
+            let _ = append_walkthrough_event(host.session_id(), "next", &state, None);
             let steps = walkthrough_steps_for_mode(&state.mode);
             let next = steps.iter().find(|step| {
                 !state
@@ -981,7 +988,7 @@ pub(crate) fn handle_walkthrough_command(
             });
             if let Some(step) = next {
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Next walkthrough step: {}\n{}\nRun: {}",
                         step.id, step.title, step.command
@@ -989,14 +996,14 @@ pub(crate) fn handle_walkthrough_command(
                 );
             } else {
                 emit_command_output(
-                    app,
+                    host,
                     "Walkthrough complete. Run `/walkthrough start full` for expanded checks.",
                 );
             }
         }
         "done" => {
             let Some(step_id) = args.get(1).copied() else {
-                emit_command_output(app, "Usage: /walkthrough done <step-id>");
+                emit_command_output(host, "Usage: /walkthrough done <step-id>");
                 return Ok(CommandResult::Handled);
             };
             let mut state = load_walkthrough_state();
@@ -1009,7 +1016,7 @@ pub(crate) fn handle_walkthrough_command(
                 .any(|step| step.id.eq_ignore_ascii_case(step_id));
             if !exists {
                 emit_command_output(
-                    app,
+                    host,
                     format!("Unknown step '{}'. Use `/walkthrough status`.", step_id),
                 );
                 return Ok(CommandResult::Handled);
@@ -1032,8 +1039,8 @@ pub(crate) fn handle_walkthrough_command(
                 .unwrap_or(steps.len());
             state.updated_at = chrono::Utc::now().to_rfc3339();
             save_walkthrough_state(&state)?;
-            let _ = append_walkthrough_event(&app.session_id, "done", &state, Some(step_id));
-            emit_command_output(app, render_walkthrough_status(&state));
+            let _ = append_walkthrough_event(host.session_id(), "done", &state, Some(step_id));
+            emit_command_output(host, render_walkthrough_status(&state));
         }
         "reset" | "clear" => {
             let state = load_walkthrough_state();
@@ -1043,9 +1050,9 @@ pub(crate) fn handle_walkthrough_command(
                     AgentError::Io(format!("Failed to remove {}: {}", path.display(), e))
                 })?;
             }
-            let _ = append_walkthrough_event(&app.session_id, "reset", &state, None);
+            let _ = append_walkthrough_event(host.session_id(), "reset", &state, None);
             emit_command_output(
-                app,
+                host,
                 "Walkthrough state reset. Run `/walkthrough start quick` to reinitialize.",
             );
         }
@@ -1054,11 +1061,11 @@ pub(crate) fn handle_walkthrough_command(
             if state.mode.trim().is_empty() {
                 state.mode = "quick".to_string();
             }
-            let _ = append_walkthrough_event(&app.session_id, "insights", &state, None);
-            emit_command_output(app, render_walkthrough_insights(&state));
+            let _ = append_walkthrough_event(host.session_id(), "insights", &state, None);
+            emit_command_output(host, render_walkthrough_insights(&state));
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /walkthrough [status|start [quick|full]|next|done <step-id>|reset|insights]",
         ),
     }

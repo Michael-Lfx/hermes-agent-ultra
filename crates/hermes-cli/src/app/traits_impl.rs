@@ -7,11 +7,13 @@ use hermes_config::GatewayConfig;
 use hermes_core::{AgentError, ToolSchema};
 use hermes_tools::ToolRegistry;
 
+use hermes_acp_server::server::AcpPipeServer;
+
 use super::traits::{
-    AgentCoordinator, AgentDriver, AuthRuntime, ModelRuntime, SessionRuntime, SessionRuntimeAsync,
-    TranscriptRuntime,
+    AcpServerRuntime, AgentCoordinator, AgentDriver, AuthRuntime, ModelRuntime, SessionRuntime,
+    SessionRuntimeAsync, SessionSnapshotRuntime, TranscriptRuntime, UiChromeRuntime,
 };
-use super::{App, UiTranscriptMessage};
+use super::{App, PetSettings, UiTranscriptMessage};
 
 impl SessionRuntime for App {
     fn state_root(&self) -> &Path {
@@ -50,6 +52,10 @@ impl SessionRuntime for App {
         App::set_session_objective(self, objective);
     }
 
+    fn input_history(&self) -> &[String] {
+        &self.input_history
+    }
+
     fn input_history_mut(&mut self) -> &mut Vec<String> {
         &mut self.input_history
     }
@@ -83,6 +89,10 @@ impl SessionRuntime for App {
     fn undo_last_n(&mut self, user_turns: usize) -> Option<String> {
         App::undo_last_n(self, user_turns)
     }
+
+    fn sync_agent_runtime_session_id(&self, session_id: &str) {
+        self.agent.set_runtime_session_id(session_id);
+    }
 }
 
 #[async_trait]
@@ -99,6 +109,10 @@ impl SessionRuntimeAsync for App {
 impl ModelRuntime for App {
     fn config(&self) -> &Arc<GatewayConfig> {
         &self.config
+    }
+
+    fn set_config(&mut self, config: Arc<GatewayConfig>) {
+        self.config = config;
     }
 
     fn current_model(&self) -> &str {
@@ -201,5 +215,78 @@ impl AgentDriver for App {
 impl AuthRuntime for App {
     async fn verify_runtime_auth(&mut self, force_refresh: bool) -> Result<String, AgentError> {
         App::verify_runtime_auth(self, force_refresh).await
+    }
+}
+
+impl SessionSnapshotRuntime for App {
+    fn session_info(&self) -> super::SessionInfo {
+        App::session_info(self)
+    }
+
+    fn persist_session_snapshot(
+        &mut self,
+        name: Option<&str>,
+    ) -> Result<std::path::PathBuf, AgentError> {
+        App::persist_session_snapshot(self, name)
+    }
+}
+
+impl UiChromeRuntime for App {
+    fn mouse_enabled(&self) -> bool {
+        App::mouse_enabled(self)
+    }
+
+    fn set_mouse_enabled(&mut self, enabled: bool) {
+        App::set_mouse_enabled(self, enabled);
+    }
+
+    fn request_theme_change(&mut self, skin: &str) {
+        App::request_theme_change(self, skin);
+    }
+
+    fn take_pending_theme_change(&mut self) -> Option<String> {
+        App::take_pending_theme_change(self)
+    }
+
+    fn take_pending_input_prefill(&mut self) -> Option<String> {
+        App::take_pending_input_prefill(self)
+    }
+
+    fn set_pending_image_hint(&mut self, path: String) {
+        App::set_pending_image_hint(self, path);
+    }
+
+    fn pending_image_hint(&self) -> Option<&str> {
+        App::pending_image_hint(self)
+    }
+
+    fn clear_pending_image_hint(&mut self) {
+        App::clear_pending_image_hint(self);
+    }
+
+    fn pet_settings(&self) -> &PetSettings {
+        App::pet_settings(self)
+    }
+
+    fn set_pet_settings(&mut self, settings: PetSettings) -> Result<(), AgentError> {
+        App::set_pet_settings(self, settings)
+    }
+}
+
+impl AcpServerRuntime for App {
+    fn acp_server(&self) -> Option<&Arc<AcpPipeServer>> {
+        self.acp_server.as_ref()
+    }
+
+    fn acp_server_mut(&mut self) -> &mut Option<Arc<AcpPipeServer>> {
+        &mut self.acp_server
+    }
+
+    fn acp_event_buffer(&self) -> Option<&Arc<std::sync::Mutex<Vec<String>>>> {
+        self.acp_event_buffer.as_ref()
+    }
+
+    fn acp_event_buffer_mut(&mut self) -> &mut Option<Arc<std::sync::Mutex<Vec<String>>>> {
+        &mut self.acp_event_buffer
     }
 }

@@ -10,7 +10,9 @@ use regex::Regex;
 
 use crate::app::App;
 use crate::commands::misc::discover_repo_root_for_about;
-use crate::commands::{CommandResult, emit_command_output, replay_log_path_for_session, replay_trace_integrity};
+use crate::commands::{
+    CommandResult, emit_command_output, replay_log_path_for_session, replay_trace_integrity,
+};
 
 pub(crate) fn specpatch_block_reason(command: &str) -> Option<&'static str> {
     let lower = command.to_ascii_lowercase();
@@ -27,9 +29,13 @@ pub(crate) fn specpatch_block_reason(command: &str) -> Option<&'static str> {
     None
 }
 
-fn slash_command_payload_from_history(app: &App, cmd: &str, args: &[&str]) -> String {
+fn slash_command_payload_from_history(
+    host: &impl crate::app::SessionRuntime,
+    cmd: &str,
+    args: &[&str],
+) -> String {
     let fallback = args.join(" ");
-    let Some(last) = app.input_history.last() else {
+    let Some(last) = host.input_history().last() else {
         return fallback;
     };
     if let Some(raw) = last.strip_prefix(cmd) {
@@ -55,13 +61,13 @@ async fn run_shell_capture(command: &str) -> Result<(i32, String, String), Agent
 }
 
 pub(crate) async fn handle_specpatch_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let payload = slash_command_payload_from_history(app, "/specpatch", args);
+    let payload = slash_command_payload_from_history(host, "/specpatch", args);
     if payload.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /specpatch <verify_cmd> | <candidate_cmd_1> | <candidate_cmd_2> ...",
         );
         return Ok(CommandResult::Handled);
@@ -73,7 +79,7 @@ pub(crate) async fn handle_specpatch_command(
         .collect();
     if segments.len() < 2 {
         emit_command_output(
-            app,
+            host,
             "Need at least a verify command and one candidate.\nExample: /specpatch \"cargo test -p hermes-cli\" | \"git apply fix.patch\"",
         );
         return Ok(CommandResult::Handled);
@@ -82,7 +88,7 @@ pub(crate) async fn handle_specpatch_command(
     let candidates = &segments[1..];
 
     if let Some(reason) = specpatch_block_reason(&verify_cmd) {
-        emit_command_output(app, format!("specpatch blocked verify_cmd: {}", reason));
+        emit_command_output(host, format!("specpatch blocked verify_cmd: {}", reason));
         return Ok(CommandResult::Handled);
     }
 
@@ -147,7 +153,7 @@ pub(crate) async fn handle_specpatch_command(
     } else {
         out.push_str("\nNo candidate passed verify command.\n");
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -205,7 +211,7 @@ async fn count_git_tracked_files(repo_root: &Path) -> Result<usize, AgentError> 
 }
 
 pub(crate) async fn handle_heatmap_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let repo_root = if let Some(path) = args.first() {
@@ -217,7 +223,7 @@ pub(crate) async fn handle_heatmap_command(
     };
     if !repo_root.exists() {
         emit_command_output(
-            app,
+            host,
             format!("Repo path does not exist: {}", repo_root.display()),
         );
         return Ok(CommandResult::Handled);
@@ -240,7 +246,7 @@ pub(crate) async fn handle_heatmap_command(
             }
         }
     }
-    for msg in &app.messages {
+    for msg in host.messages() {
         if let Some(content) = msg.content.as_deref() {
             for raw_path in extract_marker_paths(content) {
                 if let Some(path) = normalize_repo_relative_path(&repo_root, &raw_path) {
@@ -283,7 +289,7 @@ pub(crate) async fn handle_heatmap_command(
     if rows.is_empty() {
         out.push_str("- no evidence paths recorded yet\n");
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -305,12 +311,12 @@ fn read_replay_export_rows(path: &Path) -> Result<Vec<serde_json::Value>, AgentE
 }
 
 pub(crate) async fn handle_studio_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /studio replay [status|verify [path]|diff <export_a.json> <export_b.json>]",
         );
         return Ok(CommandResult::Handled);
@@ -318,7 +324,7 @@ pub(crate) async fn handle_studio_command(
     let section = args[0].trim().to_ascii_lowercase();
     if section != "replay" {
         emit_command_output(
-            app,
+            host,
             "Usage: /studio replay [status|verify [path]|diff <export_a.json> <export_b.json>]",
         );
         return Ok(CommandResult::Handled);
@@ -329,16 +335,16 @@ pub(crate) async fn handle_studio_command(
         .unwrap_or_else(|| "status".to_string());
     match action.as_str() {
         "status" => {
-            let replay_path = replay_log_path_for_session(&app.session_id);
+            let replay_path = replay_log_path_for_session(host.session_id());
             let export_dir = hermes_config::hermes_home()
                 .join("logs")
                 .join("replay")
                 .join("exports");
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Replay studio status\nsession={}\nreplay_log={}\nreplay_exists={}\nexport_dir={}",
-                    app.session_id,
+                    host.session_id(),
                     replay_path.display(),
                     replay_path.exists(),
                     export_dir.display()
@@ -349,10 +355,10 @@ pub(crate) async fn handle_studio_command(
             let replay_path = args
                 .get(2)
                 .map(PathBuf::from)
-                .unwrap_or_else(|| replay_log_path_for_session(&app.session_id));
+                .unwrap_or_else(|| replay_log_path_for_session(host.session_id()));
             if !replay_path.exists() {
                 emit_command_output(
-                    app,
+                    host,
                     format!("Replay file not found: {}", replay_path.display()),
                 );
                 return Ok(CommandResult::Handled);
@@ -364,7 +370,7 @@ pub(crate) async fn handle_studio_command(
             {
                 let rows = read_replay_export_rows(&replay_path)?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay export verification\npath={}\nrows={}\nstatus={}",
                         replay_path.display(),
@@ -375,7 +381,7 @@ pub(crate) async fn handle_studio_command(
             } else {
                 let (entries, parse_errors, chain_breaks) = replay_trace_integrity(&replay_path)?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Replay log verification\npath={}\nentries={}\nparse_errors={}\nchain_breaks={}\nstatus={}",
                         replay_path.display(),
@@ -394,7 +400,7 @@ pub(crate) async fn handle_studio_command(
         "diff" => {
             if args.len() < 4 {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /studio replay diff <export_a.json> <export_b.json>",
                 );
                 return Ok(CommandResult::Handled);
@@ -423,7 +429,7 @@ pub(crate) async fn handle_studio_command(
             let only_b = b_hashes.difference(&a_hashes).count();
             let overlap = a_hashes.intersection(&b_hashes).count();
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Replay diff\nA={} rows={} hashes={}\nB={} rows={} hashes={}\noverlap_hashes={}\nonly_in_a={}\nonly_in_b={}",
                     a.display(),
@@ -439,7 +445,7 @@ pub(crate) async fn handle_studio_command(
             );
         }
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /studio replay [status|verify [path]|diff <export_a.json> <export_b.json>]",
         ),
     }

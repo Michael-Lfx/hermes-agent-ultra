@@ -10,21 +10,23 @@ use crate::commands::policy;
 use crate::commands::{CommandResult, emit_command_output, truncate_chars};
 use crate::model_switch::curated_provider_slugs;
 
-pub(crate) fn handle_platforms_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    if app.config.platforms.is_empty() {
+pub(crate) fn handle_platforms_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    if host.config().platforms.is_empty() {
         emit_command_output(
-            app,
+            host,
             "No explicit gateway platform adapters configured (running in local CLI mode).",
         );
         return Ok(CommandResult::Handled);
     }
-    let mut entries: Vec<_> = app.config.platforms.keys().cloned().collect();
+    let mut entries: Vec<_> = host.config().platforms.keys().cloned().collect();
     entries.sort();
     let mut out = String::from("Configured gateway platforms:\n");
     for p in entries {
         let _ = writeln!(out, "  - {}", p);
     }
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -81,7 +83,7 @@ fn render_integrations_repair_steps(
 }
 
 pub(crate) async fn handle_integrations_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let action = args
@@ -89,7 +91,7 @@ pub(crate) async fn handle_integrations_command(
         .copied()
         .unwrap_or("status")
         .to_ascii_lowercase();
-    let provider = app.current_runtime_provider();
+    let provider = host.current_runtime_provider();
     let provider_cap = crate::providers::provider_capability_for(&provider);
     let oauth_capable = provider_cap
         .as_ref()
@@ -136,21 +138,21 @@ pub(crate) async fn handle_integrations_command(
         ),
     };
 
-    let tools_count = app.tool_registry.list_tools().len();
+    let tools_count = host.tool_registry().list_tools().len();
     let plugins_count = super::discover_plugin_surface(true).len();
-    let mcp_count = app.config.mcp_servers.len();
-    let platforms_count = app.config.platforms.len();
+    let mcp_count = host.config().mcp_servers.len();
+    let platforms_count = host.config().platforms.len();
 
     if action == "repair" {
         emit_command_output(
-            app,
+            host,
             render_integrations_repair_steps(&provider, auth_ok, oauth_gate.clone(), &memory_probe),
         );
         return Ok(CommandResult::Handled);
     }
 
     if action == "snapshot" {
-        let path = integrations_snapshot_path(&app.session_id);
+        let path = integrations_snapshot_path(host.session_id());
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 AgentError::Io(format!("Failed to create {}: {}", parent.display(), e))
@@ -158,9 +160,9 @@ pub(crate) async fn handle_integrations_command(
         }
         let payload = serde_json::json!({
             "captured_at": chrono::Utc::now().to_rfc3339(),
-            "session_id": app.session_id,
+            "session_id": host.session_id(),
             "provider": provider,
-            "model": app.current_model,
+            "model": host.current_model(),
             "auth": {
                 "oauth_capable": oauth_capable,
                 "managed_tools_supported": managed_tools,
@@ -174,7 +176,7 @@ pub(crate) async fn handle_integrations_command(
                 "platform_adapters": platforms_count,
                 "mcp_servers": mcp_count,
                 "plugins": plugins_count,
-                "toolsets": app.config.platform_toolsets.len(),
+                "toolsets": host.config().platform_toolsets.len(),
                 "registered_tools": tools_count,
                 "contextlattice_url": memory_url,
                 "memory_probe": memory_probe,
@@ -185,7 +187,7 @@ pub(crate) async fn handle_integrations_command(
         std::fs::write(&path, json)
             .map_err(|e| AgentError::Io(format!("Failed to write {}: {}", path.display(), e)))?;
         emit_command_output(
-            app,
+            host,
             format!(
                 "Integration snapshot exported:\n{}\nUse `/integrations repair` for remediation guidance.",
                 path.display()
@@ -201,7 +203,7 @@ pub(crate) async fn handle_integrations_command(
     if action == "status" || action == "all" || action == "auth" {
         out.push_str("Auth panel\n----------\n");
         let _ = writeln!(out, "provider: {}", provider);
-        let _ = writeln!(out, "model: {}", app.current_model);
+        let _ = writeln!(out, "model: {}", host.current_model());
         let _ = writeln!(out, "oauth_capable: {}", oauth_capable);
         let _ = writeln!(out, "managed_tools_supported: {}", managed_tools);
         let _ = writeln!(out, "credential_present: {}", credential_present);
@@ -235,7 +237,7 @@ pub(crate) async fn handle_integrations_command(
         let _ = writeln!(out, "platform_adapters: {}", platforms_count);
         let _ = writeln!(out, "mcp_servers: {}", mcp_count);
         let _ = writeln!(out, "plugins: {}", plugins_count);
-        let _ = writeln!(out, "toolsets: {}", app.config.platform_toolsets.len());
+        let _ = writeln!(out, "toolsets: {}", host.config().platform_toolsets.len());
         out.push('\n');
     }
 
@@ -252,7 +254,7 @@ pub(crate) async fn handle_integrations_command(
         "status" | "all" | "auth" | "providers" | "gateway" | "memory" | "repair" | "snapshot"
     ) {
         emit_command_output(
-            app,
+            host,
             "Usage: /integrations [status|all|auth|providers|gateway|memory|repair|snapshot]",
         );
         return Ok(CommandResult::Handled);
@@ -265,6 +267,6 @@ pub(crate) async fn handle_integrations_command(
     out.push_str(
         "- `/integrations repair` for remediation plan and `/integrations snapshot` for export\n",
     );
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }

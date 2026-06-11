@@ -9,9 +9,7 @@ use std::time::SystemTime;
 use hermes_core::AgentError;
 use hermes_intelligence::{SwarmExecutionMode, build_swarm_execution_plan, swarm_runtime_status};
 
-use super::quorum::{
-    clear_quorum_system_hints, handle_quorum_command, install_quorum_system_hint,
-};
+use super::quorum::{clear_quorum_system_hints, handle_quorum_command, install_quorum_system_hint};
 use crate::alpha_runtime::load_quorum_policy;
 use crate::app::App;
 use crate::commands::{CommandResult, emit_command_output};
@@ -38,8 +36,8 @@ fn read_swarm_pass_cap() -> usize {
     normalized.parse::<usize>().ok().unwrap_or(6).clamp(1, 64)
 }
 
-fn latest_quorum_artifact_path(app: &App) -> Option<PathBuf> {
-    let dir = app.state_root.join("quorum");
+fn latest_quorum_artifact_path(host: &impl crate::app::SessionRuntime) -> Option<PathBuf> {
+    let dir = host.state_root().join("quorum");
     let entries = std::fs::read_dir(&dir).ok()?;
     let mut best_session: Option<(SystemTime, PathBuf)> = None;
     let mut best_any: Option<(SystemTime, PathBuf)> = None;
@@ -65,7 +63,7 @@ fn latest_quorum_artifact_path(app: &App) -> Option<PathBuf> {
             .file_name()
             .and_then(|v| v.to_str())
             .unwrap_or_default();
-        if !file_name.starts_with(&format!("{}-", app.session_id)) {
+        if !file_name.starts_with(&format!("{}-", host.session_id())) {
             continue;
         }
         if let Some((best_time, _)) = &best_session {
@@ -80,7 +78,7 @@ fn latest_quorum_artifact_path(app: &App) -> Option<PathBuf> {
 }
 
 pub(crate) async fn handle_swarm_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let sub = args
@@ -94,7 +92,7 @@ pub(crate) async fn handle_swarm_command(
         "status" => {
             let policy = load_quorum_policy()?;
             let runtime = swarm_runtime_status();
-            let artifact_path = latest_quorum_artifact_path(app)
+            let artifact_path = latest_quorum_artifact_path(host)
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "(none yet)".to_string());
             let mut out = String::new();
@@ -121,7 +119,7 @@ pub(crate) async fn handle_swarm_command(
                 } else {
                     policy.models.join(", ")
                 },
-                app.quorum_armed_once
+                host.quorum_armed_once()
             );
             let _ = writeln!(out, "latest_artifact={}", artifact_path);
             if !runtime.notes.is_empty() {
@@ -130,14 +128,14 @@ pub(crate) async fn handle_swarm_command(
                     let _ = writeln!(out, "- {}", note);
                 }
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
         }
         "plan" => {
             let policy = load_quorum_policy()?;
             let mode = parse_swarm_mode(args.get(1).copied());
             let pass_cap = read_swarm_pass_cap();
             let models = if policy.models.is_empty() {
-                vec![app.current_model.clone()]
+                vec![host.current_model().to_string()]
             } else {
                 policy.models.clone()
             };
@@ -145,13 +143,13 @@ pub(crate) async fn handle_swarm_command(
                 mode,
                 policy.voters,
                 models,
-                app.session_objective.clone(),
+                host.session_objective().map(|s| s.to_string()),
                 pass_cap,
             );
             let pretty = serde_json::to_string_pretty(&plan)
                 .map_err(|e| AgentError::Config(format!("failed to render swarm plan: {e}")))?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Swarm execution plan\n{}\n\nUsage: /swarm run [passes] [mode]\nmode: concurrent|sequential|graph",
                     pretty
@@ -174,15 +172,15 @@ pub(crate) async fn handle_swarm_command(
             let policy = load_quorum_policy()?;
             if !policy.enabled {
                 emit_command_output(
-                    app,
+                    host,
                     "Swarm run blocked: quorum policy is OFF.\nRun `/swarm on` (or `/quorum on`) first to keep cost explicit.",
                 );
                 return Ok(CommandResult::Handled);
             }
-            install_quorum_system_hint(app, policy.voters, &policy.models);
-            app.quorum_armed_once = true;
+            install_quorum_system_hint(host, policy.voters, &policy.models);
+            host.set_quorum_armed_once(true);
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Swarm run armed.\nmode={}\npass_cap={}\nnext user prompt will execute multi-voter fan-out + synthesis and persist an artifact.",
                     mode.as_str(),
@@ -191,16 +189,19 @@ pub(crate) async fn handle_swarm_command(
             );
         }
         "cancel" => {
-            app.quorum_armed_once = false;
-            clear_quorum_system_hints(app);
+            host.set_quorum_armed_once(false);
+            clear_quorum_system_hints(host);
             emit_command_output(
-                app,
+                host,
                 "Swarm run canceled. Pending one-shot fan-out was disarmed.",
             );
         }
         "artifact" => {
-            let Some(path) = latest_quorum_artifact_path(app) else {
-                emit_command_output(app, "No swarm/quorum artifact exists yet for this runtime.");
+            let Some(path) = latest_quorum_artifact_path(host) else {
+                emit_command_output(
+                    host,
+                    "No swarm/quorum artifact exists yet for this runtime.",
+                );
                 return Ok(CommandResult::Handled);
             };
             let summary = std::fs::read_to_string(&path)
@@ -224,7 +225,7 @@ pub(crate) async fn handle_swarm_command(
                 })
                 .unwrap_or_else(|| "(unable to parse artifact summary)".to_string());
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Latest swarm artifact\npath={}\n{}",
                     path.display(),
@@ -233,9 +234,9 @@ pub(crate) async fn handle_swarm_command(
             );
         }
         "on" | "off" | "enable" | "disable" | "true" | "false" | "1" | "0" | "voters"
-        | "models" => return handle_quorum_command(app, args).await,
+        | "models" => return handle_quorum_command(host, args).await,
         _ => emit_command_output(
-            app,
+            host,
             "Usage: /swarm [status|plan [mode]|run [passes] [mode]|cancel|artifact|on|off|voters <2..8>|models <a,b,c>]",
         ),
     }

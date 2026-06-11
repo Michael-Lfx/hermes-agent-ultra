@@ -8,9 +8,12 @@ use hermes_core::AgentError;
 use crate::app::App;
 use crate::commands::{CommandResult, emit_command_output};
 
-pub(crate) fn handle_image_command(app: &mut App, args: &[&str]) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_image_command(
+    host: &mut impl crate::app::SlashCommandHost,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        let status = app
+        let status = host
             .pending_image_hint()
             .map(|path| {
                 format!(
@@ -21,26 +24,26 @@ pub(crate) fn handle_image_command(app: &mut App, args: &[&str]) -> Result<Comma
             .unwrap_or_else(|| {
                 "No pending image hint.\nUsage: /image <path> | /image clear".to_string()
             });
-        emit_command_output(app, status);
+        emit_command_output(host, status);
         return Ok(CommandResult::Handled);
     }
 
     if args[0].eq_ignore_ascii_case("clear") {
-        app.clear_pending_image_hint();
-        emit_command_output(app, "Cleared pending image hint.");
+        host.clear_pending_image_hint();
+        emit_command_output(host, "Cleared pending image hint.");
         return Ok(CommandResult::Handled);
     }
 
     let path = args.join(" ").trim().to_string();
     if path.is_empty() {
-        emit_command_output(app, "Usage: /image <path> | /image clear");
+        emit_command_output(host, "Usage: /image <path> | /image clear");
         return Ok(CommandResult::Handled);
     }
     let exists = Path::new(&path).exists();
-    app.set_pending_image_hint(path.clone());
+    host.set_pending_image_hint(path.clone());
     if exists {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Image hint queued: `{}`.\nIt will be injected into the next prompt automatically.",
                 path
@@ -48,7 +51,7 @@ pub(crate) fn handle_image_command(app: &mut App, args: &[&str]) -> Result<Comma
         );
     } else {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Image hint queued: `{}` (path not found right now).\nIt will still be injected into the next prompt.",
                 path
@@ -59,12 +62,12 @@ pub(crate) fn handle_image_command(app: &mut App, args: &[&str]) -> Result<Comma
 }
 
 pub(crate) fn handle_interactive_question_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Interactive question picker:\n\
              Usage: `/ask <question> | <option 1> | <option 2> [| <option 3> ...]`\n\
              Example: `/ask Proceed with deploy? | yes (recommended)::deploy now | no::pause and inspect logs`\n\
@@ -82,7 +85,7 @@ pub(crate) fn handle_interactive_question_command(
         .collect();
     if segments.len() < 2 {
         emit_command_output(
-            app,
+            host,
             "Interactive picker is available in TUI mode. For non-TUI usage provide options as `question | option1 | option2`.",
         );
         return Ok(CommandResult::Handled);
@@ -116,33 +119,40 @@ pub(crate) fn handle_interactive_question_command(
         out,
         "Tip: In TUI mode, `/ask ...` opens a selectable picker."
     );
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_insights_command(app: &mut App) -> Result<CommandResult, AgentError> {
-    let msg_count = app.messages.len();
-    let user_count = app
-        .messages
+pub(crate) fn handle_insights_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
+    let msg_count = host.messages().len();
+    let user_count = host
+        .messages()
         .iter()
         .filter(|m| m.role == hermes_core::MessageRole::User)
         .count();
-    let assistant_count = app
-        .messages
+    let assistant_count = host
+        .messages()
         .iter()
         .filter(|m| m.role == hermes_core::MessageRole::Assistant)
         .count();
     emit_command_output(
-        app,
+        host,
         format!(
             "Session insights:\n  - Total messages: {}\n  - User messages: {}\n  - Hermes messages: {}\n  - Session: {}",
-            msg_count, user_count, assistant_count, app.session_id
+            msg_count,
+            user_count,
+            assistant_count,
+            host.session_id()
         ),
     );
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_log_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_log_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let logs_dir = hermes_config::hermes_home().join("logs");
     let mut files = Vec::new();
     if let Ok(read_dir) = std::fs::read_dir(&logs_dir) {
@@ -156,7 +166,10 @@ pub(crate) fn handle_log_command(app: &mut App) -> Result<CommandResult, AgentEr
     files.sort();
     files.reverse();
     if files.is_empty() {
-        emit_command_output(app, format!("No log files found in {}", logs_dir.display()));
+        emit_command_output(
+            host,
+            format!("No log files found in {}", logs_dir.display()),
+        );
         return Ok(CommandResult::Handled);
     }
     let mut out = format!("Recent log files in {}:\n", logs_dir.display());
@@ -168,18 +181,18 @@ pub(crate) fn handle_log_command(app: &mut App) -> Result<CommandResult, AgentEr
         );
     }
     out.push_str("Use `hermes logs` for full tail output.");
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
 pub(crate) fn handle_debug_dump_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     _args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
-    let prefix = app.session_id.chars().take(8).collect::<String>();
+    let prefix = host.session_id().chars().take(8).collect::<String>();
     let stem = format!("debug-{}-{}", prefix, stamp);
-    let snapshot_path = app.persist_session_snapshot(Some(&stem))?;
+    let snapshot_path = host.persist_session_snapshot(Some(&stem))?;
     let logs_dir = hermes_config::hermes_home().join("logs");
     let log_files = std::fs::read_dir(&logs_dir)
         .ok()
@@ -189,18 +202,20 @@ pub(crate) fn handle_debug_dump_command(
         .count();
     let out = format!(
         "Debug snapshot written.\n  session_id: {}\n  model: {}\n  messages: {}\n  snapshot: {}\n  logs_dir: {} ({} files)\nTip: run `hermes debug share --local` for a support bundle.",
-        app.session_id,
-        app.current_model,
-        app.messages.len(),
+        host.session_id(),
+        host.current_model(),
+        host.messages().len(),
         snapshot_path.display(),
         logs_dir.display(),
         log_files
     );
-    emit_command_output(app, out);
+    emit_command_output(host, out);
     Ok(CommandResult::Handled)
 }
 
-pub(crate) fn handle_dump_format_command(app: &mut App) -> Result<CommandResult, AgentError> {
+pub(crate) fn handle_dump_format_command(
+    host: &mut impl crate::app::SlashCommandHost,
+) -> Result<CommandResult, AgentError> {
     let mut out = String::new();
     let _ = writeln!(out, "Session snapshot format");
     let _ = writeln!(out, "  root keys: session_info, messages");
@@ -215,9 +230,9 @@ pub(crate) fn handle_dump_format_command(app: &mut App) -> Result<CommandResult,
     let _ = writeln!(
         out,
         "  save path: {}/sessions/<session-id>.json",
-        app.state_root.display()
+        host.state_root().display()
     );
     let _ = writeln!(out, "Use `/save [name]` to persist a snapshot now.");
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }

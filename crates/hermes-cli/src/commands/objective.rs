@@ -142,8 +142,11 @@ fn render_subgoal_checklist(checklist: &SubgoalChecklist) -> String {
     out.trim_end().to_string()
 }
 
-pub(crate) fn set_session_steer(app: &mut App, steer: Option<String>) {
-    app.messages.retain(|m| {
+pub(crate) fn set_session_steer(
+    host: &mut impl crate::app::SlashCommandHost,
+    steer: Option<String>,
+) {
+    host.messages_mut().retain(|m| {
         if m.role != hermes_core::MessageRole::System {
             return true;
         }
@@ -156,14 +159,15 @@ pub(crate) fn set_session_steer(app: &mut App, steer: Option<String>) {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
     {
-        app.messages.push(hermes_core::Message::system(format!(
-            "{SESSION_STEER_PREFIX}{steer_text}"
-        )));
+        host.messages_mut()
+            .push(hermes_core::Message::system(format!(
+                "{SESSION_STEER_PREFIX}{steer_text}"
+            )));
     }
 }
 
-pub(crate) fn current_session_steer(app: &App) -> Option<String> {
-    app.messages
+pub(crate) fn current_session_steer(host: &impl crate::app::SessionRuntime) -> Option<String> {
+    host.messages()
         .iter()
         .rev()
         .find(|m| m.role == hermes_core::MessageRole::System)
@@ -178,7 +182,7 @@ pub(crate) fn current_session_steer(app: &App) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 fn apply_objective_lifecycle_update(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     raw_status: &str,
     reason: Option<&str>,
 ) -> Result<CommandResult, AgentError> {
@@ -190,9 +194,9 @@ fn apply_objective_lifecycle_update(
     let status = canonical_objective_lifecycle_status(&updated.lifecycle_status);
     let objective_injected = objective_lifecycle_is_active(&status);
     if objective_injected {
-        app.set_session_objective(Some(updated.objective_text.clone()));
+        host.set_session_objective(Some(updated.objective_text.clone()));
     } else {
-        app.set_session_objective(None);
+        host.set_session_objective(None);
     }
     let _ = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
         recorded_at: String::new(),
@@ -218,7 +222,7 @@ fn apply_objective_lifecycle_update(
         "behavior_mode={}",
         canonical_objective_behavior_mode(&updated.behavior_mode)
     );
-    emit_command_output(app, out.trim_end());
+    emit_command_output(host, out.trim_end());
     Ok(CommandResult::Handled)
 }
 
@@ -227,7 +231,7 @@ fn apply_objective_lifecycle_update(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_objective_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let objective_usage = "Usage: `/objective <text>` or `/objective status|verify|plan|constraints|counterfactual <scenario> | <expected_delta>|lifecycle [status|active|pause|resume|budget-limited|achieved|unmet]|behavior [status|list|balanced|strict|autonomous|mission|minimal]|profile [status|list|general|me|set <id>]|context [status|list|max|balanced|fast]|simulator [status|balanced|strict|aggressive]|ensemble [status|committee|single|debate]|ledger [status|tail [n]|clear]|dag [status|rebuild|clear]|eval [status|tail [n]]|clear`.";
@@ -250,7 +254,7 @@ pub(crate) fn handle_objective_command(
             } else {
                 None
             };
-            return apply_objective_lifecycle_update(app, status, reason.as_deref());
+            return apply_objective_lifecycle_update(host, status, reason.as_deref());
         }
 
         if cmd == "lifecycle" || cmd == "state" {
@@ -261,7 +265,7 @@ pub(crate) fn handle_objective_command(
             if sub == "status" || sub == "show" {
                 let Some(contract) = load_objective_contract()? else {
                     emit_command_output(
-                        app,
+                        host,
                         "No objective contract. Set one with `/objective <text>`.",
                     );
                     return Ok(CommandResult::Handled);
@@ -280,12 +284,12 @@ pub(crate) fn handle_objective_command(
                     "behavior_mode={}",
                     canonical_objective_behavior_mode(&contract.behavior_mode)
                 );
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
                 return Ok(CommandResult::Handled);
             }
             if sub == "list" {
                 emit_command_output(
-                    app,
+                    host,
                     "Lifecycle states:\n- active (alias: pursuing, resume)\n- paused (alias: pause)\n- budget_limited (alias: budget, limited)\n- complete (alias: achieved, done)\n- unmet (hard-blocked objective)",
                 );
                 return Ok(CommandResult::Handled);
@@ -312,10 +316,10 @@ pub(crate) fn handle_objective_command(
                 } else {
                     None
                 };
-                return apply_objective_lifecycle_update(app, &sub, reason.as_deref());
+                return apply_objective_lifecycle_update(host, &sub, reason.as_deref());
             }
             emit_command_output(
-                app,
+                host,
                 "Usage: /objective lifecycle [status|list|active|pause|resume|budget-limited|achieved|unmet] [reason...]",
             );
             return Ok(CommandResult::Handled);
@@ -329,7 +333,7 @@ pub(crate) fn handle_objective_command(
             if sub == "status" || sub == "show" {
                 let Some(contract) = load_objective_contract()? else {
                     emit_command_output(
-                        app,
+                        host,
                         "No objective contract. Set one with `/objective <text>`.",
                     );
                     return Ok(CommandResult::Handled);
@@ -355,12 +359,12 @@ pub(crate) fn handle_objective_command(
                         let _ = writeln!(out, "- {}", criterion);
                     }
                 }
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
                 return Ok(CommandResult::Handled);
             }
             if sub == "list" {
                 emit_command_output(
-                    app,
+                    host,
                     "Behavior modes:\n- balanced: generalized execution with evidence checkpoints\n- strict: strongest evidence-first + contradiction discipline\n- autonomous: proactive loop execution until blocked\n- mission (aliases: sigma, sota, perpetual): closed-loop perpetual objective improvement with concrete execution each cycle\n- minimal: concise operator-facing output with decisive actions",
                 );
                 return Ok(CommandResult::Handled);
@@ -371,7 +375,7 @@ pub(crate) fn handle_objective_command(
                 "balanced" | "strict" | "autonomous" | "mission" | "minimal"
             ) {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /objective behavior [status|list|balanced|strict|autonomous|mission|minimal|sigma|sota]",
                 );
                 return Ok(CommandResult::Handled);
@@ -402,7 +406,7 @@ pub(crate) fn handle_objective_command(
             for directive in &updated.behavior_directives {
                 let _ = writeln!(out, "- {}", directive);
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
@@ -499,12 +503,12 @@ pub(crate) fn handle_objective_command(
                         "summary_sink_order: {}",
                         p.summary_sink_order.join(",")
                     );
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     return Ok(CommandResult::Handled);
                 }
                 "list" => {
                     emit_command_output(
-                        app,
+                        host,
                         "ContextLattice policy presets:\n- max: full evidence + deep retrieval + strict recency/readback gates\n- balanced: full evidence with moderate deep/regular retry budgets\n- fast: grounded but lower retrieval-debug overhead for speed-sensitive loops",
                     );
                     return Ok(CommandResult::Handled);
@@ -512,7 +516,7 @@ pub(crate) fn handle_objective_command(
                 "max" | "strict" | "balanced" | "fast" | "speed" => {
                     let p = set_contextlattice_policy_mode(&sub)?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "ContextLattice policy updated.\nmode={} preflight={} retrieval_mode={} deep_retries={:?} regular_retries={:?}",
                             sub,
@@ -526,7 +530,7 @@ pub(crate) fn handle_objective_command(
                 }
                 _ => {
                     emit_command_output(
-                        app,
+                        host,
                         "Usage: /objective context [status|list|max|balanced|fast]",
                     );
                     return Ok(CommandResult::Handled);
@@ -562,12 +566,12 @@ pub(crate) fn handle_objective_command(
                             let _ = writeln!(out, "- {}", lang);
                         }
                     }
-                    emit_command_output(app, out.trim_end());
+                    emit_command_output(host, out.trim_end());
                     return Ok(CommandResult::Handled);
                 }
                 "list" => {
                     emit_command_output(
-                        app,
+                        host,
                         "Objective profile presets:\n- repo-general: generalized defaults for any operator/repo\n- sheawinkler: specialized ContextLattice+zsh profile\n- operator-custom: generated when using `/objective profile set <name>`",
                     );
                     return Ok(CommandResult::Handled);
@@ -575,7 +579,7 @@ pub(crate) fn handle_objective_command(
                 "general" | "repo-general" | "reset" => {
                     let profile = reset_objective_profile_generalized()?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Objective profile reset to generalized defaults.\nprofile_id={} memory_backend={} shell={}",
                             profile.profile_id, profile.memory_backend, profile.default_shell
@@ -590,7 +594,7 @@ pub(crate) fn handle_objective_command(
                             .as_str(),
                     ))?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Objective profile specialized for operator.\nprofile_id={} memory_backend={} shell={}",
                             profile.profile_id, profile.memory_backend, profile.default_shell
@@ -601,14 +605,14 @@ pub(crate) fn handle_objective_command(
                 "set" => {
                     let Some(name) = args.get(2) else {
                         emit_command_output(
-                            app,
+                            host,
                             "Usage: /objective profile set <name> (or use /objective profile me|general)",
                         );
                         return Ok(CommandResult::Handled);
                     };
                     let profile = set_objective_profile(objective_profile_specialized_for(name))?;
                     emit_command_output(
-                        app,
+                        host,
                         format!(
                             "Objective profile set.\nprofile_id={} operator_hint={} shell={} memory_backend={}",
                             profile.profile_id,
@@ -621,7 +625,7 @@ pub(crate) fn handle_objective_command(
                 }
                 _ => {
                     emit_command_output(
-                        app,
+                        host,
                         "Usage: /objective profile [status|list|general|me|set <id>]",
                     );
                     return Ok(CommandResult::Handled);
@@ -637,7 +641,7 @@ pub(crate) fn handle_objective_command(
             if sub == "status" || sub == "show" {
                 let p = load_objective_simulation_policy()?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Objective simulation policy\nmode={}\nrequire_shadow_pass={}\nmin_shadow_samples={}\nrequire_replay_validation={}\nmax_live_capital_fraction={:.4}\nupdated_at={}",
                         p.mode,
@@ -652,14 +656,14 @@ pub(crate) fn handle_objective_command(
             }
             if !matches!(sub.as_str(), "balanced" | "strict" | "aggressive") {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /objective simulator [status|balanced|strict|aggressive]",
                 );
                 return Ok(CommandResult::Handled);
             }
             let p = set_objective_simulation_mode(&sub)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Objective simulation policy updated.\nmode={} shadow_pass={} replay_validation={} max_live_capital_fraction={:.4}",
                     p.mode,
@@ -679,7 +683,7 @@ pub(crate) fn handle_objective_command(
             if sub == "status" || sub == "show" {
                 let p = load_objective_ensemble_policy()?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Objective ensemble policy\nmode={}\narbitration={}\nmin_voters={}\nrequire_disagreement_explainer={}\nallow_fast_path_single_model={}\nupdated_at={}",
                         p.mode,
@@ -694,14 +698,14 @@ pub(crate) fn handle_objective_command(
             }
             if !matches!(sub.as_str(), "committee" | "single" | "debate") {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /objective ensemble [status|committee|single|debate]",
                 );
                 return Ok(CommandResult::Handled);
             }
             let p = set_objective_ensemble_mode(&sub)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Objective ensemble policy updated.\nmode={} arbitration={} min_voters={} disagreement_explainer={}",
                     p.mode, p.arbitration, p.min_voters, p.require_disagreement_explainer
@@ -717,7 +721,7 @@ pub(crate) fn handle_objective_command(
                 .unwrap_or_else(|| "status".to_string());
             if sub == "clear" {
                 clear_objective_learning_ledger()?;
-                emit_command_output(app, "Objective learning ledger cleared.");
+                emit_command_output(host, "Objective learning ledger cleared.");
                 return Ok(CommandResult::Handled);
             }
             let ledger = load_objective_learning_ledger()?;
@@ -728,7 +732,7 @@ pub(crate) fn handle_objective_command(
                     .map(|v| format!("{} {} {}", v.recorded_at, v.objective_state, v.decision))
                     .unwrap_or_else(|| "none".to_string());
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Objective learning ledger\nentries={}\nupdated_at={}\nlast_entry={}",
                         ledger.entries.len(),
@@ -762,10 +766,10 @@ pub(crate) fn handle_objective_command(
                 if ledger.entries.is_empty() {
                     out.push_str("(empty)\n");
                 }
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
                 return Ok(CommandResult::Handled);
             }
-            emit_command_output(app, "Usage: /objective ledger [status|tail [n]|clear]");
+            emit_command_output(host, "Usage: /objective ledger [status|tail [n]|clear]");
             return Ok(CommandResult::Handled);
         }
 
@@ -777,7 +781,7 @@ pub(crate) fn handle_objective_command(
             if sub == "rebuild" || sub == "build" {
                 let dag = build_objective_dag_from_contract()?;
                 emit_command_output(
-                    app,
+                    host,
                     format!(
                         "Objective DAG rebuilt.\nobjective_id={}\nnodes={}\nauto_resume_checkpoint={}",
                         dag.objective_id,
@@ -789,7 +793,7 @@ pub(crate) fn handle_objective_command(
             }
             if sub == "clear" {
                 clear_objective_dag()?;
-                emit_command_output(app, "Objective DAG cleared.");
+                emit_command_output(host, "Objective DAG cleared.");
                 return Ok(CommandResult::Handled);
             }
             let dag = load_objective_dag()?;
@@ -818,7 +822,7 @@ pub(crate) fn handle_objective_command(
                     let _ = writeln!(out, "  title: {}", node.title);
                 }
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
@@ -852,7 +856,7 @@ pub(crate) fn handle_objective_command(
                 if trend.samples.is_empty() {
                     out.push_str("(empty)\n");
                 }
-                emit_command_output(app, out.trim_end());
+                emit_command_output(host, out.trim_end());
                 return Ok(CommandResult::Handled);
             }
             let latest = trend.samples.last().map(|s| s.score).unwrap_or(0.0);
@@ -862,7 +866,7 @@ pub(crate) fn handle_objective_command(
                 trend.samples.iter().map(|s| s.score).sum::<f64>() / trend.samples.len() as f64
             };
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Objective eval trend\nsamples={}\nlatest_score={:.3}\navg_score={:.3}\nupdated_at={}",
                     trend.samples.len(),
@@ -877,7 +881,7 @@ pub(crate) fn handle_objective_command(
         if cmd == "verify" {
             let Some(contract) = load_objective_contract()? else {
                 emit_command_output(
-                    app,
+                    host,
                     "No objective contract. Set one with `/objective <text>` before verify.",
                 );
                 return Ok(CommandResult::Handled);
@@ -918,8 +922,8 @@ pub(crate) fn handle_objective_command(
             };
             let mut evidence_files: Vec<String> = Vec::new();
             let mut verified_existing = 0usize;
-            if let Some(last_assistant) = app
-                .messages
+            if let Some(last_assistant) = host
+                .messages()
                 .iter()
                 .rev()
                 .find(|m| m.role == hermes_core::MessageRole::Assistant)
@@ -971,13 +975,13 @@ pub(crate) fn handle_objective_command(
                     );
                 }
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
         if cmd == "status" || cmd == "show" {
             let mut out = String::new();
-            match app.session_objective.as_deref() {
+            match host.session_objective() {
                 Some(v) => {
                     let _ = writeln!(out, "Current objective:\n{}", v);
                 }
@@ -1047,14 +1051,14 @@ pub(crate) fn handle_objective_command(
                     ensemble.mode, ensemble.arbitration, ensemble.min_voters
                 );
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
         if cmd == "plan" {
             let Some(contract) = load_objective_contract()? else {
                 emit_command_output(
-                    app,
+                    host,
                     "No objective contract. Set one with `/objective <text>`.",
                 );
                 return Ok(CommandResult::Handled);
@@ -1077,14 +1081,14 @@ pub(crate) fn handle_objective_command(
                     let _ = writeln!(out, "- {}: {:.2}", name, weight);
                 }
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
         if cmd == "constraints" {
             let Some(contract) = load_objective_contract()? else {
                 emit_command_output(
-                    app,
+                    host,
                     "No objective contract. Set one with `/objective <text>`.",
                 );
                 return Ok(CommandResult::Handled);
@@ -1095,14 +1099,14 @@ pub(crate) fn handle_objective_command(
             for c in contract.utility.hard_constraints {
                 let _ = writeln!(out, "- {}", c.expression);
             }
-            emit_command_output(app, out.trim_end());
+            emit_command_output(host, out.trim_end());
             return Ok(CommandResult::Handled);
         }
 
         if cmd == "counterfactual" {
             if args.len() < 2 {
                 emit_command_output(
-                    app,
+                    host,
                     "Usage: /objective counterfactual <scenario> | <expected_delta>",
                 );
                 return Ok(CommandResult::Handled);
@@ -1114,14 +1118,14 @@ pub(crate) fn handle_objective_command(
                 .unwrap_or((joined.trim(), "impact not specified"));
             if scenario.is_empty() {
                 emit_command_output(
-                    app,
+                    host,
                     "Counterfactual scenario cannot be empty. Use: /objective counterfactual <scenario> | <expected_delta>",
                 );
                 return Ok(CommandResult::Handled);
             }
             let updated = append_counterfactual(scenario, expected_delta)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Counterfactual saved (journal entries={}).",
                     updated.counterfactual_journal.len()
@@ -1132,14 +1136,14 @@ pub(crate) fn handle_objective_command(
     }
 
     if args.is_empty() {
-        let msg = match app.session_objective.as_deref() {
+        let msg = match host.session_objective() {
             Some(v) => format!(
                 "Current objective:\n{}\n\nUse `/objective clear` to remove, `/objective <text>` to replace, or `/objective status` for contract details.",
                 v
             ),
             None => format!("No objective set.\n{}", objective_usage),
         };
-        emit_command_output(app, msg);
+        emit_command_output(host, msg);
         return Ok(CommandResult::Handled);
     }
 
@@ -1152,7 +1156,7 @@ pub(crate) fn handle_objective_command(
         let previous_id = load_objective_contract()?
             .map(|c| c.id)
             .unwrap_or_else(|| "none".to_string());
-        app.set_session_objective(None);
+        host.set_session_objective(None);
         clear_objective_contract()?;
         let _ = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
             recorded_at: String::new(),
@@ -1163,13 +1167,13 @@ pub(crate) fn handle_objective_command(
             evidence_commands: vec!["/objective clear".to_string()],
             notes: "Objective contract cleared by operator command.".to_string(),
         });
-        emit_command_output(app, "Session objective cleared.");
+        emit_command_output(host, "Session objective cleared.");
         return Ok(CommandResult::Handled);
     }
 
     let objective = args.join(" ").trim().to_string();
     if objective.is_empty() {
-        emit_command_output(app, objective_usage);
+        emit_command_output(host, objective_usage);
         return Ok(CommandResult::Handled);
     }
     let objective_lc = objective.to_ascii_lowercase();
@@ -1182,9 +1186,9 @@ pub(crate) fn handle_objective_command(
     let _ = build_objective_dag_from_contract();
     let lifecycle = canonical_objective_lifecycle_status(&contract.lifecycle_status);
     if objective_lifecycle_is_active(&lifecycle) {
-        app.set_session_objective(Some(objective.clone()));
+        host.set_session_objective(Some(objective.clone()));
     } else {
-        app.set_session_objective(None);
+        host.set_session_objective(None);
     }
     let _ = append_objective_learning_entry(ObjectiveLearningLedgerEntry {
         recorded_at: String::new(),
@@ -1200,7 +1204,7 @@ pub(crate) fn handle_objective_command(
         },
     });
     emit_command_output(
-        app,
+        host,
         format!(
             "Session objective set:\n{}\n\nObjective contract persisted:\n{}\n\nlifecycle_status={}\nbehavior_mode={}\nobjective_injected={}\n\nThis objective is now injected as system context for future turns when lifecycle is active.",
             objective,
@@ -1218,28 +1222,28 @@ pub(crate) fn handle_objective_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_steer_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
-        let message = current_session_steer(app).map_or_else(
+        let message = current_session_steer(host).map_or_else(
             || "No active steering instruction. Use `/steer <instruction>`.".to_string(),
             |v| format!("Active steering instruction:\n{}", v),
         );
-        emit_command_output(app, message);
+        emit_command_output(host, message);
         return Ok(CommandResult::Handled);
     }
 
     if args[0].eq_ignore_ascii_case("clear") {
-        set_session_steer(app, None);
-        emit_command_output(app, "Cleared session steering instruction.");
+        set_session_steer(host, None);
+        emit_command_output(host, "Cleared session steering instruction.");
         return Ok(CommandResult::Handled);
     }
 
     let steer = args.join(" ");
-    set_session_steer(app, Some(steer.clone()));
+    set_session_steer(host, Some(steer.clone()));
     emit_command_output(
-        app,
+        host,
         format!(
             "Steering instruction set.\nThis is injected as system context on subsequent turns.\n\n{}",
             steer.trim()
@@ -1253,19 +1257,19 @@ pub(crate) fn handle_steer_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_btw_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     if args.is_empty() {
         emit_command_output(
-            app,
+            host,
             "Usage: /btw <side-question>\nRuns an ephemeral side-question as a background task.",
         );
         return Ok(CommandResult::Handled);
     }
     let question = args.join(" ").trim().to_string();
     if question.is_empty() {
-        emit_command_output(app, "Usage: /btw <side-question>");
+        emit_command_output(host, "Usage: /btw <side-question>");
         return Ok(CommandResult::Handled);
     }
     let task = format!(
@@ -1274,7 +1278,7 @@ pub(crate) fn handle_btw_command(
     );
     let job = background::queue_background_job(&task)?;
     emit_command_output(
-        app,
+        host,
         format!(
             "[/btw queued]\nQuestion: {}\nJob ID: {}\nStatus: {}\nLogs:   {}",
             question,
@@ -1291,10 +1295,10 @@ pub(crate) fn handle_btw_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_handoff_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let mut configured: Vec<_> = app.config.platforms.keys().cloned().collect();
+    let mut configured: Vec<_> = host.config().platforms.keys().cloned().collect();
     configured.sort();
     if args.is_empty() {
         let configured_text = if configured.is_empty() {
@@ -1303,7 +1307,7 @@ pub(crate) fn handle_handoff_command(
             configured.join(", ")
         };
         emit_command_output(
-            app,
+            host,
             format!(
                 "Usage: /handoff <platform>\nConfigured platforms: {}\nThis queues a handoff request under ~/.hermes-agent-ultra/handoff_requests for gateway pickup.",
                 configured_text
@@ -1313,9 +1317,9 @@ pub(crate) fn handle_handoff_command(
     }
 
     let platform = args[0].trim().to_ascii_lowercase();
-    let Some(platform_cfg) = app.config.platforms.get(&platform) else {
+    let Some(platform_cfg) = host.config().platforms.get(&platform) else {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Unknown platform '{}'. Configured platforms: {}",
                 platform,
@@ -1330,7 +1334,7 @@ pub(crate) fn handle_handoff_command(
     };
     if !platform_cfg.enabled {
         emit_command_output(
-            app,
+            host,
             format!(
                 "Platform '{}' is configured but disabled. Enable it in config.yaml before handoff.",
                 platform
@@ -1354,7 +1358,7 @@ pub(crate) fn handle_handoff_command(
         });
     let Some(home_channel) = home_channel else {
         emit_command_output(
-            app,
+            host,
             format!(
                 "No home channel marker for '{}'. Run `/sethome <channel-or-thread>` first, then retry `/handoff {}`.",
                 platform, platform
@@ -1366,9 +1370,9 @@ pub(crate) fn handle_handoff_command(
     let dir = hermes_config::hermes_home().join(HANDOFF_REQUESTS_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AgentError::Io(format!("Failed to create {}: {}", dir.display(), e)))?;
-    let request_path = dir.join(format!("{}-{}.json", app.session_id, platform));
+    let request_path = dir.join(format!("{}-{}.json", host.session_id(), platform));
     let payload = serde_json::json!({
-        "session_id": app.session_id,
+        "session_id": host.session_id(),
         "platform": platform,
         "home_channel": home_channel,
         "requested_at": chrono::Utc::now().to_rfc3339(),
@@ -1383,10 +1387,10 @@ pub(crate) fn handle_handoff_command(
     .map_err(|e| AgentError::Io(format!("Failed to write {}: {}", request_path.display(), e)))?;
 
     emit_command_output(
-        app,
+        host,
         format!(
             "Queued handoff request.\n  session: {}\n  platform: {}\n  home_channel: {}\n  request_file: {}\n\nGateway workers can pick this up immediately when running.",
-            app.session_id,
+            host.session_id(),
             payload["platform"].as_str().unwrap_or_default(),
             payload["home_channel"].as_str().unwrap_or_default(),
             request_path.display(),
@@ -1400,16 +1404,15 @@ pub(crate) fn handle_handoff_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_subgoal_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
-    let objective = app
-        .session_objective
-        .as_deref()
+    let objective = host
+        .session_objective()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let mut checklist = load_subgoal_checklist(&app.session_id)
-        .unwrap_or_else(|| SubgoalChecklist::for_session(&app.session_id, objective));
+    let mut checklist = load_subgoal_checklist(host.session_id())
+        .unwrap_or_else(|| SubgoalChecklist::for_session(host.session_id(), objective));
     checklist.objective = objective.map(ToOwned::to_owned);
 
     if args.is_empty()
@@ -1420,7 +1423,7 @@ pub(crate) fn handle_subgoal_command(
     {
         checklist.updated_at = chrono::Utc::now().to_rfc3339();
         let _ = save_subgoal_checklist(&checklist)?;
-        emit_command_output(app, render_subgoal_checklist(&checklist));
+        emit_command_output(host, render_subgoal_checklist(&checklist));
         return Ok(CommandResult::Handled);
     }
 
@@ -1430,7 +1433,7 @@ pub(crate) fn handle_subgoal_command(
         checklist.updated_at = chrono::Utc::now().to_rfc3339();
         let path = save_subgoal_checklist(&checklist)?;
         emit_command_output(
-            app,
+            host,
             format!(
                 "Subgoal checklist cleared.\nPath: {}\nUse `/subgoal <text>` to add a new item.",
                 path.display()
@@ -1444,12 +1447,12 @@ pub(crate) fn handle_subgoal_command(
         "complete" | "done" | "impossible" | "undo" | "remove"
     ) {
         let Some(raw_idx) = args.get(1) else {
-            emit_command_output(app, format!("Usage: /subgoal {} <n>", action));
+            emit_command_output(host, format!("Usage: /subgoal {} <n>", action));
             return Ok(CommandResult::Handled);
         };
         let Ok(idx_one_based) = raw_idx.trim().parse::<usize>() else {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "/subgoal {}: <n> must be an integer (1-based index).",
                     action
@@ -1459,7 +1462,7 @@ pub(crate) fn handle_subgoal_command(
         };
         if idx_one_based == 0 || idx_one_based > checklist.items.len() {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "/subgoal {}: index {} is out of range (1..={}).",
                     action,
@@ -1477,7 +1480,7 @@ pub(crate) fn handle_subgoal_command(
             checklist.updated_at = now;
             let _ = save_subgoal_checklist(&checklist)?;
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Removed subgoal {}: {}\n\n{}",
                     idx_one_based,
@@ -1498,7 +1501,7 @@ pub(crate) fn handle_subgoal_command(
         checklist.updated_at = now;
         let _ = save_subgoal_checklist(&checklist)?;
         emit_command_output(
-            app,
+            host,
             format!(
                 "Updated subgoal {} -> {}\n\n{}",
                 idx_one_based,
@@ -1511,7 +1514,7 @@ pub(crate) fn handle_subgoal_command(
 
     let text = args.join(" ").trim().to_string();
     if text.is_empty() {
-        emit_command_output(app, "Usage: /subgoal <text>");
+        emit_command_output(host, "Usage: /subgoal <text>");
         return Ok(CommandResult::Handled);
     }
     let now = chrono::Utc::now().to_rfc3339();
@@ -1524,7 +1527,7 @@ pub(crate) fn handle_subgoal_command(
     });
     checklist.updated_at = now;
     let _ = save_subgoal_checklist(&checklist)?;
-    emit_command_output(app, render_subgoal_checklist(&checklist));
+    emit_command_output(host, render_subgoal_checklist(&checklist));
     Ok(CommandResult::Handled)
 }
 
@@ -1533,14 +1536,14 @@ pub(crate) fn handle_subgoal_command(
 // ---------------------------------------------------------------------------
 
 pub(crate) fn handle_sethome_command(
-    app: &mut App,
+    host: &mut impl crate::app::SlashCommandHost,
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let marker_path = home_session_marker_path();
     if args.is_empty() || args[0].eq_ignore_ascii_case("status") {
         if let Some(marker) = load_home_session_marker() {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "Home marker file: {}\n{}",
                     marker_path.display(),
@@ -1549,7 +1552,7 @@ pub(crate) fn handle_sethome_command(
             );
         } else {
             emit_command_output(
-                app,
+                host,
                 format!(
                     "No home marker set. Use `/sethome <name>`.\nMarker path: {}",
                     marker_path.display()
@@ -1564,9 +1567,9 @@ pub(crate) fn handle_sethome_command(
             std::fs::remove_file(&marker_path).map_err(|e| {
                 AgentError::Io(format!("Failed to remove {}: {}", marker_path.display(), e))
             })?;
-            emit_command_output(app, "Cleared home marker.");
+            emit_command_output(host, "Cleared home marker.");
         } else {
-            emit_command_output(app, "Home marker already clear.");
+            emit_command_output(host, "Home marker already clear.");
         }
         return Ok(CommandResult::Handled);
     }
@@ -1576,7 +1579,7 @@ pub(crate) fn handle_sethome_command(
             .map_err(|e| AgentError::Io(format!("Failed to create {}: {}", parent.display(), e)))?;
     }
     let value = serde_json::json!({
-        "session_id": app.session_id,
+        "session_id": host.session_id(),
         "home": args.join(" ").trim(),
         "updated_at": chrono::Utc::now().to_rfc3339(),
     });
@@ -1587,7 +1590,7 @@ pub(crate) fn handle_sethome_command(
     )
     .map_err(|e| AgentError::Io(format!("Failed to write {}: {}", marker_path.display(), e)))?;
     emit_command_output(
-        app,
+        host,
         format!(
             "Home marker updated.\nPath: {}\nHome: {}",
             marker_path.display(),
@@ -1606,6 +1609,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::app::SessionRuntime;
     use crate::commands::{SLASH_COMMANDS, autocomplete, canonical_command};
     use crate::test_env_lock;
     use clap::Parser;
@@ -1675,14 +1679,14 @@ mod tests {
             "--ignore-rules".to_string(),
         ])
         .expect("parse cli");
-        let mut app = App::new(cli).await.expect("build app");
+        let mut host = App::new(cli).await.expect("build host");
         let (tx, _rx) = mpsc::unbounded_channel::<crate::tui::Event>();
-        app.set_stream_handle(Some(tx.into()));
-        app
+        host.set_stream_handle(Some(tx.into()));
+        host
     }
 
-    fn latest_ui_assistant_text(app: &App) -> String {
-        app.ui_messages
+    fn latest_ui_assistant_text(host: &impl crate::app::SessionRuntime) -> String {
+        host.ui_messages()
             .iter()
             .rev()
             .find(|row| row.message.role == hermes_core::MessageRole::Assistant)
@@ -1717,18 +1721,18 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
-        handle_steer_command(&mut app, &["focus", "on", "repo", "map"]).expect("set steer");
+        handle_steer_command(&mut host, &["focus", "on", "repo", "map"]).expect("set steer");
         assert_eq!(
-            current_session_steer(&app).as_deref(),
+            current_session_steer(&host).as_deref(),
             Some("focus on repo map")
         );
-        assert!(latest_ui_assistant_text(&app).contains("Steering instruction set."));
+        assert!(latest_ui_assistant_text(&host).contains("Steering instruction set."));
 
-        handle_steer_command(&mut app, &["clear"]).expect("clear steer");
-        assert!(current_session_steer(&app).is_none());
-        assert!(latest_ui_assistant_text(&app).contains("Cleared session steering instruction."));
+        handle_steer_command(&mut host, &["clear"]).expect("clear steer");
+        assert!(current_session_steer(&host).is_none());
+        assert!(latest_ui_assistant_text(&host).contains("Cleared session steering instruction."));
     }
 
     #[tokio::test]
@@ -1736,12 +1740,12 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
         let result =
-            handle_btw_command(&mut app, &["why", "is", "latency", "high?"]).expect("btw command");
+            handle_btw_command(&mut host, &["why", "is", "latency", "high?"]).expect("btw command");
         assert_eq!(result, CommandResult::Handled);
-        let output = latest_ui_assistant_text(&app);
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("[/btw queued]"));
         assert!(output.contains("Question: why is latency high?"));
     }
@@ -1751,21 +1755,21 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
-        handle_sethome_command(&mut app, &["alpha-room"]).expect("set home");
-        assert!(latest_ui_assistant_text(&app).contains("Home marker updated."));
+        handle_sethome_command(&mut host, &["alpha-room"]).expect("set home");
+        assert!(latest_ui_assistant_text(&host).contains("Home marker updated."));
         let marker = load_home_session_marker().expect("home marker");
         assert_eq!(
             marker.get("home").and_then(|v| v.as_str()),
             Some("alpha-room")
         );
 
-        handle_sethome_command(&mut app, &["status"]).expect("home status");
-        assert!(latest_ui_assistant_text(&app).contains("Home marker file:"));
+        handle_sethome_command(&mut host, &["status"]).expect("home status");
+        assert!(latest_ui_assistant_text(&host).contains("Home marker file:"));
 
-        handle_sethome_command(&mut app, &["clear"]).expect("home clear");
-        assert!(latest_ui_assistant_text(&app).contains("Cleared home marker."));
+        handle_sethome_command(&mut host, &["clear"]).expect("home clear");
+        assert!(latest_ui_assistant_text(&host).contains("Cleared home marker."));
         assert!(load_home_session_marker().is_none());
     }
 
@@ -1774,36 +1778,36 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
         let set_result = crate::commands::handle_slash_command(
-            &mut app,
+            &mut host,
             "/objective",
             &["stabilize", "indexing"],
         )
         .await
         .expect("set objective");
         assert_eq!(set_result, CommandResult::Handled);
-        assert_eq!(app.session_objective.as_deref(), Some("stabilize indexing"));
+        assert_eq!(host.session_objective(), Some("stabilize indexing"));
 
         let pause_result = crate::commands::handle_slash_command(
-            &mut app,
+            &mut host,
             "/objective",
             &["pause", "manual", "hold"],
         )
         .await
         .expect("pause objective");
         assert_eq!(pause_result, CommandResult::Handled);
-        assert!(app.session_objective.is_none());
-        assert!(latest_ui_assistant_text(&app).contains("status=paused"));
+        assert!(host.session_objective().is_none());
+        assert!(latest_ui_assistant_text(&host).contains("status=paused"));
 
         let resume_result =
-            crate::commands::handle_slash_command(&mut app, "/objective", &["resume", "continue"])
+            crate::commands::handle_slash_command(&mut host, "/objective", &["resume", "continue"])
                 .await
                 .expect("resume objective");
         assert_eq!(resume_result, CommandResult::Handled);
-        assert_eq!(app.session_objective.as_deref(), Some("stabilize indexing"));
-        assert!(latest_ui_assistant_text(&app).contains("status=active"));
+        assert_eq!(host.session_objective(), Some("stabilize indexing"));
+        assert!(latest_ui_assistant_text(&host).contains("status=active"));
     }
 
     #[tokio::test]
@@ -1811,10 +1815,10 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
         crate::commands::handle_slash_command(
-            &mut app,
+            &mut host,
             "/objective",
             &["improve", "planner", "quality"],
         )
@@ -1822,20 +1826,20 @@ mod tests {
         .expect("set objective");
 
         let mode_result =
-            crate::commands::handle_slash_command(&mut app, "/objective", &["behavior", "strict"])
+            crate::commands::handle_slash_command(&mut host, "/objective", &["behavior", "strict"])
                 .await
                 .expect("set behavior");
         assert_eq!(mode_result, CommandResult::Handled);
-        let output = latest_ui_assistant_text(&app);
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("mode=strict"));
         assert!(output.contains("directives:"));
 
         let mission_result =
-            crate::commands::handle_slash_command(&mut app, "/objective", &["behavior", "sigma"])
+            crate::commands::handle_slash_command(&mut host, "/objective", &["behavior", "sigma"])
                 .await
                 .expect("set behavior sigma");
         assert_eq!(mission_result, CommandResult::Handled);
-        let mission_output = latest_ui_assistant_text(&app);
+        let mission_output = latest_ui_assistant_text(&host);
         assert!(mission_output.contains("mode=mission"));
     }
 
@@ -1844,22 +1848,22 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
-        app.set_session_objective(Some("stabilize alpha".to_string()));
+        let mut host = build_test_app_with_stream(tmp.path()).await;
+        host.set_session_objective(Some("stabilize alpha".to_string()));
 
-        handle_subgoal_command(&mut app, &["inspect", "wallet", "drift"]).expect("subgoal add");
-        let output = latest_ui_assistant_text(&app);
+        handle_subgoal_command(&mut host, &["inspect", "wallet", "drift"]).expect("subgoal add");
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("Subgoal checklist"));
         assert!(output.contains("inspect wallet drift"));
         assert!(output.contains("[ ] 1."));
 
-        handle_subgoal_command(&mut app, &["complete", "1"]).expect("subgoal complete");
-        let output = latest_ui_assistant_text(&app);
+        handle_subgoal_command(&mut host, &["complete", "1"]).expect("subgoal complete");
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("Updated subgoal 1 -> completed"));
         assert!(output.contains("[x] 1."));
 
-        handle_subgoal_command(&mut app, &["clear"]).expect("subgoal clear");
-        let output = latest_ui_assistant_text(&app);
+        handle_subgoal_command(&mut host, &["clear"]).expect("subgoal clear");
+        let output = latest_ui_assistant_text(&host);
         assert!(output.contains("Subgoal checklist cleared."));
     }
 
@@ -1868,15 +1872,15 @@ mod tests {
         let _guard = env_test_lock();
         let tmp = tempdir().expect("tempdir");
         let _home_guard = TempHomeGuard::new(tmp.path());
-        let mut app = build_test_app_with_stream(tmp.path()).await;
+        let mut host = build_test_app_with_stream(tmp.path()).await;
 
-        handle_handoff_command(&mut app, &[]).expect("handoff usage");
-        let usage = latest_ui_assistant_text(&app);
+        handle_handoff_command(&mut host, &[]).expect("handoff usage");
+        let usage = latest_ui_assistant_text(&host);
         assert!(usage.contains("Usage: /handoff <platform>"));
 
-        handle_handoff_command(&mut app, &["not-a-real-platform"])
+        handle_handoff_command(&mut host, &["not-a-real-platform"])
             .expect("handoff unknown platform");
-        let unknown = latest_ui_assistant_text(&app);
+        let unknown = latest_ui_assistant_text(&host);
         assert!(unknown.contains("Unknown platform 'not-a-real-platform'"));
     }
 }
