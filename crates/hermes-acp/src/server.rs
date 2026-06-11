@@ -215,7 +215,7 @@ mod tests {
     use super::*;
     use crate::events::AcpEvent;
     use crate::handler::HermesAcpHandler;
-    use crate::permissions::{build_permission_request, PermissionOutcome};
+    use crate::permissions::{PermissionOutcome, build_permission_request};
 
     #[tokio::test]
     async fn run_on_flushes_pending_events_after_each_response() {
@@ -384,11 +384,15 @@ mod tests {
 
         assert_eq!(server_a.permission_store().list_pending().len(), 1);
         assert!(server_b.permission_store().list_pending().is_empty());
-        assert!(server_a
-            .permission_store()
-            .resolve("req-a", PermissionOutcome::Denied));
-        assert!(!server_b
-            .permission_store()
-            .resolve("req-a", PermissionOutcome::Denied));
+        assert!(
+            server_a
+                .permission_store()
+                .resolve("req-a", PermissionOutcome::Denied)
+        );
+        assert!(
+            !server_b
+                .permission_store()
+                .resolve("req-a", PermissionOutcome::Denied)
+        );
     }
 }

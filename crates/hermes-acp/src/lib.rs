@@ -20,9 +20,9 @@ pub mod server;
 pub mod session;
 pub mod tools;
 
-pub use auth::{build_auth_methods, detect_provider, has_provider, TERMINAL_SETUP_AUTH_METHOD_ID};
+pub use auth::{TERMINAL_SETUP_AUTH_METHOD_ID, build_auth_methods, detect_provider, has_provider};
 pub use events::{
-    plan_entries_from_todo_result, AcpEvent, AcpEventKind, EventSink, ToolCallIdTracker,
+    AcpEvent, AcpEventKind, EventSink, ToolCallIdTracker, plan_entries_from_todo_result,
 };
 pub use handler::{
     AcpHandler, AcpPromptExecutor, DefaultAcpHandler, HermesAcpHandler, PromptExecutionOutput,
@@ -40,8 +40,8 @@ pub use protocol::{
 pub use server::AcpServer;
 pub use session::{SessionInfo, SessionManager, SessionPhase, SessionState};
 pub use tools::{
-    format_tool_result, make_tool_call_id, tool_completion_status, tool_kind, tool_start_metadata,
-    tool_title, ToolStartMetadata,
+    ToolStartMetadata, format_tool_result, make_tool_call_id, tool_completion_status, tool_kind,
+    tool_start_metadata, tool_title,
 };
 
 use serde::{Deserialize, Serialize};

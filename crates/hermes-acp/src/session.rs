@@ -1,14 +1,14 @@
-﻿//! ACP session state management.
+//! ACP session state management.
 //!
 //! Maps ACP sessions to Hermes agent instances with persistence support.
 //! Mirrors the Python `acp_adapter/session.py` implementation.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 use hermes_agent::session_persistence::SessionPersistence;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------------------
 // SessionPhase
@@ -205,7 +205,9 @@ impl SessionManager {
             })
             .with_restore_callback(move |session_id| restore_session_state(&restore_sp, session_id))
             .with_list_callback(move || list_persisted_sessions(&list_sp))
-            .with_delete_callback(move |session_id| delete_persisted_session(&delete_sp, session_id))
+            .with_delete_callback(move |session_id| {
+                delete_persisted_session(&delete_sp, session_id)
+            })
     }
 
     /// Set a callback invoked whenever a session is persisted.
@@ -939,8 +941,8 @@ mod tests {
                 .expect("persisted lock")
                 .push(state.clone());
         });
-        assert!(mgr
-            .update_session_meta(
+        assert!(
+            mgr.update_session_meta(
                 "missing",
                 SessionMetaUpdate {
                     cwd: Some("/repo".to_string()),
@@ -948,7 +950,8 @@ mod tests {
                     ..SessionMetaUpdate::default()
                 },
             )
-            .is_none());
+            .is_none()
+        );
         assert!(persisted.lock().expect("persisted lock").is_empty());
     }
 }

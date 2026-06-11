@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::protocol::{AvailableCommand, PlanEntry};
 use crate::tools::{format_tool_result, tool_completion_status, tool_start_metadata};

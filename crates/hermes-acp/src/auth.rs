@@ -4,7 +4,7 @@
 //! setup method for first-run clients and, when Hermes can resolve configured
 //! runtime credentials, advertise that provider as an agent-managed auth method.
 
-use hermes_config::{load_config, GatewayConfig};
+use hermes_config::{GatewayConfig, load_config};
 
 use crate::protocol::AuthMethod;
 

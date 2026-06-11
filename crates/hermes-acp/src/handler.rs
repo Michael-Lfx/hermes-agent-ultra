@@ -9,17 +9,17 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use hermes_intelligence::model_metadata::{
     estimate_request_tokens_rough, get_model_context_length,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::auth::{
-    build_auth_methods_for_provider, detect_provider, TERMINAL_SETUP_AUTH_METHOD_ID,
+    TERMINAL_SETUP_AUTH_METHOD_ID, build_auth_methods_for_provider, detect_provider,
 };
-use crate::events::{plan_entries_from_todo_result, AcpEvent, AcpEventKind, EventSink};
+use crate::events::{AcpEvent, AcpEventKind, EventSink, plan_entries_from_todo_result};
 use crate::permissions::PermissionStore;
 use crate::protocol::*;
 use crate::resource_resolver::path_from_file_uri;
@@ -3279,7 +3279,9 @@ mod tests {
         assert_eq!(resp.result.unwrap()["stopReason"], "end_turn");
         assert_eq!(
             executor.runs.lock().unwrap().as_slice(),
-            ["write hi to a text file\n\nUser correction/guidance after interrupt: write HELLO instead"]
+            [
+                "write hi to a text file\n\nUser correction/guidance after interrupt: write HELLO instead"
+            ]
         );
         let state = handler.session_manager.get_session(&session_id).unwrap();
         assert!(state.interrupted_prompt_text.is_none());
@@ -3364,11 +3366,13 @@ mod tests {
             Some("session_info_update")
         );
         assert_eq!(info_updates[0].title.as_deref(), Some("hello"));
-        assert!(info_updates[0]
-            .updated_at
-            .as_deref()
-            .and_then(|value| value.parse::<u64>().ok())
-            .is_some_and(|value| value > 0));
+        assert!(
+            info_updates[0]
+                .updated_at
+                .as_deref()
+                .and_then(|value| value.parse::<u64>().ok())
+                .is_some_and(|value| value > 0)
+        );
     }
 
     #[tokio::test]

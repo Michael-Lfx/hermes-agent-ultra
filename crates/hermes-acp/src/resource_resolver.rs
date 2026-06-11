@@ -127,7 +127,10 @@ mod tests {
         let cases = [
             ("file://C:/Users/test/a.txt", r"C:\Users\test\a.txt"),
             ("file:///C:/Users/test/a.txt", r"C:\Users\test\a.txt"),
-            ("file://localhost/C:/Users/test/a.txt", r"C:\Users\test\a.txt"),
+            (
+                "file://localhost/C:/Users/test/a.txt",
+                r"C:\Users\test\a.txt",
+            ),
             ("file://C:\\Users\\test\\a.txt", r"C:\Users\test\a.txt"),
             ("file:///C:\\Users\\test\\a.txt", r"C:\Users\test\a.txt"),
         ];

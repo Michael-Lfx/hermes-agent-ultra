@@ -498,12 +498,13 @@ fn format_execute_code_result(result: Option<&str>) -> Option<String> {
             .map(|text| truncate_text(text, 5000));
     };
     let obj = data.as_object()?;
-    let mut lines = vec![obj
-        .get("exit_code")
-        .or_else(|| obj.get("returncode"))
-        .and_then(value_summary)
-        .map(|code| format!("Exit code: {code}"))
-        .unwrap_or_else(|| "Execution complete".to_string())];
+    let mut lines = vec![
+        obj.get("exit_code")
+            .or_else(|| obj.get("returncode"))
+            .and_then(value_summary)
+            .map(|code| format!("Exit code: {code}"))
+            .unwrap_or_else(|| "Execution complete".to_string()),
+    ];
     if let Some(output) = obj
         .get("output")
         .and_then(Value::as_str)
