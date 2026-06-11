@@ -72,4 +72,12 @@ impl CliStateRoot {
     pub fn route_autotune_state(&self) -> PathBuf {
         self.root.join("logs").join("route-autotune.json")
     }
+
+    pub fn route_autotune_env(&self) -> PathBuf {
+        self.root.join("logs").join("route-autotune.env")
+    }
+
+    pub fn from_state_root(state_root: &Path) -> Self {
+        Self::from_path(state_root.to_path_buf())
+    }
 }

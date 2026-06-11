@@ -29,7 +29,7 @@ pub(crate) struct ProvenanceVerification {
 
 /// Path to the provenance signing key file under a state root.
 pub(crate) fn provenance_key_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("auth").join("provenance.key")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).provenance_key()
 }
 
 /// Parse raw provenance key material (hex, base64, or raw bytes).

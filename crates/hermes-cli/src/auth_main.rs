@@ -304,7 +304,7 @@ pub(crate) fn parse_unix_millis_utc(value: Option<i64>) -> Option<DateTime<Utc>>
 }
 
 pub(crate) fn secret_vault_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("auth").join("tokens.json")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).secret_vault()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -329,7 +329,7 @@ pub(crate) struct AuthPoolStore {
 }
 
 pub(crate) fn auth_pool_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("auth").join("pool.json")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).auth_pool()
 }
 
 pub(crate) fn load_auth_pool_store(path: &Path) -> Result<AuthPoolStore, AgentError> {

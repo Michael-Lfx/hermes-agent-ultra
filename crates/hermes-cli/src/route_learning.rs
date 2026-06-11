@@ -73,19 +73,19 @@ pub(crate) const ROUTE_AUTOTUNE_ENV_KEYS: &[&str] = &[
 // ---------------------------------------------------------------------------
 
 pub(crate) fn route_learning_state_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("logs").join("route-learning.json")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).route_learning_state()
 }
 
 pub(crate) fn route_health_state_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("logs").join("route-health.json")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).route_health_state()
 }
 
 pub(crate) fn route_autotune_state_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("logs").join("route-autotune.json")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).route_autotune_state()
 }
 
 pub(crate) fn route_autotune_env_path_for_cli(state_root: &Path) -> PathBuf {
-    state_root.join("logs").join("route-autotune.env")
+    hermes_cli::paths::CliStateRoot::from_state_root(state_root).route_autotune_env()
 }
 
 // ---------------------------------------------------------------------------
