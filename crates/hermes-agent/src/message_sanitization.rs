@@ -141,9 +141,29 @@ Finish the answer directly.]"
         .to_string()
 }
 
+/// User nudge when the model's finish_reason claims tool_calls but none were parsed.
+pub fn continuation_prompt_for_missing_tool_calls() -> String {
+    "[System: Your previous assistant message indicated tool use (finish_reason=tool_calls) \
+but no tool call was emitted. Invoke the required tool(s) now with valid JSON arguments. \
+Do not only describe intent — execute the tool call(s) in this turn.]"
+        .to_string()
+}
+
 pub fn continuation_prompt_for_response(response: &hermes_core::LlmResponse) -> String {
+    if missing_tool_calls_in_response(response) {
+        return continuation_prompt_for_missing_tool_calls();
+    }
     let is_partial = response.response_id.as_deref() == Some(PARTIAL_STREAM_STUB_ID);
     get_continuation_prompt(is_partial, response.dropped_tool_names.as_deref())
+}
+
+fn missing_tool_calls_in_response(response: &hermes_core::LlmResponse) -> bool {
+    response.finish_reason.as_deref() == Some("tool_calls")
+        && response
+            .message
+            .tool_calls
+            .as_ref()
+            .map_or(true, |calls| calls.is_empty())
 }
 
 /// User-visible warning when a stream dies mid tool-call (Python `chat_completion_helpers`).
@@ -663,6 +683,40 @@ mod tests {
             "openai",
             Some("http://127.0.0.1:11434/v1"),
         ));
+    }
+
+    #[test]
+    fn continuation_prompt_for_tool_calls_finish_without_tools() {
+        let resp = hermes_core::LlmResponse {
+            message: Message::assistant("找到了，让我抓取具体内容来看看"),
+            model: "test".to_string(),
+            finish_reason: Some("tool_calls".to_string()),
+            ..Default::default()
+        };
+        let prompt = continuation_prompt_for_response(&resp);
+        assert!(prompt.contains("finish_reason=tool_calls"));
+        assert!(prompt.contains("Invoke the required tool"));
+    }
+
+    #[test]
+    fn continuation_prompt_for_tool_calls_finish_with_tools_uses_length_branch() {
+        let mut msg = Message::assistant("calling tool");
+        msg.tool_calls = Some(vec![hermes_core::ToolCall {
+            id: "tc1".to_string(),
+            function: hermes_core::FunctionCall {
+                name: "web_extract".to_string(),
+                arguments: r#"{"urls":["https://example.com"]}"#.to_string(),
+            },
+            extra_content: None,
+        }]);
+        let resp = hermes_core::LlmResponse {
+            message: msg,
+            model: "test".to_string(),
+            finish_reason: Some("tool_calls".to_string()),
+            ..Default::default()
+        };
+        let prompt = continuation_prompt_for_response(&resp);
+        assert!(!prompt.contains("finish_reason=tool_calls"));
     }
 
     #[test]

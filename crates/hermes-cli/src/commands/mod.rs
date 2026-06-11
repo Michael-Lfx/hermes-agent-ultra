@@ -58,6 +58,8 @@ pub(crate) mod session;
 pub mod skills;
 pub(crate) mod skills_infra;
 
+use skills_infra::{SENTRUX_MCP_ARG, SENTRUX_MCP_COMMAND, SENTRUX_MCP_SERVER_NAME};
+
 // Re-export background items still referenced from outside
 pub use background::recover_queued_background_jobs;
 pub use kanban::run_kanban_command;

@@ -569,6 +569,14 @@ fn finish_reason_requires_continuation(finish_reason: Option<&str>) -> bool {
     matches!(finish_reason, Some("length" | "pause_turn"))
 }
 
+/// Provider reported tool intent (`finish_reason=tool_calls`) but no executable tool calls arrived.
+pub(crate) fn missing_tool_calls_finish_mismatch(
+    finish_reason: Option<&str>,
+    has_tool_calls: bool,
+) -> bool {
+    !has_tool_calls && matches!(finish_reason, Some("tool_calls"))
+}
+
 pub(crate) fn effective_finish_reason(
     agent: &AgentLoop,
     response: &LlmResponse,
@@ -620,7 +628,9 @@ pub(crate) fn build_finalization_signals(
     let has_visible_text_after_think =
         AgentLoop::assistant_visible_text_after_think_blocks(message);
     let has_reasoning = AgentLoop::assistant_has_reasoning(message);
-    let continuation_required = finish_reason_requires_continuation(finish_reason);
+    let continuation_required =
+        finish_reason_requires_continuation(finish_reason)
+            || missing_tool_calls_finish_mismatch(finish_reason, has_tool_calls);
     let ack_detected = !has_tool_calls
         && !continuation_required
         && agent_runtime_helpers::looks_like_codex_intermediate_ack(
@@ -770,4 +780,17 @@ pub(crate) fn extra_body_for_api_mode(agent: &AgentLoop, api_mode: &ApiMode) -> 
         }
     }
     Some(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_tool_calls_finish_mismatch_detects_provider_tool_intent_gap() {
+        assert!(missing_tool_calls_finish_mismatch(Some("tool_calls"), false));
+        assert!(!missing_tool_calls_finish_mismatch(Some("tool_calls"), true));
+        assert!(!missing_tool_calls_finish_mismatch(Some("stop"), false));
+        assert!(!missing_tool_calls_finish_mismatch(None, false));
+    }
 }
