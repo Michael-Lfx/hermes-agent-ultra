@@ -46,14 +46,14 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tokio::sync::Semaphore;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// A single fired event. Mirrors Python's `(event_type, context)` tuple.
 #[derive(Debug, Clone, Serialize)]
@@ -148,7 +148,12 @@ impl HookEmitStats {
 /// reg.emit(&HookEvent::new("agent:start", json!({"platform": "telegram"}))).await;
 /// ```
 pub struct HookRegistry {
+    /// Handlers for exact event keys, e.g. `"agent:start"`.
     handlers: HashMap<String, Vec<Arc<dyn HookHandler>>>,
+    /// Handlers for wildcard keys `"scope:*"`, keyed by the scope prefix
+    /// (e.g. `"command"` for `"command:*"`). Pre-indexed at registration
+    /// time so `emit` never allocates a format string.
+    wildcard_scopes: HashMap<String, Vec<Arc<dyn HookHandler>>>,
     loaded: Vec<LoadedHookInfo>,
     hook_semaphore: Option<Arc<Semaphore>>,
     pub stats: Arc<HookEmitStats>,
@@ -158,6 +163,7 @@ impl HookRegistry {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            wildcard_scopes: HashMap::new(),
             loaded: Vec::new(),
             hook_semaphore: None,
             stats: Arc::new(HookEmitStats {
@@ -166,6 +172,50 @@ impl HookRegistry {
                 failed: AtomicU64::new(0),
             }),
         }
+    }
+
+    /// Internal registration router: `"scope:*"` patterns go to
+    /// `wildcard_scopes`; everything else goes to `handlers`.
+    fn _register(&mut self, event: String, handler: Arc<dyn HookHandler>) {
+        if let Some(scope) = event.strip_suffix(":*") {
+            self.wildcard_scopes
+                .entry(scope.to_string())
+                .or_default()
+                .push(handler);
+        } else {
+            self.handlers.entry(event).or_default().push(handler);
+        }
+    }
+
+    /// Collect the handlers to call for `event_type`, deduplicating by
+    /// pointer so the same `Arc` registered for both an exact key and a
+    /// wildcard is invoked only once.
+    fn collect_handlers(&self, event_type: &str) -> Vec<Arc<dyn HookHandler>> {
+        let mut seen: std::collections::HashSet<*const ()> = Default::default();
+        let mut out: Vec<Arc<dyn HookHandler>> = Vec::new();
+
+        let mut add = |h: &Arc<dyn HookHandler>| {
+            let ptr = Arc::as_ptr(h) as *const ();
+            if seen.insert(ptr) {
+                out.push(h.clone());
+            }
+        };
+
+        if let Some(list) = self.handlers.get(event_type) {
+            for h in list {
+                add(h);
+            }
+        }
+
+        if let Some((scope, _)) = event_type.split_once(':') {
+            if let Some(list) = self.wildcard_scopes.get(scope) {
+                for h in list {
+                    add(h);
+                }
+            }
+        }
+
+        out
     }
 
     /// Limit concurrent hook handler executions across the registry.
@@ -186,7 +236,9 @@ impl HookRegistry {
 
     /// Total handler count across all events. Useful for tests.
     pub fn handler_count(&self) -> usize {
-        self.handlers.values().map(Vec::len).sum()
+        let exact: usize = self.handlers.values().map(Vec::len).sum();
+        let wildcards: usize = self.wildcard_scopes.values().map(Vec::len).sum();
+        exact + wildcards
     }
 
     /// Register an in-process handler for a single event type. Use
@@ -198,7 +250,7 @@ impl HookRegistry {
     ) {
         let evt = event_type.into();
         tracing::info!(event = %evt, hook = %handler.name(), "Registered in-process gateway hook");
-        self.handlers.entry(evt).or_default().push(handler);
+        self._register(evt, handler);
     }
 
     /// Register hard-coded built-in hooks. Call this once before
@@ -302,10 +354,7 @@ impl HookRegistry {
             }) as Arc<dyn HookHandler>;
 
             for event in &manifest.events {
-                self.handlers
-                    .entry(event.clone())
-                    .or_default()
-                    .push(handler.clone());
+                self._register(event.clone(), handler.clone());
             }
 
             tracing::info!(
@@ -324,22 +373,10 @@ impl HookRegistry {
 
     /// Fire all handlers registered for `event.event_type`, plus any
     /// `scope:*` wildcard matches. Errors and panics are logged and
-    /// swallowed.
+    /// swallowed. The same handler registered under both an exact key and a
+    /// wildcard is called only once.
     pub async fn emit(&self, event: &HookEvent) {
-        let mut to_call: Vec<Arc<dyn HookHandler>> = Vec::new();
-
-        if let Some(list) = self.handlers.get(&event.event_type) {
-            to_call.extend(list.iter().cloned());
-        }
-
-        if let Some((scope, _)) = event.event_type.split_once(':') {
-            let wildcard = format!("{scope}:*");
-            if wildcard != event.event_type {
-                if let Some(list) = self.handlers.get(&wildcard) {
-                    to_call.extend(list.iter().cloned());
-                }
-            }
-        }
+        let to_call = self.collect_handlers(&event.event_type);
 
         let stats = self.stats.clone();
         for handler in to_call {
@@ -587,8 +624,8 @@ impl HookHandler for BootMdHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
 
     /// In-process handler that records every event it sees (for
@@ -840,6 +877,65 @@ mod tests {
         reg.emit(&HookEvent::new("command:reset", json!({}))).await;
         // Both fire (order: exact first, then wildcard).
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn same_handler_registered_exact_and_wildcard_fires_once() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let handler = Arc::new(RecordingHook {
+            name: "dedup".into(),
+            seen: seen.clone(),
+        });
+        let mut reg = HookRegistry::new();
+        reg.register_in_process("command:reset", handler.clone());
+        reg.register_in_process("command:*", handler.clone());
+        reg.emit(&HookEvent::new("command:reset", json!({}))).await;
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "same Arc should fire exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn emit_dispatches_only_matching_handlers() {
+        // Register 20 handlers spread over unrelated events; emit one event
+        // and verify only the 2 registered for it are invoked.
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut reg = HookRegistry::new();
+
+        for i in 0..18usize {
+            let event = format!("noise:event{i}");
+            reg.register_in_process(
+                event,
+                Arc::new(RecordingHook {
+                    name: format!("noise-{i}"),
+                    seen: seen.clone(),
+                }),
+            );
+        }
+        reg.register_in_process(
+            "target:hit",
+            Arc::new(RecordingHook {
+                name: "target-exact".into(),
+                seen: seen.clone(),
+            }),
+        );
+        reg.register_in_process(
+            "target:*",
+            Arc::new(RecordingHook {
+                name: "target-wild".into(),
+                seen: seen.clone(),
+            }),
+        );
+
+        assert_eq!(reg.handler_count(), 20);
+        reg.emit(&HookEvent::new("target:hit", json!({}))).await;
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            2,
+            "only the 2 target handlers should fire"
+        );
     }
 
     // ---------- builtins ----------
