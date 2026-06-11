@@ -30,6 +30,9 @@ pub struct SessionRecord {
     /// Set when `list_sessions_rich` projects a compression root to its tip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lineage_root_id: Option<String>,
+    /// Whether the session has been archived.
+    #[serde(default)]
+    pub archived: bool,
 }
 
 fn format_preview(raw: &str) -> Option<String> {
@@ -50,6 +53,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         .filter(|s| !s.trim().is_empty())
         .or(platform.filter(|s| !s.trim().is_empty()))
         .unwrap_or_else(|| "cli".into());
+    let archived: i64 = row.get("archived").unwrap_or(0);
     Ok(SessionRecord {
         id: row.get("id")?,
         source: effective,
@@ -64,6 +68,7 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         preview: row.get("_preview_raw").ok(),
         last_active: row.get("last_active").ok(),
         lineage_root_id: None,
+        archived: archived != 0,
     })
 }
 
