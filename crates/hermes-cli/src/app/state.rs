@@ -134,6 +134,22 @@ impl RuntimeFlags {
             quorum_armed_once: false,
         }
     }
+
+    pub fn running(&self) -> bool {
+        self.running
+    }
+
+    pub fn set_running(&mut self, running: bool) {
+        self.running = running;
+    }
+
+    pub fn quorum_armed_once(&self) -> bool {
+        self.quorum_armed_once
+    }
+
+    pub fn set_quorum_armed_once(&mut self, armed: bool) {
+        self.quorum_armed_once = armed;
+    }
 }
 
 /// Background ACP pipe server handles.
