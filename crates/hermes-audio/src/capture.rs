@@ -45,11 +45,14 @@ pub struct PcmReplaySource {
 
 impl PcmReplaySource {
     /// Create from a flat PCM buffer, split into `chunk_size`-sample chunks.
-    pub fn new(label: impl Into<String>, sample_rate: u32, pcm: Vec<f32>, chunk_size: usize) -> Self {
-        let chunks: std::collections::VecDeque<Vec<f32>> = pcm
-            .chunks(chunk_size.max(1))
-            .map(|c| c.to_vec())
-            .collect();
+    pub fn new(
+        label: impl Into<String>,
+        sample_rate: u32,
+        pcm: Vec<f32>,
+        chunk_size: usize,
+    ) -> Self {
+        let chunks: std::collections::VecDeque<Vec<f32>> =
+            pcm.chunks(chunk_size.max(1)).map(|c| c.to_vec()).collect();
         Self {
             label: label.into(),
             sample_rate,

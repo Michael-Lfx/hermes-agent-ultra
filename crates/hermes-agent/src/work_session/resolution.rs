@@ -49,8 +49,12 @@ pub fn analyze_session(
         }
     }
 
-    let explicit_positive = user_messages.iter().any(|m| matches_feedback(m, POSITIVE_PATTERNS));
-    let explicit_negative = user_messages.iter().any(|m| matches_feedback(m, NEGATIVE_PATTERNS));
+    let explicit_positive = user_messages
+        .iter()
+        .any(|m| matches_feedback(m, POSITIVE_PATTERNS));
+    let explicit_negative = user_messages
+        .iter()
+        .any(|m| matches_feedback(m, NEGATIVE_PATTERNS));
     let correction_loops = count_correction_loops(&user_messages);
     let closure_without_followup = user_turns >= 2
         && !explicit_negative
@@ -76,15 +80,7 @@ pub fn fuse_verdict(signals: &SessionSignals) -> ResolutionPayload {
 
     if signals.user_turns < 2 {
         codes.push("insufficient_turns".to_string());
-        return resolution_payload(
-            "abandoned",
-            "low",
-            "D",
-            "unknown",
-            None,
-            codes,
-            false,
-        );
+        return resolution_payload("abandoned", "low", "D", "unknown", None, codes, false);
     }
 
     if signals.explicit_negative {
@@ -231,17 +227,43 @@ fn count_correction_loops(messages: &[String]) -> u32 {
 }
 
 const POSITIVE_PATTERNS: &[&str] = &[
-    "解决了", "可以了", "好的", "谢谢", "感谢", "perfect", "works now", "that worked",
-    "looks good", "great job", "ok thanks", "没问题",
+    "解决了",
+    "可以了",
+    "好的",
+    "谢谢",
+    "感谢",
+    "perfect",
+    "works now",
+    "that worked",
+    "looks good",
+    "great job",
+    "ok thanks",
+    "没问题",
 ];
 
 const NEGATIVE_PATTERNS: &[&str] = &[
-    "不对", "不行", "还是错", "没用", "不要这样", "wrong", "not working", "doesn't work",
-    "still broken", "try again", "incorrect",
+    "不对",
+    "不行",
+    "还是错",
+    "没用",
+    "不要这样",
+    "wrong",
+    "not working",
+    "doesn't work",
+    "still broken",
+    "try again",
+    "incorrect",
 ];
 
 const CORRECTION_PATTERNS: &[&str] = &[
-    "不对", "错了", "应该是", "别这样", "instead", "don't do", "stop doing", "not like that",
+    "不对",
+    "错了",
+    "应该是",
+    "别这样",
+    "instead",
+    "don't do",
+    "stop doing",
+    "not like that",
 ];
 
 #[cfg(test)]

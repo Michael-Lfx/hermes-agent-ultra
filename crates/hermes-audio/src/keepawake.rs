@@ -22,7 +22,9 @@ impl KeepAwakeGuard {
         #[cfg(target_os = "windows")]
         {
             tracing::debug!("KeepAwake: acquiring Windows power lock ({reason})");
-            Self { _win: WindowsGuard::new() }
+            Self {
+                _win: WindowsGuard::new(),
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -39,8 +41,8 @@ impl KeepAwakeGuard {
 #[cfg(target_os = "windows")]
 mod win {
     // ES_CONTINUOUS | ES_SYSTEM_REQUIRED prevent sleep; no display lock needed.
-    const ES_CONTINUOUS: u32       = 0x8000_0000;
-    const ES_SYSTEM_REQUIRED: u32  = 0x0000_0001;
+    const ES_CONTINUOUS: u32 = 0x8000_0000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
 
     pub struct WindowsGuard;
 

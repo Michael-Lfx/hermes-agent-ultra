@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use reqwest::blocking::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 use crate::memory_plugins::config_io;
@@ -785,11 +785,7 @@ fn parse_recall_types_str(value: &str) -> Option<Vec<String>> {
         .filter(|item| !item.is_empty())
         .map(ToString::to_string)
         .collect();
-    if types.is_empty() {
-        None
-    } else {
-        Some(types)
-    }
+    if types.is_empty() { None } else { Some(types) }
 }
 
 fn parse_recall_types_value(value: &Value) -> Option<Vec<String>> {
@@ -804,11 +800,7 @@ fn parse_recall_types_value(value: &Value) -> Option<Vec<String>> {
         .filter(|item| !item.is_empty())
         .map(ToString::to_string)
         .collect();
-    if types.is_empty() {
-        None
-    } else {
-        Some(types)
-    }
+    if types.is_empty() { None } else { Some(types) }
 }
 
 fn hindsight_recall_body(

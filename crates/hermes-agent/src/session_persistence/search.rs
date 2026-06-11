@@ -51,12 +51,7 @@ mod tests {
     fn search_finds_ascii_term() {
         let conn = mem_conn();
         create_session(&conn, "s1", "cli", None, None, None, None).unwrap();
-        append_messages(
-            &conn,
-            "s1",
-            &[Message::user("docker deployment guide")],
-        )
-        .unwrap();
+        append_messages(&conn, "s1", &[Message::user("docker deployment guide")]).unwrap();
         let hits = search_messages(&conn, "docker", None, None, None, 10, 0, None).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "s1");

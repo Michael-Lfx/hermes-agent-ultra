@@ -14,7 +14,7 @@
 use std::process::Command;
 use std::sync::Mutex;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 
@@ -94,7 +94,7 @@ fn run_brv(args: &[&str], _timeout_secs: u64, cwd: &str) -> (bool, String) {
             return (
                 false,
                 "brv CLI not found. Install: npm install -g byterover-cli".into(),
-            )
+            );
         }
     };
 

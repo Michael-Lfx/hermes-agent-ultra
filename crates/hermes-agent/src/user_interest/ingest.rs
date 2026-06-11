@@ -11,11 +11,11 @@ use super::extract::{
     extract_signals_from_messages, extract_signals_from_text, filter_poi_signals,
     message_text_from_value,
 };
-use super::types::ExtractOptions;
 use super::llm::extract_signals_from_transcript_llm;
 use super::pipeline::apply_signal_batch;
 use super::quality::filter_persistable_signals;
 use super::store::{InterestSignal, InterestStore};
+use super::types::ExtractOptions;
 
 /// Agent-injected continuation / nudge user lines — not real user POI.
 pub fn is_poi_synthetic_user_text(text: &str) -> bool {

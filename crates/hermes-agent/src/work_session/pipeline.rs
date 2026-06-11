@@ -5,16 +5,16 @@ use std::sync::Arc;
 
 use hermes_config::{InsightsContributionConfig, InterestConfig};
 use hermes_insights::{
-    drain_session_skills, find_skill_dir_by_slug, set_active_session, ContributionService,
-    WorkPackageBuildInput,
+    ContributionService, WorkPackageBuildInput, drain_session_skills, find_skill_dir_by_slug,
+    set_active_session,
 };
 use hermes_intelligence::auxiliary::AuxiliaryClient;
 use tracing::{info, warn};
 
 use crate::user_interest::{
-    apply_signal_batch, extract_signals_from_messages, extract_signals_from_transcript_llm,
-    filter_persistable_signals, filter_poi_signals, format_user_transcript_for_llm,
-    InterestSignal, InterestStore,
+    InterestSignal, InterestStore, apply_signal_batch, extract_signals_from_messages,
+    extract_signals_from_transcript_llm, filter_persistable_signals, filter_poi_signals,
+    format_user_transcript_for_llm,
 };
 
 use super::domain::{candidate_to_poi, extract_domain_candidate};
@@ -53,7 +53,10 @@ pub fn spawn_session_end_pipeline(
         if packages.is_empty() {
             return;
         }
-        info!(count = packages.len(), "work_session: enqueue domain work packages");
+        info!(
+            count = packages.len(),
+            "work_session: enqueue domain work packages"
+        );
         ContributionService::spawn_work_packages(hermes_home, insights_cfg, packages);
     });
 }
@@ -80,15 +83,14 @@ async fn run_poi_ingest(
                 warn!("interest: session-end LLM skipped — empty user transcript");
             } else {
                 let existing_labels = store.top_labels_for_llm(5).unwrap_or_default();
-                let llm_signals = extract_signals_from_transcript_llm(
-                    aux,
-                    &transcript,
-                    &existing_labels,
-                )
-                .await;
+                let llm_signals =
+                    extract_signals_from_transcript_llm(aux, &transcript, &existing_labels).await;
                 let llm_n = llm_signals.len();
                 all_signals.extend(llm_signals);
-                info!(transcript_chars, llm_n, "interest: session-end LLM extraction");
+                info!(
+                    transcript_chars,
+                    llm_n, "interest: session-end LLM extraction"
+                );
             }
         } else {
             warn!("interest: session-end LLM enabled but auxiliary client unavailable");
@@ -100,9 +102,7 @@ async fn run_poi_ingest(
         all_signals.extend(rules);
         info!(
             transcript_chars,
-            buffered_n,
-            rules_n,
-            "interest: session-end rule supplement"
+            buffered_n, rules_n, "interest: session-end rule supplement"
         );
     }
     let pre_filter_n = all_signals.len();

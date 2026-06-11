@@ -46,10 +46,8 @@ where
         match result {
             Ok(value) => return Ok(value),
             Err(e) => {
-                let retryable = e
-                    .to_string()
-                    .to_ascii_lowercase()
-                    .contains("locked") || e.to_string().to_ascii_lowercase().contains("busy");
+                let retryable = e.to_string().to_ascii_lowercase().contains("locked")
+                    || e.to_string().to_ascii_lowercase().contains("busy");
                 if retryable && attempt + 1 < WRITE_MAX_RETRIES {
                     last_err = Some(e);
                     let jitter = rand::rng().random_range(WRITE_RETRY_MIN_MS..=WRITE_RETRY_MAX_MS);
@@ -60,9 +58,7 @@ where
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| {
-        AgentError::Io("database is locked after max retries".into())
-    }))
+    Err(last_err.unwrap_or_else(|| AgentError::Io("database is locked after max retries".into())))
 }
 
 /// Best-effort PASSIVE WAL checkpoint; never raises.
@@ -74,11 +70,7 @@ pub fn try_wal_checkpoint(conn: &Arc<Mutex<Connection>>) {
         Ok((r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))
     }) {
         if row.0 > 0 {
-            tracing::debug!(
-                "WAL checkpoint: {}/{} pages checkpointed",
-                row.1,
-                row.0
-            );
+            tracing::debug!("WAL checkpoint: {}/{} pages checkpointed", row.1, row.0);
         }
     }
 }

@@ -143,10 +143,7 @@ mod platform {
     /// 7. `GetService(IAudioCaptureClient)` — get capture client
     /// 8. `Start()` — begin capture
     /// 9. Loop: `GetNextPacketSize` → `GetBuffer` → convert → downsample → send → `ReleaseBuffer`
-    fn wasapi_capture_loop(
-        tx: mpsc::Sender<Vec<f32>>,
-        target_sr: u32,
-    ) -> Result<(), String> {
+    fn wasapi_capture_loop(tx: mpsc::Sender<Vec<f32>>, target_sr: u32) -> Result<(), String> {
         // Full WASAPI implementation requires the `windows` crate with
         // `Win32_Media_Audio` and `Win32_System_Com` features.  The skeleton
         // below documents the correct sequence; uncomment and fill in when
@@ -251,11 +248,8 @@ mod tests {
         // On all platforms, LoopbackSource should open without error and
         // produce at least one frame within 500ms.
         let src = LoopbackSource::new(16_000).expect("loopback open failed");
-        let frame = tokio::time::timeout(
-            tokio::time::Duration::from_millis(500),
-            src.read_chunk(),
-        )
-        .await;
+        let frame =
+            tokio::time::timeout(tokio::time::Duration::from_millis(500), src.read_chunk()).await;
         assert!(
             frame.is_ok(),
             "loopback source timed out producing first frame"

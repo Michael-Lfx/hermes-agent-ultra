@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use hermes_core::{AgentError, Message, MessageRole};
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
 use super::write::execute_write;
@@ -269,7 +269,10 @@ pub fn resolve_session_by_title(
     let guard = conn
         .lock()
         .map_err(|_| AgentError::Io("state db lock poisoned".into()))?;
-    let escaped = title.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = title
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let pattern = format!("{escaped} #%");
     let numbered: Option<String> = guard
         .query_row(
@@ -458,15 +461,14 @@ pub fn list_sessions_rich(
                   AND p.end_reason = 'branched'
                   AND s.started_at >= p.ended_at
             ))"
-                .to_string(),
+            .to_string(),
         );
     }
     let mut params_vec: Vec<rusqlite::types::Value> = Vec::new();
 
     if let Some(src) = source {
-        where_clauses.push(
-            "COALESCE(NULLIF(s.source, ''), NULLIF(s.platform, ''), 'cli') = ?".into(),
-        );
+        where_clauses
+            .push("COALESCE(NULLIF(s.source, ''), NULLIF(s.platform, ''), 'cli') = ?".into());
         params_vec.push(src.to_string().into());
     }
     if !exclude_sources.is_empty() {
@@ -705,7 +707,10 @@ pub fn get_messages_around(
         .prepare(&before_sql)
         .map_err(|e| AgentError::Io(format!("get_messages_around before: {e}")))?;
     let before_rows: Vec<StoredMessageRow> = before_stmt
-        .query_map(params![session_id, around_message_id, window + 1], row_to_stored_message)
+        .query_map(
+            params![session_id, around_message_id, window + 1],
+            row_to_stored_message,
+        )
         .map_err(|e| AgentError::Io(format!("get_messages_around before query: {e}")))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AgentError::Io(format!("get_messages_around before read: {e}")))?;
@@ -719,7 +724,10 @@ pub fn get_messages_around(
         .prepare(&after_sql)
         .map_err(|e| AgentError::Io(format!("get_messages_around after: {e}")))?;
     let after_rows: Vec<StoredMessageRow> = after_stmt
-        .query_map(params![session_id, around_message_id, window], row_to_stored_message)
+        .query_map(
+            params![session_id, around_message_id, window],
+            row_to_stored_message,
+        )
         .map_err(|e| AgentError::Io(format!("get_messages_around after query: {e}")))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AgentError::Io(format!("get_messages_around after read: {e}")))?;
@@ -778,7 +786,10 @@ pub fn get_anchored_view(
             .unwrap_or_default();
         let (role_clause, _): (String, Vec<String>) = if !role_list.is_empty() {
             let ph: Vec<_> = role_list.iter().map(|_| "?").collect();
-            (format!(" AND role IN ({})", ph.join(", ")), role_list.clone())
+            (
+                format!(" AND role IN ({})", ph.join(", ")),
+                role_list.clone(),
+            )
         } else {
             (String::new(), Vec::new())
         };
@@ -797,7 +808,10 @@ pub fn get_anchored_view(
             .prepare(&start_sql)
             .map_err(|e| AgentError::Io(format!("anchored bookend_start: {e}")))?;
         bookend_start = start_stmt
-            .query_map(rusqlite::params_from_iter(start_vals.iter()), row_to_stored_message)
+            .query_map(
+                rusqlite::params_from_iter(start_vals.iter()),
+                row_to_stored_message,
+            )
             .map_err(|e| AgentError::Io(format!("anchored bookend_start query: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AgentError::Io(format!("anchored bookend_start read: {e}")))?;
@@ -816,7 +830,10 @@ pub fn get_anchored_view(
             .prepare(&end_sql)
             .map_err(|e| AgentError::Io(format!("anchored bookend_end: {e}")))?;
         bookend_end = end_stmt
-            .query_map(rusqlite::params_from_iter(end_vals.iter()), row_to_stored_message)
+            .query_map(
+                rusqlite::params_from_iter(end_vals.iter()),
+                row_to_stored_message,
+            )
             .map_err(|e| AgentError::Io(format!("anchored bookend_end query: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AgentError::Io(format!("anchored bookend_end read: {e}")))?;
@@ -1022,15 +1039,7 @@ mod tests {
         let conn = mem_conn();
         create_session(&conn, "parent", "cli", None, None, None, None).unwrap();
         create_session(&conn, "child", "cli", None, Some("parent"), None, None).unwrap();
-        append_messages(
-            &conn,
-            "child",
-            &[Message::user("hello")],
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_resume_session_id(&conn, "parent").unwrap(),
-            "child"
-        );
+        append_messages(&conn, "child", &[Message::user("hello")]).unwrap();
+        assert_eq!(resolve_resume_session_id(&conn, "parent").unwrap(), "child");
     }
 }

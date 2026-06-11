@@ -76,7 +76,9 @@ pub fn discover_available_providers() -> Vec<Arc<dyn MemoryProviderPlugin>> {
     for id in ids {
         match id.as_str() {
             "honcho" => providers.push(Arc::new(honcho::HonchoMemoryPlugin::new())),
-            "contextlattice" => providers.push(Arc::new(contextlattice::ContextLatticeMemoryPlugin::new())),
+            "contextlattice" => {
+                providers.push(Arc::new(contextlattice::ContextLatticeMemoryPlugin::new()))
+            }
             "hindsight" => providers.push(Arc::new(hindsight::HindsightPlugin::new())),
             "retaindb" => providers.push(Arc::new(retaindb::RetainDbMemoryPlugin::new())),
             "openviking" => providers.push(Arc::new(openviking::OpenVikingMemoryPlugin::new())),

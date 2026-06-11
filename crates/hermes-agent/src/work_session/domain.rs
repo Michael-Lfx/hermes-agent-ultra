@@ -4,8 +4,8 @@ use hermes_insights::sanitize::{sanitize_text, slugify_name};
 use hermes_insights::types::DomainPoiPayload;
 
 use crate::user_interest::{
-    extract_contextual_interests, extract_declared_interests, extract_signals_from_messages,
-    is_poi_synthetic_user_text, message_text_from_value, InterestSignal, SignalSource,
+    InterestSignal, SignalSource, extract_contextual_interests, extract_declared_interests,
+    extract_signals_from_messages, is_poi_synthetic_user_text, message_text_from_value,
 };
 
 #[derive(Debug, Clone)]

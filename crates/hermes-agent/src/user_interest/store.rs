@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use chrono::{DateTime, Utc};
 use hermes_config::InterestConfig;
 use hermes_insights::sanitize::is_persistable_local_poi;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use super::types::{SignalSource, TopicStatus};
 
@@ -194,8 +194,7 @@ impl InterestStore {
 
     pub fn insert_topic(&self, signal: &InterestSignal, status: TopicStatus) -> Result<(), String> {
         let now = Utc::now().to_rfc3339();
-        let tags_json =
-            serde_json::to_string(&signal.tags).unwrap_or_else(|_| "[]".to_string());
+        let tags_json = serde_json::to_string(&signal.tags).unwrap_or_else(|_| "[]".to_string());
         let weight = signal.weight_delta.clamp(0.08, 0.5);
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         conn.execute(
@@ -246,8 +245,7 @@ impl InterestStore {
                 },
             )
             .ok();
-        let Some((weight, count, old_summary, old_label, status_raw, old_conf, pinned)) =
-            existing
+        let Some((weight, count, old_summary, old_label, status_raw, old_conf, pinned)) = existing
         else {
             return Ok(false);
         };
@@ -268,8 +266,7 @@ impl InterestStore {
                 promoted = true;
             }
         }
-        let tags_json =
-            serde_json::to_string(&signal.tags).unwrap_or_else(|_| "[]".to_string());
+        let tags_json = serde_json::to_string(&signal.tags).unwrap_or_else(|_| "[]".to_string());
         conn.execute(
             "UPDATE topics SET label = ?1, summary = ?2, weight = ?3, last_seen_at = ?4,
              evidence_count = ?5, tags = ?6, updated_at = ?4, status = ?7, confidence = ?8,
@@ -295,9 +292,11 @@ impl InterestStore {
         let max = self.config.max_topics.max(5) as i64;
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM topics WHERE status != 'rejected'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM topics WHERE status != 'rejected'",
+                [],
+                |row| row.get(0),
+            )
             .map_err(|e| e.to_string())?;
         if count <= max {
             return Ok(());
@@ -583,7 +582,11 @@ pub fn load_interest_snapshot(
     }
     let home = hermes_home
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var("HERMES_HOME").ok().map(std::path::PathBuf::from))
+        .or_else(|| {
+            std::env::var("HERMES_HOME")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
         .or_else(|| Some(hermes_config::hermes_home()))
         .unwrap_or_else(hermes_config::hermes_home);
     let db_path = home.join("interest.db");
@@ -594,8 +597,8 @@ pub fn load_interest_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::user_interest::extract::extract_signals_from_text;
     use crate::user_interest::ExtractOptions;
+    use crate::user_interest::extract::extract_signals_from_text;
     use tempfile::TempDir;
 
     #[test]
@@ -604,11 +607,8 @@ mod tests {
         let db = dir.path().join("interest.db");
         let config = InterestConfig::default();
         let store = InterestStore::open(&db, config).unwrap();
-        let mut batch = extract_signals_from_text(
-            "我的兴趣点是打篮球",
-            1.0,
-            ExtractOptions::default(),
-        );
+        let mut batch =
+            extract_signals_from_text("我的兴趣点是打篮球", 1.0, ExtractOptions::default());
         batch.extend(extract_signals_from_text(
             "我的兴趣点还有吃鱼",
             1.0,

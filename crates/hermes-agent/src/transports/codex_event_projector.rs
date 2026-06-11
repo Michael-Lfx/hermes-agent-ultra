@@ -1,6 +1,6 @@
 //! Projects codex app-server `item/completed` notifications into Hermes messages.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use hermes_core::{FunctionCall, Message, MessageRole, ToolCall};
 
@@ -29,7 +29,10 @@ impl CodexEventProjector {
     }
 
     pub fn project(&mut self, notification: &Value) -> ProjectionResult {
-        let method = notification.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let method = notification
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if method != "item/completed" {
             return ProjectionResult::default();
         }
@@ -69,7 +72,11 @@ impl CodexEventProjector {
     }
 
     fn project_agent_message(&mut self, item: &Value) -> ProjectionResult {
-        let text = item.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let text = item
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let mut msg = Message::assistant(&text);
         if !self.pending_reasoning.is_empty() {
             msg.reasoning_content = Some(self.pending_reasoning.join("\n"));
@@ -180,7 +187,10 @@ impl CodexEventProjector {
             reasoning_content: self.take_reasoning(),
             cache_control: None,
         };
-        let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let status = item
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let n = changes_summary.len();
         let tool_msg = Message {
             role: MessageRole::Tool,
@@ -200,7 +210,10 @@ impl CodexEventProjector {
 
     fn project_mcp_tool_call(&mut self, item: &Value, item_id: &str) -> ProjectionResult {
         let server = item.get("server").and_then(|v| v.as_str()).unwrap_or("mcp");
-        let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let tool = item
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let call_id = deterministic_call_id(&format!("mcp_{server}_{tool}"), item_id);
         let args = item.get("arguments").cloned().unwrap_or(json!({}));
         let args_val = if args.is_object() {
@@ -225,7 +238,10 @@ impl CodexEventProjector {
             cache_control: None,
         };
         let content = if let Some(err) = item.get("error") {
-            format!("[error] {}", err.to_string().chars().take(1000).collect::<String>())
+            format!(
+                "[error] {}",
+                err.to_string().chars().take(1000).collect::<String>()
+            )
         } else if let Some(result) = item.get("result") {
             result.to_string().chars().take(4000).collect()
         } else {
@@ -248,7 +264,10 @@ impl CodexEventProjector {
     }
 
     fn project_dynamic_tool_call(&mut self, item: &Value, item_id: &str) -> ProjectionResult {
-        let tool = item.get("tool").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let tool = item
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let call_id = deterministic_call_id(tool, item_id);
         let args = item.get("arguments").cloned().unwrap_or(json!({}));
         let assistant = Message {

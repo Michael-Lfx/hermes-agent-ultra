@@ -1,20 +1,20 @@
 //! Telemetry bootstrap and in-process metrics registry.
 
+use base64::Engine;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
-use base64::Engine;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
+use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::Registry;
 
 /// ANSI color codes for log levels (used only when output is a TTY).
 fn level_color(level: tracing::Level) -> (&'static str, &'static str) {
@@ -66,7 +66,11 @@ where
             write!(
                 writer,
                 "{} {color}{:<5}{reset} [{}] pid={} thread={} ",
-                ts, level, location, pid, thread_name,
+                ts,
+                level,
+                location,
+                pid,
+                thread_name,
                 color = color,
                 reset = reset,
             )?;
@@ -433,7 +437,9 @@ pub fn record_llm_latency(duration: Duration) {
 }
 
 pub fn record_codex_turn(tool_iterations: u32) {
-    METRICS.agent_codex_turns_total.fetch_add(1, Ordering::Relaxed);
+    METRICS
+        .agent_codex_turns_total
+        .fetch_add(1, Ordering::Relaxed);
     METRICS
         .agent_codex_tool_iterations_total
         .fetch_add(tool_iterations as u64, Ordering::Relaxed);
@@ -693,12 +699,12 @@ where
         (Some(_), None) => {
             return Err(LangfuseConfigError {
                 issues: vec!["missing HERMES_LANGFUSE_SECRET_KEY/LANGFUSE_SECRET_KEY".into()],
-            })
+            });
         }
         (None, Some(_)) => {
             return Err(LangfuseConfigError {
                 issues: vec!["missing HERMES_LANGFUSE_PUBLIC_KEY/LANGFUSE_PUBLIC_KEY".into()],
-            })
+            });
         }
     };
 
@@ -854,18 +860,22 @@ mod tests {
         );
         assert_eq!(cfg.sample_rate, Some(0.25));
         let headers = cfg.otlp_headers();
-        assert!(headers
-            .iter()
-            .any(|(k, v)| k == "Authorization" && v.starts_with("Basic ")));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Authorization" && v.starts_with("Basic "))
+        );
         assert!(headers.iter().any(|(k, v)| {
             k == "x-langfuse-ingestion-version" && v == LANGFUSE_INGESTION_VERSION
         }));
-        assert!(cfg
-            .resource_attributes()
-            .contains(&("deployment.environment.name".into(), "local".into())));
-        assert!(cfg
-            .resource_attributes()
-            .contains(&("service.version".into(), "v1.2.3".into())));
+        assert!(
+            cfg.resource_attributes()
+                .contains(&("deployment.environment.name".into(), "local".into()))
+        );
+        assert!(
+            cfg.resource_attributes()
+                .contains(&("service.version".into(), "v1.2.3".into()))
+        );
     }
 
     #[test]
@@ -876,21 +886,24 @@ mod tests {
         ]);
         let err = resolve_langfuse_trace_config(|name| env.get(name).cloned())
             .expect_err("placeholder credentials rejected");
-        assert!(err
-            .issues
-            .iter()
-            .any(|issue| issue.contains("expected \"pk-lf-\" prefix")));
-        assert!(err
-            .issues
-            .iter()
-            .any(|issue| issue.contains("expected \"sk-lf-\" prefix")));
+        assert!(
+            err.issues
+                .iter()
+                .any(|issue| issue.contains("expected \"pk-lf-\" prefix"))
+        );
+        assert!(
+            err.issues
+                .iter()
+                .any(|issue| issue.contains("expected \"sk-lf-\" prefix"))
+        );
 
         let env = map_env(&[("HERMES_LANGFUSE_PUBLIC_KEY", "pk-lf-public")]);
         let err = resolve_langfuse_trace_config(|name| env.get(name).cloned())
             .expect_err("half config rejected");
-        assert!(err
-            .to_string()
-            .contains("missing HERMES_LANGFUSE_SECRET_KEY"));
+        assert!(
+            err.to_string()
+                .contains("missing HERMES_LANGFUSE_SECRET_KEY")
+        );
     }
 
     #[test]

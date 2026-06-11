@@ -71,7 +71,10 @@ fn log_wal_fallback_once(db_label: &str, exc: &str) {
 }
 
 /// Set `journal_mode=WAL`, falling back to DELETE on NFS/SMB incompatibility.
-pub fn apply_wal_with_fallback(conn: &Connection, db_label: &str) -> Result<String, rusqlite::Error> {
+pub fn apply_wal_with_fallback(
+    conn: &Connection,
+    db_label: &str,
+) -> Result<String, rusqlite::Error> {
     if on_disk_journal_mode(conn).as_deref() == Some("wal") {
         return Ok("wal".into());
     }

@@ -25,8 +25,8 @@ pub use queries::{
     decode_content_preview,
 };
 pub use rewind::{RewindOutcome, UserMessageRef};
-pub use search::{SearchMessageMatch, sanitize_fts5_query};
 pub use schema::SCHEMA_VERSION;
+pub use search::{SearchMessageMatch, sanitize_fts5_query};
 pub use wal::{format_session_db_unavailable, get_last_init_error, set_last_init_error};
 
 // Re-export for session_search and tests.
@@ -127,9 +127,7 @@ impl SessionPersistence {
         *self.fts_enabled.get().unwrap_or(&true)
     }
 
-    pub(crate) fn shared_connection(
-        &self,
-    ) -> Result<Arc<Mutex<Connection>>, AgentError> {
+    pub(crate) fn shared_connection(&self) -> Result<Arc<Mutex<Connection>>, AgentError> {
         if let Some(conn) = self.conn.get() {
             return Ok(conn.clone());
         }
@@ -264,9 +262,7 @@ impl SessionPersistence {
         let conn = self.conn_arc()?;
         let removed = write::execute_write(&conn, |c| {
             let ids: Vec<String> = c
-                .prepare(
-                    "SELECT id FROM sessions WHERE started_at < ?1 AND ended_at IS NOT NULL",
-                )
+                .prepare("SELECT id FROM sessions WHERE started_at < ?1 AND ended_at IS NOT NULL")
                 .map_err(|e| AgentError::Io(format!("prune prepare: {e}")))?
                 .query_map(rusqlite::params![cutoff], |r| r.get(0))
                 .map_err(|e| AgentError::Io(format!("prune query: {e}")))?
@@ -570,7 +566,11 @@ impl SessionPersistence {
         }
     }
 
-    pub fn upsert_session_index(&self, session_key: &str, session_id: &str) -> Result<(), AgentError> {
+    pub fn upsert_session_index(
+        &self,
+        session_key: &str,
+        session_id: &str,
+    ) -> Result<(), AgentError> {
         let conn = self.conn_arc()?;
         write::execute_write(&conn, |c| {
             c.execute(
@@ -586,7 +586,11 @@ impl SessionPersistence {
         Ok(())
     }
 
-    pub fn update_system_prompt(&self, session_id: &str, system_prompt: &str) -> Result<(), AgentError> {
+    pub fn update_system_prompt(
+        &self,
+        session_id: &str,
+        system_prompt: &str,
+    ) -> Result<(), AgentError> {
         let conn = self.conn_arc()?;
         let sid = session_id.to_string();
         let sp = system_prompt.to_string();
@@ -668,7 +672,11 @@ impl SessionPersistence {
         }
     }
 
-    pub fn release_compression_lock(&self, session_id: &str, holder: &str) -> Result<(), AgentError> {
+    pub fn release_compression_lock(
+        &self,
+        session_id: &str,
+        holder: &str,
+    ) -> Result<(), AgentError> {
         if session_id.is_empty() {
             return Ok(());
         }
@@ -687,7 +695,10 @@ impl SessionPersistence {
         Ok(())
     }
 
-    pub fn get_compression_lock_holder(&self, session_id: &str) -> Result<Option<String>, AgentError> {
+    pub fn get_compression_lock_holder(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, AgentError> {
         if session_id.is_empty() {
             return Ok(None);
         }
@@ -741,7 +752,11 @@ impl SessionPersistence {
         queries::get_session(&self.conn_arc()?, session_id)
     }
 
-    pub fn set_session_title(&self, session_id: &str, title: Option<&str>) -> Result<bool, AgentError> {
+    pub fn set_session_title(
+        &self,
+        session_id: &str,
+        title: Option<&str>,
+    ) -> Result<bool, AgentError> {
         queries::set_session_title(&self.conn_arc()?, session_id, title)
     }
 
@@ -749,7 +764,10 @@ impl SessionPersistence {
         queries::get_session_title(&self.conn_arc()?, session_id)
     }
 
-    pub fn resolve_session_id(&self, session_id_or_prefix: &str) -> Result<Option<String>, AgentError> {
+    pub fn resolve_session_id(
+        &self,
+        session_id_or_prefix: &str,
+    ) -> Result<Option<String>, AgentError> {
         queries::resolve_session_id(&self.conn_arc()?, session_id_or_prefix)
     }
 
@@ -838,12 +856,7 @@ impl SessionPersistence {
         around_message_id: i64,
         window: i64,
     ) -> Result<MessagesAroundResult, AgentError> {
-        queries::get_messages_around(
-            &self.conn_arc()?,
-            session_id,
-            around_message_id,
-            window,
-        )
+        queries::get_messages_around(&self.conn_arc()?, session_id, around_message_id, window)
     }
 
     pub fn get_anchored_view(
@@ -915,11 +928,9 @@ impl SessionPersistence {
     }
 
     pub fn is_telegram_topic_mode_enabled(&self, chat_id: &str, user_id: &str) -> bool {
-        self.conn_arc()
-            .ok()
-            .is_some_and(|c| {
-                hermes_tools::state_db::is_telegram_topic_mode_enabled(&c, chat_id, user_id)
-            })
+        self.conn_arc().ok().is_some_and(|c| {
+            hermes_tools::state_db::is_telegram_topic_mode_enabled(&c, chat_id, user_id)
+        })
     }
 
     pub fn get_telegram_topic_binding(
@@ -1099,9 +1110,10 @@ mod tests {
     fn update_session_model_only_updates_existing_rows() {
         let tmp = tempfile::tempdir().unwrap();
         let sp = SessionPersistence::new(tmp.path());
-        assert!(!sp
-            .update_session_model("missing-session", "openai:gpt-4o")
-            .unwrap());
+        assert!(
+            !sp.update_session_model("missing-session", "openai:gpt-4o")
+                .unwrap()
+        );
         let mut cursor = SessionFlushCursor::new();
         sp.persist_session(
             "existing-session",
@@ -1113,9 +1125,10 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(sp
-            .update_session_model("existing-session", "anthropic:claude-sonnet")
-            .unwrap());
+        assert!(
+            sp.update_session_model("existing-session", "anthropic:claude-sonnet")
+                .unwrap()
+        );
         assert_eq!(
             sp.get_session_model("existing-session").unwrap().as_deref(),
             Some("anthropic:claude-sonnet")
@@ -1183,10 +1196,7 @@ mod tests {
         let mut cursor = SessionFlushCursor::new();
         sp.replace_session_messages(
             "audit-preserve",
-            &[
-                Message::user("rewind me"),
-                Message::assistant("gone"),
-            ],
+            &[Message::user("rewind me"), Message::assistant("gone")],
             &mut cursor,
         )
         .unwrap();

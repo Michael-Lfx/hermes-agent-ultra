@@ -133,7 +133,9 @@ mod platform {
     }
 
     pub fn set_default(_kind: DeviceKind, _device_id: &str) -> Result<(), DeviceError> {
-        Err(DeviceError("set_default not supported on this platform".into()))
+        Err(DeviceError(
+            "set_default not supported on this platform".into(),
+        ))
     }
 }
 

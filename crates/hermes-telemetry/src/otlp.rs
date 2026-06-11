@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use opentelemetry::global;
 use opentelemetry::KeyValue;
+use opentelemetry::global;
 use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use tracing_subscriber::Layer;
 use tracing_subscriber::Registry;
 

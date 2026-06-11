@@ -86,7 +86,10 @@ impl<'a> PoiPipeline<'a> {
     }
 
     fn compare(&self, signal: &InterestSignal, existing: &[InterestTopic]) -> CompareAction {
-        if existing.iter().any(|t| t.id == signal.id && t.status != TopicStatus::Rejected) {
+        if existing
+            .iter()
+            .any(|t| t.id == signal.id && t.status != TopicStatus::Rejected)
+        {
             return CompareAction::Reinforce {
                 topic_id: signal.id.clone(),
             };
@@ -104,7 +107,10 @@ impl<'a> PoiPipeline<'a> {
 }
 
 fn initial_status(signal: &InterestSignal, config: &InterestConfig) -> TopicStatus {
-    if signal.source().inserts_as_active(signal.confidence, config.promote_min_confidence) {
+    if signal
+        .source()
+        .inserts_as_active(signal.confidence, config.promote_min_confidence)
+    {
         TopicStatus::Active
     } else {
         TopicStatus::Candidate
@@ -158,11 +164,7 @@ fn jaccard(a: &std::collections::HashSet<String>, b: &std::collections::HashSet<
     }
     let inter = a.intersection(b).count() as f64;
     let union = a.union(b).count() as f64;
-    if union == 0.0 {
-        0.0
-    } else {
-        inter / union
-    }
+    if union == 0.0 { 0.0 } else { inter / union }
 }
 
 #[cfg(test)]

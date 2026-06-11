@@ -12,8 +12,8 @@
 //! with the remaining source (graceful single-source degradation).
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use tokio::sync::mpsc;
@@ -32,11 +32,12 @@ pub struct DualTrackMixer {
 }
 
 impl DualTrackMixer {
-    pub fn new(
-        mic: Arc<dyn AudioCaptureSource>,
-        loopback: Arc<dyn AudioCaptureSource>,
-    ) -> Self {
-        Self { mic, loopback, mic_muted: Arc::new(AtomicBool::new(false)) }
+    pub fn new(mic: Arc<dyn AudioCaptureSource>, loopback: Arc<dyn AudioCaptureSource>) -> Self {
+        Self {
+            mic,
+            loopback,
+            mic_muted: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     /// Only capture the loopback (speaker output); mic channel produces silence.
@@ -114,7 +115,9 @@ impl DualTrackMixer {
                         let sr = loopback.sample_rate();
                         let frame = TaggedFrame::new(AudioChannel::Loopback, samples, sr);
                         if tx_lb.send(frame).await.is_err() {
-                            debug!("DualTrackMixer: loopback receiver dropped, stopping loopback task");
+                            debug!(
+                                "DualTrackMixer: loopback receiver dropped, stopping loopback task"
+                            );
                             break;
                         }
                     }

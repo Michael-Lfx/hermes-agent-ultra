@@ -23,8 +23,8 @@
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -32,7 +32,7 @@ use tracing::{debug, info, warn};
 
 use crate::frame::{AudioChannel, TaggedFrame};
 use crate::keepawake::KeepAwakeGuard;
-use crate::vad::{create_vad, VadBackend, VadConfig};
+use crate::vad::{VadBackend, VadConfig, create_vad};
 
 // ---------------------------------------------------------------------------
 // Pipeline statistics
@@ -152,8 +152,12 @@ pub struct TranscriptSegment {
 /// or a WebSocket streaming client.
 #[async_trait::async_trait]
 pub trait SttCallback: Send + Sync + 'static {
-    async fn transcribe(&self, channel: AudioChannel, pcm: Vec<f32>, sample_rate: u32)
-        -> Option<String>;
+    async fn transcribe(
+        &self,
+        channel: AudioChannel,
+        pcm: Vec<f32>,
+        sample_rate: u32,
+    ) -> Option<String>;
 }
 
 // ---------------------------------------------------------------------------
@@ -230,7 +234,10 @@ impl SilenceGuard {
             .map(|t| t.elapsed().as_secs_f32())
             .unwrap_or_else(|| {
                 // Never had a voiced frame: start counting from recording start
-                self.last_voiced.get_or_insert(Instant::now()).elapsed().as_secs_f32()
+                self.last_voiced
+                    .get_or_insert(Instant::now())
+                    .elapsed()
+                    .as_secs_f32()
             });
 
         if !self.fired && elapsed >= self.timeout_secs {
@@ -315,7 +322,10 @@ impl MeetingRecorder {
     pub fn record(
         &self,
         mut frames_rx: mpsc::Receiver<TaggedFrame>,
-    ) -> (mpsc::Receiver<TranscriptSegment>, tokio::task::JoinHandle<()>) {
+    ) -> (
+        mpsc::Receiver<TranscriptSegment>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (seg_tx, seg_rx) = mpsc::channel::<TranscriptSegment>(64);
         let vad_cfg = self.vad_config.clone();
         let stt = Arc::clone(&self.stt);
@@ -352,8 +362,13 @@ impl MeetingRecorder {
                             state.recording = false;
                             let sr = frame.sample_rate;
                             Self::spawn_stt(
-                                *ch, pcm, sr, start.elapsed().as_secs_f32(),
-                                Arc::clone(&stt), seg_tx.clone(), stats.clone(),
+                                *ch,
+                                pcm,
+                                sr,
+                                start.elapsed().as_secs_f32(),
+                                Arc::clone(&stt),
+                                seg_tx.clone(),
+                                stats.clone(),
                             );
                         }
                     }
@@ -398,8 +413,13 @@ impl MeetingRecorder {
                         state.recording = false;
                         state.vad.reset();
                         Self::spawn_stt(
-                            ch, pcm, sample_rate, elapsed_s,
-                            Arc::clone(&stt), seg_tx.clone(), stats.clone(),
+                            ch,
+                            pcm,
+                            sample_rate,
+                            elapsed_s,
+                            Arc::clone(&stt),
+                            seg_tx.clone(),
+                            stats.clone(),
                         );
                     }
                 } else if state.recording {
@@ -424,8 +444,13 @@ impl MeetingRecorder {
                                 s.speech_secs += speech_secs;
                             });
                             Self::spawn_stt(
-                                ch, pcm, sample_rate, elapsed_s,
-                                Arc::clone(&stt), seg_tx.clone(), stats.clone(),
+                                ch,
+                                pcm,
+                                sample_rate,
+                                elapsed_s,
+                                Arc::clone(&stt),
+                                seg_tx.clone(),
+                                stats.clone(),
                             );
                         }
                     }
@@ -442,7 +467,15 @@ impl MeetingRecorder {
                         s.segments_flushed += 1;
                         s.speech_secs += speech_secs;
                     });
-                    Self::spawn_stt(ch, pcm, sr, 0.0, Arc::clone(&stt), seg_tx.clone(), stats.clone());
+                    Self::spawn_stt(
+                        ch,
+                        pcm,
+                        sr,
+                        0.0,
+                        Arc::clone(&stt),
+                        seg_tx.clone(),
+                        stats.clone(),
+                    );
                 }
             }
 
@@ -480,13 +513,15 @@ impl MeetingRecorder {
             let t0 = Instant::now();
             if let Some(text) = stt.transcribe(ch, pcm, sample_rate).await {
                 stats.with(|s| s.stt.record(t0.elapsed()));
-                let _ = tx.send(TranscriptSegment {
-                    speaker: ch.speaker_label().to_string(),
-                    text,
-                    start_s: offset_s,
-                    end_s: offset_s, // precise end_s set by caller when audio file is saved
-                    audio_file: None,
-                }).await;
+                let _ = tx
+                    .send(TranscriptSegment {
+                        speaker: ch.speaker_label().to_string(),
+                        text,
+                        start_s: offset_s,
+                        end_s: offset_s, // precise end_s set by caller when audio file is saved
+                        audio_file: None,
+                    })
+                    .await;
             } else {
                 stats.with(|s| s.stt.record(t0.elapsed()));
             }
@@ -504,10 +539,7 @@ pub fn pcm_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
         .iter()
         .map(|s| (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
         .collect();
-    let data_bytes: Vec<u8> = pcm_i16
-        .iter()
-        .flat_map(|s| s.to_le_bytes())
-        .collect();
+    let data_bytes: Vec<u8> = pcm_i16.iter().flat_map(|s| s.to_le_bytes()).collect();
     let data_len = data_bytes.len() as u32;
     let channels: u16 = 1;
     let bits: u16 = 16;
@@ -547,12 +579,7 @@ mod tests {
     struct NullStt;
     #[async_trait::async_trait]
     impl SttCallback for NullStt {
-        async fn transcribe(
-            &self,
-            _ch: AudioChannel,
-            _pcm: Vec<f32>,
-            _sr: u32,
-        ) -> Option<String> {
+        async fn transcribe(&self, _ch: AudioChannel, _pcm: Vec<f32>, _sr: u32) -> Option<String> {
             Some("test".to_string())
         }
     }

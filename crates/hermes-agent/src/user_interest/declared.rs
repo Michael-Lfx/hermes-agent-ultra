@@ -78,15 +78,10 @@ pub(crate) fn is_declared_noise(canonical: &str) -> bool {
     let lower = canonical.to_ascii_lowercase();
     matches!(
         lower.as_str(),
-        "什么"
-            | "哪些"
-            | "怎么"
-            | "如何"
-            | "为什么"
-            | "nothing"
-            | "something"
-            | "anything"
-    ) || canonical.chars().all(|c| c.is_ascii_punctuation() || c.is_whitespace())
+        "什么" | "哪些" | "怎么" | "如何" | "为什么" | "nothing" | "something" | "anything"
+    ) || canonical
+        .chars()
+        .all(|c| c.is_ascii_punctuation() || c.is_whitespace())
 }
 
 /// Split compound interest phrases: "打篮球和游泳", "A, B", "A、B".

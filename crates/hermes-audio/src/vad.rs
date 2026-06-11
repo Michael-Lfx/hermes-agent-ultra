@@ -217,18 +217,9 @@ mod silero {
         }
 
         fn run_inference(&mut self, frame: &[f32]) -> f32 {
-            let input_tensor = ndarray::Array2::from_shape_vec(
-                (1, frame.len()),
-                frame.to_vec(),
-            );
-            let h_tensor = ndarray::Array3::from_shape_vec(
-                (2, 1, 64),
-                self.h.clone(),
-            );
-            let c_tensor = ndarray::Array3::from_shape_vec(
-                (2, 1, 64),
-                self.c.clone(),
-            );
+            let input_tensor = ndarray::Array2::from_shape_vec((1, frame.len()), frame.to_vec());
+            let h_tensor = ndarray::Array3::from_shape_vec((2, 1, 64), self.h.clone());
+            let c_tensor = ndarray::Array3::from_shape_vec((2, 1, 64), self.c.clone());
             let sr_tensor = ndarray::Array1::from_vec(vec![SAMPLE_RATE]);
 
             let (input_t, h_t, c_t, sr_t) = match (input_tensor, h_tensor, c_tensor) {
@@ -239,9 +230,9 @@ mod silero {
                 }
             };
 
-            let outputs = self.session.run(
-                inputs![input_t, sr_t, h_t, c_t].unwrap_or_default()
-            );
+            let outputs = self
+                .session
+                .run(inputs![input_t, sr_t, h_t, c_t].unwrap_or_default());
             match outputs {
                 Ok(outs) => {
                     // Output order: speech_prob, hn, cn
@@ -349,7 +340,11 @@ mod tests {
 
     #[test]
     fn energy_vad_silence_stays_false() {
-        let cfg = VadConfig { threshold: 0.02, min_speech_frames: 3, ..Default::default() };
+        let cfg = VadConfig {
+            threshold: 0.02,
+            min_speech_frames: 3,
+            ..Default::default()
+        };
         let mut vad = EnergyVad::new(cfg);
         let silent = vec![0.0f32; 512];
         for _ in 0..10 {

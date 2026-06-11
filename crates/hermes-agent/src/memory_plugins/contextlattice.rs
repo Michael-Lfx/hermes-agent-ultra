@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use reqwest::Method;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 
@@ -462,8 +462,14 @@ impl ContextLatticeMemoryPlugin {
             "ContextLattice pressure-aware tuning active: pending_total={} cooldown_active={} mode={} sources={}",
             snapshot.pending_total,
             snapshot.cooldown_active,
-            payload.get("retrieval_mode").and_then(|v| v.as_str()).unwrap_or("balanced"),
-            payload.get("sources").map(|v| v.to_string()).unwrap_or_else(|| "[]".to_string()),
+            payload
+                .get("retrieval_mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("balanced"),
+            payload
+                .get("sources")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "[]".to_string()),
         );
     }
 

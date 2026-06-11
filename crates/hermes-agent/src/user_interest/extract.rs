@@ -20,30 +20,109 @@ lazy_static::lazy_static! {
 }
 
 const STOPWORDS: &[&str] = &[
-    "about", "after", "again", "also", "been", "before", "being", "could", "does", "doing",
-    "done", "from", "have", "help", "here", "into", "just", "like", "make", "more", "need",
-    "only", "please", "should", "some", "that", "their", "them", "then", "there", "these",
-    "they", "this", "those", "through", "very", "want", "what", "when", "where", "which",
-    "while", "will", "with", "would", "your", "你好", "请问", "怎么", "什么", "可以", "一下",
+    "about", "after", "again", "also", "been", "before", "being", "could", "does", "doing", "done",
+    "from", "have", "help", "here", "into", "just", "like", "make", "more", "need", "only",
+    "please", "should", "some", "that", "their", "them", "then", "there", "these", "they", "this",
+    "those", "through", "very", "want", "what", "when", "where", "which", "while", "will", "with",
+    "would", "your", "你好", "请问", "怎么", "什么", "可以", "一下",
 ];
 
 /// Tokens that must never become keyword/topic POI rows (roles, product surface, CLI meta).
 const POI_TOKEN_BLOCKLIST: &[&str] = &[
     // Conversation / LLM roles
-    "user", "assistant", "system", "tool", "tools", "human", "model", "models", "role", "roles",
+    "user",
+    "assistant",
+    "system",
+    "tool",
+    "tools",
+    "human",
+    "model",
+    "models",
+    "role",
+    "roles",
     // Hermes product & memory surface
-    "memory", "memories", "interest", "interests", "profile", "soul", "prompt", "prompts",
-    "session", "sessions", "context", "provider", "providers", "config", "yaml", "gateway",
-    "ultra", "agent", "agents", "message", "messages",
-    "content", "token", "tokens", "response", "responses", "reply", "replies", "answer",
+    "memory",
+    "memories",
+    "interest",
+    "interests",
+    "profile",
+    "soul",
+    "prompt",
+    "prompts",
+    "session",
+    "sessions",
+    "context",
+    "provider",
+    "providers",
+    "config",
+    "yaml",
+    "gateway",
+    "ultra",
+    "agent",
+    "agents",
+    "message",
+    "messages",
+    "content",
+    "token",
+    "tokens",
+    "response",
+    "responses",
+    "reply",
+    "replies",
+    "answer",
     // CLI / ops meta (often from `hermes interest list` etc.)
-    "list", "status", "clear", "setup", "command", "commands", "show", "path", "database",
-    "keyword", "topic", "language", "tags", "weight", "mode", "hybrid", "rules",
+    "list",
+    "status",
+    "clear",
+    "setup",
+    "command",
+    "commands",
+    "show",
+    "path",
+    "database",
+    "keyword",
+    "topic",
+    "language",
+    "tags",
+    "weight",
+    "mode",
+    "hybrid",
+    "rules",
     // Generic engineering filler
-    "file", "files", "code", "data", "error", "errors", "test", "tests", "true", "false",
-    "null", "none", "string", "value", "values", "type", "types", "name", "names", "work",
-    "working", "using", "used", "use", "run", "running", "please", "thanks", "thank",
-    "hello", "okay", "ok", "yes", "yeah",
+    "file",
+    "files",
+    "code",
+    "data",
+    "error",
+    "errors",
+    "test",
+    "tests",
+    "true",
+    "false",
+    "null",
+    "none",
+    "string",
+    "value",
+    "values",
+    "type",
+    "types",
+    "name",
+    "names",
+    "work",
+    "working",
+    "using",
+    "used",
+    "use",
+    "run",
+    "running",
+    "please",
+    "thanks",
+    "thank",
+    "hello",
+    "okay",
+    "ok",
+    "yes",
+    "yeah",
 ];
 
 /// Minimum length for keyword POI (avoids short role/meta tokens).
@@ -90,7 +169,9 @@ fn is_acceptable_path(path: &str) -> bool {
     if !(p.contains('/') || p.starts_with('~') || p.contains('\\')) {
         return false;
     }
-    let lower = p.trim_matches(|c| c == '/' || c == '\\').to_ascii_lowercase();
+    let lower = p
+        .trim_matches(|c| c == '/' || c == '\\')
+        .to_ascii_lowercase();
     !matches!(
         lower.as_str(),
         "src" | "docs" | "tests" | "crates" | "lib" | "bin" | "tmp" | "target"
@@ -173,7 +254,9 @@ pub fn extract_signals_from_text(
 
     for cap in PATH_RE.captures_iter(trimmed) {
         if let Some(path) = cap.get(1) {
-            let p = path.as_str().trim_matches(|c| c == '"' || c == '\'' || c == '`');
+            let p = path
+                .as_str()
+                .trim_matches(|c| c == '"' || c == '\'' || c == '`');
             if is_acceptable_path(p) {
                 let short = p.chars().take(80).collect::<String>();
                 push_signal(
@@ -390,7 +473,10 @@ mod tests {
         );
         let ids: HashSet<_> = signals.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains("tech:hermes") || ids.contains("tech:parity"));
-        assert!(ids.iter().any(|id| id.contains("rust") || id.contains("path")));
+        assert!(
+            ids.iter()
+                .any(|id| id.contains("rust") || id.contains("path"))
+        );
     }
 
     #[test]

@@ -112,41 +112,40 @@ pub fn rewind_active_user_turns(
     let target_index = active_user_rows.len().saturating_sub(count);
     let (target_message_id, target_content) = active_user_rows[target_index].clone();
 
-    let (inactive_count, active_message_count, rewind_count) =
-        write::execute_write(conn, |c| {
-            let inactive_count = c
-                .execute(
-                    "UPDATE messages
+    let (inactive_count, active_message_count, rewind_count) = write::execute_write(conn, |c| {
+        let inactive_count = c
+            .execute(
+                "UPDATE messages
                  SET active = 0
                  WHERE session_id = ?1 AND active = 1 AND id >= ?2",
-                    params![session_id, target_message_id],
-                )
-                .map_err(|e| AgentError::Io(format!("Failed to soft-delete rewound rows: {e}")))?
-                as u64;
-            let active_message_count: u64 = c
-                .query_row(
-                    "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
-                    params![session_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map_err(|e| AgentError::Io(format!("Failed to count active messages: {e}")))?
-                .max(0) as u64;
-            let rewind_count: u64 = c
-                .query_row(
-                    "SELECT COALESCE(rewind_count, 0) + 1 FROM sessions WHERE id = ?1",
-                    params![session_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(1)
-                .max(0) as u64;
-            touch_session_counts(
-                c,
-                session_id,
-                active_message_count as i64,
-                Some(rewind_count as i64),
-            )?;
-            Ok((inactive_count, active_message_count, rewind_count))
-        })?;
+                params![session_id, target_message_id],
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to soft-delete rewound rows: {e}")))?
+            as u64;
+        let active_message_count: u64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE session_id = ?1 AND active = 1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| AgentError::Io(format!("Failed to count active messages: {e}")))?
+            .max(0) as u64;
+        let rewind_count: u64 = c
+            .query_row(
+                "SELECT COALESCE(rewind_count, 0) + 1 FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(1)
+            .max(0) as u64;
+        touch_session_counts(
+            c,
+            session_id,
+            active_message_count as i64,
+            Some(rewind_count as i64),
+        )?;
+        Ok((inactive_count, active_message_count, rewind_count))
+    })?;
 
     Ok(Some(RewindOutcome {
         target_message_id,

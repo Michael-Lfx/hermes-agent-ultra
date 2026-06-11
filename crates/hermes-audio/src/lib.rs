@@ -66,9 +66,9 @@ pub use frame::{AudioChannel, TaggedFrame};
 pub use keepawake::KeepAwakeGuard;
 pub use loopback::LoopbackSource;
 pub use mixer::DualTrackMixer;
-pub use process_watch::{detect_meeting_process, ProcessWatcher};
+pub use process_watch::{ProcessWatcher, detect_meeting_process};
 pub use recorder::{
-    pcm_to_wav, MeetingRecorder, NodeStats, PipelineStats, SilenceGuard, StatsHandle,
-    SttCallback, TranscriptSegment,
+    MeetingRecorder, NodeStats, PipelineStats, SilenceGuard, StatsHandle, SttCallback,
+    TranscriptSegment, pcm_to_wav,
 };
-pub use vad::{create_vad, EnergyVad, VadBackend, VadConfig};
+pub use vad::{EnergyVad, VadBackend, VadConfig, create_vad};

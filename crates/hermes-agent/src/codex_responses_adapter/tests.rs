@@ -69,7 +69,8 @@ fn chat_content_assistant_uses_output_text() {
 
 #[test]
 fn chat_content_image_url_object() {
-    let content = json!([{"type": "image_url", "image_url": {"url": "https://x", "detail": "high"}}]);
+    let content =
+        json!([{"type": "image_url", "image_url": {"url": "https://x", "detail": "high"}}]);
     assert_eq!(
         chat_content_to_responses_parts(&content, "user"),
         vec![json!({"type": "input_image", "image_url": "https://x", "detail": "high"})]
@@ -227,7 +228,9 @@ fn preflight_rejects_function_call_output_without_call_id() {
         "store": false,
     });
     let err = preflight_codex_api_kwargs(&kwargs, false).unwrap_err();
-    assert!(matches!(err, CodexAdapterError::ValueError(msg) if msg.contains("function_call_output is missing call_id")));
+    assert!(
+        matches!(err, CodexAdapterError::ValueError(msg) if msg.contains("function_call_output is missing call_id"))
+    );
 }
 
 #[test]
@@ -260,7 +263,10 @@ fn preflight_allows_reasoning_and_temperature() {
         "max_output_tokens": 4096,
     });
     let result = preflight_codex_api_kwargs(&kwargs, false).unwrap();
-    assert_eq!(result["reasoning"], json!({"effort": "high", "summary": "auto"}));
+    assert_eq!(
+        result["reasoning"],
+        json!({"effort": "high", "summary": "auto"})
+    );
     assert_eq!(result["include"], json!(["reasoning.encrypted_content"]));
     assert_eq!(result["temperature"], 0.7);
     assert_eq!(result["max_output_tokens"], 4096);
@@ -530,11 +536,8 @@ fn cross_issuer_reasoning_dropped_on_replay() {
         },
         {"role": "user", "content": "next"},
     ]);
-    let items = chat_messages_to_responses_input(
-        messages.as_array().unwrap(),
-        true,
-        Some("codex_backend"),
-    );
+    let items =
+        chat_messages_to_responses_input(messages.as_array().unwrap(), true, Some("codex_backend"));
     let reasoning: Vec<_> = items
         .iter()
         .filter(|it| it.get("type").and_then(|v| v.as_str()) == Some("reasoning"))
@@ -559,11 +562,8 @@ fn same_issuer_reasoning_replayed() {
         },
         {"role": "user", "content": "next"},
     ]);
-    let items = chat_messages_to_responses_input(
-        messages.as_array().unwrap(),
-        true,
-        Some("xai_responses"),
-    );
+    let items =
+        chat_messages_to_responses_input(messages.as_array().unwrap(), true, Some("xai_responses"));
     let reasoning: Vec<_> = items
         .iter()
         .filter(|it| it.get("type").and_then(|v| v.as_str()) == Some("reasoning"))
@@ -661,7 +661,9 @@ fn normalize_failed_includes_code_in_error() {
         "error": {"code": "rate_limit_exceeded", "message": "Slow down"},
     });
     let err = normalize_codex_response(&response, None).unwrap_err();
-    assert!(matches!(err, CodexAdapterError::RuntimeError(msg) if msg == "rate_limit_exceeded: Slow down"));
+    assert!(
+        matches!(err, CodexAdapterError::RuntimeError(msg) if msg == "rate_limit_exceeded: Slow down")
+    );
 }
 
 #[test]

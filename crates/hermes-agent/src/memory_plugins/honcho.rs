@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::Method;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::memory_manager::MemoryProviderPlugin;
@@ -583,12 +583,9 @@ impl HonchoMemoryPlugin {
                     .collect()
             });
             std::thread::spawn(move || {
-                let query_refs: Option<Vec<(&str, String)>> = query_owned.as_ref().map(|items| {
-                    items
-                        .iter()
-                        .map(|(k, v)| (k.as_str(), v.clone()))
-                        .collect()
-                });
+                let query_refs: Option<Vec<(&str, String)>> = query_owned
+                    .as_ref()
+                    .map(|items| items.iter().map(|(k, v)| (k.as_str(), v.clone())).collect());
                 Self::send_json_blocking(
                     &config,
                     method,
@@ -1319,9 +1316,11 @@ mod tests {
         assert!(plugin.system_prompt_block().contains("tools-only mode"));
 
         *plugin.recall_mode.lock().unwrap() = "context".to_string();
-        assert!(plugin
-            .system_prompt_block()
-            .contains("context-injection mode"));
+        assert!(
+            plugin
+                .system_prompt_block()
+                .contains("context-injection mode")
+        );
     }
 
     #[test]

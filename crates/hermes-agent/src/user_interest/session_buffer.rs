@@ -97,7 +97,11 @@ mod tests {
             &config,
         );
         let drained = buf.drain();
-        assert!(drained.iter().any(|s| s.id.contains("rust") || s.id.contains("parity")));
+        assert!(
+            drained
+                .iter()
+                .any(|s| s.id.contains("rust") || s.id.contains("parity"))
+        );
         assert!(drained.len() < 6);
     }
 }

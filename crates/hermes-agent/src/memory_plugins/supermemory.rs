@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use reqwest::Method;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 use crate::memory_plugins::config_io;

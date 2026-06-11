@@ -236,7 +236,11 @@ fn add_column_if_missing(
     Ok(())
 }
 
-fn reconcile_table(conn: &Connection, table: &str, columns: &[(&str, &str)]) -> Result<(), AgentError> {
+fn reconcile_table(
+    conn: &Connection,
+    table: &str,
+    columns: &[(&str, &str)],
+) -> Result<(), AgentError> {
     for (col, col_type) in columns {
         add_column_if_missing(conn, table, col, col_type)?;
     }
@@ -330,9 +334,7 @@ fn sqlite_supports_fts5(conn: &Connection) -> bool {
         Err(e) => {
             let msg = e.to_string().to_ascii_lowercase();
             if msg.contains("no such module") && msg.contains("fts5") {
-                warn!(
-                    "SQLite FTS5 unavailable; full-text session search disabled ({e})"
-                );
+                warn!("SQLite FTS5 unavailable; full-text session search disabled ({e})");
                 false
             } else {
                 warn!("FTS5 probe failed: {e}");
@@ -550,14 +552,7 @@ mod tests {
         assert!(table_has_column(&conn, "sessions", "source").unwrap());
 
         hermes_tools::state_db::insert_session_if_missing(
-            &conn,
-            "legacy-1",
-            "cli",
-            None,
-            None,
-            None,
-            None,
-            1.0,
+            &conn, "legacy-1", "cli", None, None, None, None, 1.0,
         )
         .unwrap();
 

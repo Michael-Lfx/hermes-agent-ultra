@@ -57,7 +57,10 @@ pub async fn extract_signals_from_transcript_llm(
     let body = if trimmed.chars().count() > MAX_USER_TRANSCRIPT_CHARS {
         format!(
             "{}\n…[truncated]",
-            trimmed.chars().take(MAX_USER_TRANSCRIPT_CHARS).collect::<String>()
+            trimmed
+                .chars()
+                .take(MAX_USER_TRANSCRIPT_CHARS)
+                .collect::<String>()
         )
     } else {
         trimmed.to_string()

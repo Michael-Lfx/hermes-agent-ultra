@@ -10,8 +10,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
-use serde_json::{json, Value};
+use rusqlite::{Connection, params};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 
@@ -495,7 +495,7 @@ impl HolographicMemoryPlugin {
                 let content = match args.get("content").and_then(|c| c.as_str()) {
                     Some(c) => c,
                     None => {
-                        return json!({"error": "Missing required argument: content"}).to_string()
+                        return json!({"error": "Missing required argument: content"}).to_string();
                     }
                 };
                 let category = args
@@ -512,7 +512,7 @@ impl HolographicMemoryPlugin {
                 let query = match args.get("query").and_then(|q| q.as_str()) {
                     Some(q) => q,
                     None => {
-                        return json!({"error": "Missing required argument: query"}).to_string()
+                        return json!({"error": "Missing required argument: query"}).to_string();
                     }
                 };
                 let category = args.get("category").and_then(|c| c.as_str());
@@ -528,7 +528,7 @@ impl HolographicMemoryPlugin {
                 let fact_id = match args.get("fact_id").and_then(|f| f.as_i64()) {
                     Some(id) => id,
                     None => {
-                        return json!({"error": "Missing required argument: fact_id"}).to_string()
+                        return json!({"error": "Missing required argument: fact_id"}).to_string();
                     }
                 };
                 let guard = match self.conn.lock() {
@@ -586,7 +586,7 @@ impl HolographicMemoryPlugin {
                 let fact_id = match args.get("fact_id").and_then(|f| f.as_i64()) {
                     Some(id) => id,
                     None => {
-                        return json!({"error": "Missing required argument: fact_id"}).to_string()
+                        return json!({"error": "Missing required argument: fact_id"}).to_string();
                     }
                 };
                 let guard = match self.conn.lock() {
@@ -734,10 +734,12 @@ mod tests {
 
         let results = plugin.search_facts("dark mode", None, 0.0, 10);
         assert!(!results.is_empty());
-        assert!(results[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("dark mode"));
+        assert!(
+            results[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("dark mode")
+        );
     }
 
     #[test]

@@ -54,7 +54,11 @@ pub struct TaggedFrame {
 
 impl TaggedFrame {
     pub fn new(channel: AudioChannel, samples: Vec<f32>, sample_rate: u32) -> Self {
-        Self { channel, samples, sample_rate }
+        Self {
+            channel,
+            samples,
+            sample_rate,
+        }
     }
 
     pub fn is_mic(&self) -> bool {

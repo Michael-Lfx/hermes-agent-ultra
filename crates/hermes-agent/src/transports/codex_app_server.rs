@@ -21,11 +21,7 @@ pub struct CodexAppServerError {
 
 impl std::fmt::Display for CodexAppServerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "codex app-server error {}: {}",
-            self.code, self.message
-        )
+        write!(f, "codex app-server error {}: {}", self.code, self.message)
     }
 }
 
@@ -81,8 +77,14 @@ impl CodexAppServerClient {
                     .flatten()
                     .or_else(|| std::env::var("HERMES_KANBAN_ROOT").ok())
                     .unwrap_or_else(|| {
-                        let base = std::env::var("HERMES_HOME")
-                            .unwrap_or_else(|_| format!("{}/.hermes", dirs::home_dir().map(|p| p.display().to_string()).unwrap_or_else(|| ".".into())));
+                        let base = std::env::var("HERMES_HOME").unwrap_or_else(|_| {
+                            format!(
+                                "{}/.hermes",
+                                dirs::home_dir()
+                                    .map(|p| p.display().to_string())
+                                    .unwrap_or_else(|| ".".into())
+                            )
+                        });
                         format!("{base}/kanban")
                     });
                 cmd.arg("-c").arg(r#"sandbox_mode="workspace-write""#);
@@ -129,7 +131,15 @@ impl CodexAppServerClient {
         let stderr_lines = client.stderr_lines.clone();
         std::thread::Builder::new()
             .name("codex-app-server-stdout".into())
-            .spawn(move || read_stdout_loop(stdout, pending, notifications, server_requests, stderr_lines))
+            .spawn(move || {
+                read_stdout_loop(
+                    stdout,
+                    pending,
+                    notifications,
+                    server_requests,
+                    stderr_lines,
+                )
+            })
             .map_err(|e| format!("codex stdout reader thread: {e}"))?;
 
         let stderr_lines = client.stderr_lines.clone();
@@ -164,11 +174,12 @@ impl CodexAppServerClient {
             "capabilities": {},
         });
         let result = self.request("initialize", Some(params), timeout)?;
-        self.notify("initialized", None).map_err(|e| CodexAppServerError {
-            code: -1,
-            message: e,
-            data: None,
-        })?;
+        self.notify("initialized", None)
+            .map_err(|e| CodexAppServerError {
+                code: -1,
+                message: e,
+                data: None,
+            })?;
         self.initialized.store(true, Ordering::Release);
         Ok(result)
     }
@@ -182,10 +193,7 @@ impl CodexAppServerClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = std::sync::mpsc::channel();
         {
-            let mut pending = self
-                .pending
-                .lock()
-                .map_err(|_| codex_lock_err("pending"))?;
+            let mut pending = self.pending.lock().map_err(|_| codex_lock_err("pending"))?;
             pending.insert(
                 id,
                 Pending {
@@ -296,7 +304,17 @@ impl CodexAppServerClient {
     pub fn stderr_tail(&self, n: usize) -> Vec<String> {
         self.stderr_lines
             .lock()
-            .map(|lines| lines.iter().rev().take(n).cloned().collect::<Vec<_>>().into_iter().rev().collect())
+            .map(|lines| {
+                lines
+                    .iter()
+                    .rev()
+                    .take(n)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -439,9 +457,7 @@ pub fn check_codex_binary(codex_bin: &str) -> (bool, String) {
     match output {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => (
             false,
-            format!(
-                "codex CLI not found at {codex_bin:?}. Install with: npm i -g @openai/codex"
-            ),
+            format!("codex CLI not found at {codex_bin:?}. Install with: npm i -g @openai/codex"),
         ),
         Err(e) => (false, format!("codex --version failed: {e}")),
         Ok(out) if !out.status.success() => (
@@ -468,7 +484,10 @@ pub fn check_codex_binary(codex_bin: &str) -> (bool, String) {
                     ),
                 ),
                 Some(v) => (true, format!("{}.{}.{}", v.0, v.1, v.2)),
-                None => (false, format!("could not parse codex version from: {text:?}")),
+                None => (
+                    false,
+                    format!("could not parse codex version from: {text:?}"),
+                ),
             }
         }
     }

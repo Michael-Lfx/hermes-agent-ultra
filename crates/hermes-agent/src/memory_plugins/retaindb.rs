@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use reqwest::blocking::{Client, RequestBuilder};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::memory_manager::MemoryProviderPlugin;
 

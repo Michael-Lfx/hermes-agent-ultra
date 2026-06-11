@@ -4,8 +4,8 @@ use hermes_insights::sanitize::is_persistable_local_poi;
 
 use super::declared::extract_declared_interests;
 use super::ingest::is_poi_synthetic_user_text;
-use super::task_oriented::has_task_or_domain_signal;
 use super::store::InterestSignal;
+use super::task_oriented::has_task_or_domain_signal;
 use super::types::SignalSource;
 
 /// Whether this user turn should run any extraction (buffer or persist).
@@ -58,13 +58,15 @@ fn is_ack_only(text: &str) -> bool {
         return true;
     }
     // Pure punctuation / emoji-ish short replies
-    if t.chars().count() <= 3 && t.chars().all(|c| !c.is_alphanumeric() && !c.is_alphabetic()) {
+    if t.chars().count() <= 3
+        && t.chars()
+            .all(|c| !c.is_alphanumeric() && !c.is_alphabetic())
+    {
         return true;
     }
     matches!(
         t,
-        "嗯"
-            | "嗯嗯"
+        "嗯" | "嗯嗯"
             | "行"
             | "可以"
             | "没问题"

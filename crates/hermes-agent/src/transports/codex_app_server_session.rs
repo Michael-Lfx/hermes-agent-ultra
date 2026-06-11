@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::interrupt::InterruptController;
 use crate::transports::codex_app_server::{CodexAppServerClient, CodexAppServerError};
-use crate::transports::codex_event_projector::{has_turn_aborted_marker, CodexEventProjector};
+use crate::transports::codex_event_projector::{CodexEventProjector, has_turn_aborted_marker};
 
 type ApprovalCallback = Arc<dyn Fn(&str, &str) -> String + Send + Sync>;
 
@@ -152,15 +152,14 @@ impl CodexAppServerSession {
         let client = self.client.as_ref().expect("client");
         let mut projector = CodexEventProjector::new();
 
-        let start = client
-            .request(
-                "turn/start",
-                Some(serde_json::json!({
-                    "threadId": thread_id,
-                    "input": [{"type": "text", "text": user_input}],
-                })),
-                Duration::from_secs(10),
-            );
+        let start = client.request(
+            "turn/start",
+            Some(serde_json::json!({
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": user_input}],
+            })),
+            Duration::from_secs(10),
+        );
         match start {
             Err(CodexAppServerError { message, .. }) => {
                 let stderr_blob = client.stderr_tail(40).join("\n");
@@ -171,7 +170,12 @@ impl CodexAppServerSession {
                         &message,
                     ))
                 });
-                if result.error.as_ref().map(|e| e.contains("authentication")).unwrap_or(false) {
+                if result
+                    .error
+                    .as_ref()
+                    .map(|e| e.contains("authentication"))
+                    .unwrap_or(false)
+                {
                     result.should_retire = true;
                 }
                 return result;
@@ -258,14 +262,19 @@ impl CodexAppServerSession {
                     if let Some(err_obj) = note.pointer("/params/turn/error") {
                         let err_msg = err_obj.to_string();
                         let stderr_blob = client.stderr_tail(40).join("\n");
-                        result.error = classify_oauth_failure(&err_msg, &stderr_blob).or_else(|| {
-                            Some(format_error_with_stderr(
-                                Some(client),
-                                &format!("turn ended status={turn_status}"),
-                                &err_msg,
-                            ))
-                        });
-                        if result.error.as_ref().map(|e| e.contains("authentication")).unwrap_or(false)
+                        result.error =
+                            classify_oauth_failure(&err_msg, &stderr_blob).or_else(|| {
+                                Some(format_error_with_stderr(
+                                    Some(client),
+                                    &format!("turn ended status={turn_status}"),
+                                    &err_msg,
+                                ))
+                            });
+                        if result
+                            .error
+                            .as_ref()
+                            .map(|e| e.contains("authentication"))
+                            .unwrap_or(false)
                         {
                             result.should_retire = true;
                         }
@@ -311,13 +320,14 @@ impl CodexAppServerSession {
         let rid = req.get("id").cloned().unwrap_or(Value::Null);
         let params = req.get("params").cloned().unwrap_or(Value::Null);
         let decision = match method {
-            "item/commandExecution/requestApproval" => {
-                self.decide_exec_approval(&params)
-            }
+            "item/commandExecution/requestApproval" => self.decide_exec_approval(&params),
             "item/fileChange/requestApproval" => self.decide_apply_patch_approval(&params),
             "item/permissions/requestApproval" => "decline".to_string(),
             "mcpServer/elicitation/request" => {
-                let server = params.get("serverName").and_then(|v| v.as_str()).unwrap_or("");
+                let server = params
+                    .get("serverName")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if server == "hermes-tools" {
                     let _ = client.respond(
                         &rid,
@@ -341,7 +351,12 @@ impl CodexAppServerSession {
             }
             _ => {
                 tracing::warn!(method = %method, "unknown codex server request");
-                let _ = client.respond_error(&rid, -32601, &format!("Unsupported method: {method}"), None);
+                let _ = client.respond_error(
+                    &rid,
+                    -32601,
+                    &format!("Unsupported method: {method}"),
+                    None,
+                );
                 return;
             }
         };
@@ -408,9 +423,7 @@ impl CodexAppServerSession {
         let Some(cb) = self.approval_callback.as_ref() else {
             return "decline".to_string();
         };
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cb(command, description)
-        })) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cb(command, description))) {
             Ok(choice) => approval_choice_to_codex_decision(&choice),
             Err(_) => {
                 tracing::error!("codex approval_callback panicked");
@@ -465,7 +478,9 @@ fn apply_projection(
         result.final_text = text.clone();
         if has_turn_aborted_marker(&text) {
             result.interrupted = true;
-            result.error.get_or_insert_with(|| "codex reported turn_aborted".to_string());
+            result
+                .error
+                .get_or_insert_with(|| "codex reported turn_aborted".to_string());
         }
     }
     projection.is_tool_iteration

@@ -93,17 +93,16 @@ pub fn init_wiki(path: &Path, domain: Option<&str>) -> WikiResult<WikiLayout> {
         // Check if it's already a wiki or non-empty
         let layout = WikiLayout::new(path.to_path_buf());
         if layout.schema.exists() || layout.index.exists() {
-            return Err(WikiError::AlreadyExists(
-                path.display().to_string(),
-            ));
+            return Err(WikiError::AlreadyExists(path.display().to_string()));
         }
         let has_files = fs::read_dir(path)
             .map(|mut d| d.any(|e| e.is_ok()))
             .unwrap_or(false);
         if has_files {
-            return Err(WikiError::AlreadyExists(
-                format!("{} is not empty", path.display()),
-            ));
+            return Err(WikiError::AlreadyExists(format!(
+                "{} is not empty",
+                path.display()
+            )));
         }
     }
 
