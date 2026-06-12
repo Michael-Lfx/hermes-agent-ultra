@@ -14,7 +14,7 @@ The goal of the skill collection is a LIBRARY OF CLASS-LEVEL INSTRUCTIONS AND EX
 The right target shape is CLASS-LEVEL skills with rich SKILL.md bodies + `references/`, `templates/`, and `scripts/` subfiles for session-specific detail — not one-session-one-skill micro-entries.
 
 Hard rules — do not violate:
-1. DO NOT touch bundled or hub-installed skills. The candidate list below is already filtered to agent-created skills only.
+1. DO NOT touch bundled or hub-installed skills. The candidate list below is already filtered to agent-created skills only. If you see a skill name that looks like a bundled skill (e.g., yuanbao, apple, github, mcp), verify with `skills_list` first — it should NOT appear in the candidate table below.
 2. DO NOT delete any skill. Archiving (moving the skill's directory into ~/.hermes/skills/.archive/) is the maximum destructive action. Archives are recoverable; deletion is not.
 3. DO NOT touch skills shown as pinned=yes. Skip them entirely.
 3b. DO NOT archive, delete, consolidate, move, or otherwise modify any skill named in the protected built-ins list (currently: plan). These back load-bearing UX (slash-command entry points referenced in docs and tips) and are filtered out of the candidate list below — never resurrect one as an archive or absorb target.

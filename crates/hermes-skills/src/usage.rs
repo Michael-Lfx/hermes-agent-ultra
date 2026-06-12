@@ -290,13 +290,22 @@ impl UsageStore {
         })
     }
 
-    /// Mark a skill as agent-created. This bypasses the `is_protected_skill`
-    /// guard because the agent explicitly just created this skill — it is
-    /// definitionally agent-created regardless of name collisions with
-    /// bundled/hub skills.
+    /// Mark a skill as agent-created.
+    ///
+    /// Refuses to mark protected (bundled / hub-installed) skills — name
+    /// collisions between agent-created and built-in skills are always
+    /// treated as errors because bundled skills must never appear in the
+    /// curator candidate list.
     pub fn mark_agent_created(&self, skill_name: &str) -> Result<(), SkillError> {
         let name = skill_name.trim();
         if name.is_empty() {
+            return Ok(());
+        }
+        if is_protected_skill(&self.skills_dir, name) {
+            tracing::warn!(
+                skill = %name,
+                "refusing to mark protected skill as agent-created"
+            );
             return Ok(());
         }
         let _lock = self.acquire_usage_lock()?;
@@ -348,16 +357,32 @@ impl UsageStore {
             usage_entries = usage.len(),
             "loading agent-created skill names"
         );
-        let mut names: Vec<String> = usage
-            .iter()
-            .filter_map(|(name, rec)| {
-                if rec.agent_created {
-                    Some(name.clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        let mut names: Vec<String> = Vec::new();
+        for (name, rec) in &usage {
+            if !rec.agent_created {
+                continue;
+            }
+            // Defense in depth: exclude protected (bundled/hub) skills even
+            // if their .usage.json entry somehow has agent_created=true.
+            if is_protected_skill(&self.skills_dir, name) {
+                tracing::warn!(
+                    skill = %name,
+                    "agent_created=true found for protected skill; excluding from curator"
+                );
+                continue;
+            }
+            // Exclude skills whose directory no longer exists on disk.
+            // This prevents the LLM from receiving stale skill names that
+            // skill_view cannot resolve, avoiding tool-loop guard trips.
+            if find_skill_dir(&self.skills_dir, name).is_none() {
+                tracing::debug!(
+                    skill = %name,
+                    "skill directory not found on disk; excluding from curator (stale .usage.json entry?)"
+                );
+                continue;
+            }
+            names.push(name.clone());
+        }
         names.sort();
         names
     }
@@ -484,15 +509,62 @@ pub(crate) fn read_skill_name_from_dir(skill_dir: &Path) -> String {
     read_skill_name_from_file(&skill_dir.join("SKILL.md"), fallback)
 }
 
+/// Compile-time fallback list of bundled skill directory names.
+///
+/// Used as a defense-in-depth safeguard when `.bundled_manifest` is missing
+/// or empty at runtime. These are the directory names under `skills/` in the
+/// repository — the names that appear as keys in `.usage.json` and that
+/// `find_skill_dir()` matches on.
+///
+/// **Maintenance**: update this list when skills are added to or removed
+/// from the repository's `skills/` directory.
+const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
+    "apple",
+    "autonomous-ai-agents",
+    "creative",
+    "data-science",
+    "devops",
+    "diagramming",
+    "dogfood",
+    "domain",
+    "email",
+    "gaming",
+    "gifs",
+    "github",
+    "index-cache",
+    "inference-sh",
+    "mcp",
+    "media",
+    "mlops",
+    "note-taking",
+    "productivity",
+    "red-teaming",
+    "research",
+    "smart-home",
+    "social-media",
+    "software-development",
+    "yuanbao",
+];
+
 fn bundled_skill_names(skills_dir: &Path) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    let Ok(raw) = fs::read_to_string(skills_dir.join(".bundled_manifest")) else {
-        return names;
-    };
-    for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        let name = line.split_once(':').map(|(name, _)| name).unwrap_or(line);
-        if !name.trim().is_empty() {
-            names.insert(name.trim().to_string());
+    let manifest_path = skills_dir.join(".bundled_manifest");
+    if let Ok(raw) = fs::read_to_string(&manifest_path) {
+        for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            let name = line.split_once(':').map(|(name, _)| name).unwrap_or(line);
+            if !name.trim().is_empty() {
+                names.insert(name.trim().to_string());
+            }
+        }
+    }
+    // Fallback: if manifest is missing/empty, use compile-time constant
+    if names.is_empty() && !manifest_path.exists() {
+        tracing::warn!(
+            manifest = %manifest_path.display(),
+            ".bundled_manifest missing; falling back to compile-time bundled list"
+        );
+        for name in BUNDLED_SKILL_NAMES_FALLBACK {
+            names.insert((*name).to_string());
         }
     }
     names
@@ -798,5 +870,77 @@ mod tests {
         assert!(msg.contains("shadow"));
         let (ok, _) = store.archive_skill("shared").unwrap();
         assert!(!ok);
+    }
+
+    #[test]
+    fn mark_agent_created_rejects_protected() {
+        let dir = tempdir().unwrap();
+        let skills = dir.path();
+        let store = make_store(&dir);
+        fs::write(skills.join(".bundled_manifest"), "yuanbao:abc\n").unwrap();
+        // mark_agent_created on a bundled skill should silently no-op
+        store.mark_agent_created("yuanbao").unwrap();
+        let rec = store.get_record("yuanbao");
+        assert!(!rec.agent_created, "bundled skill should not be marked agent-created");
+    }
+
+    #[test]
+    fn list_agent_created_excludes_protected() {
+        let dir = tempdir().unwrap();
+        let skills = dir.path();
+        let store = make_store(&dir);
+        // Create the skill dir so find_skill_dir doesn't filter it out
+        write_skill(skills, "yuanbao", None);
+        fs::write(skills.join(".bundled_manifest"), "yuanbao:abc\n").unwrap();
+        // Manually inject agent_created=true into .usage.json (bypass mark_agent_created guard)
+        {
+            let mut usage = store.load_usage();
+            let rec = usage.entry("yuanbao".to_string()).or_default();
+            rec.agent_created = true;
+            store.save_usage(&usage).unwrap();
+        }
+        let names = store.list_agent_created_skill_names();
+        assert!(
+            !names.contains(&"yuanbao".to_string()),
+            "protected skill should be excluded from list_agent_created_skill_names"
+        );
+    }
+
+    #[test]
+    fn list_agent_created_excludes_missing_dirs() {
+        let dir = tempdir().unwrap();
+        let store = make_store(&dir);
+        // Mark as agent-created without creating the directory on disk
+        store.mark_agent_created("ghost-skill").unwrap();
+        let names = store.list_agent_created_skill_names();
+        assert!(
+            !names.contains(&"ghost-skill".to_string()),
+            "skills without disk directories should be excluded"
+        );
+    }
+
+    #[test]
+    fn bundled_manifest_missing_fallback() {
+        let dir = tempdir().unwrap();
+        let skills = dir.path();
+        // No .bundled_manifest file — fallback should activate
+        assert!(
+            !skills.join(".bundled_manifest").exists(),
+            "test precondition: no manifest"
+        );
+        // Fallback should recognise yuanbao as protected
+        assert!(
+            is_protected_skill(skills, "yuanbao"),
+            "yuanbao should be protected via compile-time fallback"
+        );
+        assert!(
+            is_protected_skill(skills, "apple"),
+            "apple should be protected via compile-time fallback"
+        );
+        // Unknown skill should not be protected
+        assert!(
+            !is_protected_skill(skills, "my-custom-skill"),
+            "unknown skill should not be protected"
+        );
     }
 }

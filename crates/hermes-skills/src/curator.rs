@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::future::Future;
 
 use crate::curator_prompt::CURATOR_REVIEW_PROMPT;
-use crate::usage::{UsageStore, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE};
+use crate::usage::{is_protected_skill, UsageStore, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE};
 
 /// Curator persistent state (stored at `store.dir()/.curator_state`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -202,6 +202,14 @@ pub fn apply_automatic_transitions(
     for (name, record) in &usage {
         // Skip pinned skills
         if record.pinned {
+            continue;
+        }
+
+        // Skip protected skills (bundled/hub-installed).
+        // Defense in depth: set_state() → mutate_usage() already guards
+        // against this, but an explicit early check catches the case where
+        // .bundled_manifest is missing and mutate_usage's guard fails.
+        if is_protected_skill(store.dir(), name) {
             continue;
         }
 
