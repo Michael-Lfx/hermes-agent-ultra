@@ -3,12 +3,12 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use hermes_core::{
-    tool_schema, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema, tool_schema,
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager};

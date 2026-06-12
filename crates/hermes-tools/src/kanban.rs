@@ -1,6 +1,6 @@
 //! Kanban worker tools — parity with Python `kanban_*` tools.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub const KANBAN_TASK_ENV: &str = "HERMES_KANBAN_TASK";
 

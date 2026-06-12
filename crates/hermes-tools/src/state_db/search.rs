@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use regex::Regex;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
 use super::columns::table_has_column;
@@ -68,14 +68,14 @@ pub fn sanitize_fts5_query(query: &str) -> String {
     sanitized = strip_special.replace_all(&sanitized, " ").into_owned();
 
     let collapse_star = Regex::new(r"\*+").expect("collapse star");
-    sanitized = collapse_star
-        .replace_all(&sanitized, "*")
-        .into_owned();
+    sanitized = collapse_star.replace_all(&sanitized, "*").into_owned();
     let leading_star = Regex::new(r"(?m)(^|\s)\*").expect("leading star");
     sanitized = leading_star.replace_all(&sanitized, "$1 ").into_owned();
 
     let dangling_start = Regex::new(r"((?i)^(AND|OR|NOT)\b\s*)").expect("dangling start");
-    sanitized = dangling_start.replace_all(sanitized.trim(), "").into_owned();
+    sanitized = dangling_start
+        .replace_all(sanitized.trim(), "")
+        .into_owned();
     let dangling_end = Regex::new(r"(?i)\s+(AND|OR|NOT)\s*$").expect("dangling end");
     sanitized = dangling_end.replace_all(sanitized.trim(), "").into_owned();
 
@@ -154,22 +154,23 @@ fn enrich_context(
                 ORDER BY m.timestamp ASC, m.id ASC
                 LIMIT 1
             )";
-        let mut stmt = conn.prepare(ctx_sql).map_err(|e| {
-            StateDbError(format!("search context prepare: {e}"))
-        })?;
+        let mut stmt = conn
+            .prepare(ctx_sql)
+            .map_err(|e| StateDbError(format!("search context prepare: {e}")))?;
         let rows = stmt
             .query_map(params![m.id], |row| {
                 let role: String = row.get(0)?;
                 let content: Option<String> = row.get(1)?;
                 Ok(SearchContextMessage {
                     role,
-                    content: decode_content_preview(content.as_deref()).chars().take(200).collect(),
+                    content: decode_content_preview(content.as_deref())
+                        .chars()
+                        .take(200)
+                        .collect(),
                 })
             })
             .map_err(|e| StateDbError(format!("search context query: {e}")))?;
-        m.context = rows
-            .filter_map(|r| r.ok())
-            .collect();
+        m.context = rows.filter_map(|r| r.ok()).collect();
     }
     Ok(())
 }
@@ -340,10 +341,7 @@ fn search_cjk(
     let tokens_for_check: Vec<&str> = raw_query
         .split_whitespace()
         .filter(|t| {
-            !matches!(
-                t.to_ascii_uppercase().as_str(),
-                "AND" | "OR" | "NOT"
-            ) && contains_cjk(t)
+            !matches!(t.to_ascii_uppercase().as_str(), "AND" | "OR" | "NOT") && contains_cjk(t)
         })
         .collect();
     let any_short_cjk = tokens_for_check.iter().any(|t| count_cjk(t) < 3);

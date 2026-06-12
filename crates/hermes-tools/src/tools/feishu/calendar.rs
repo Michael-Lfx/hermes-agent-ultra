@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use super::FeishuApiClient;
 
@@ -62,16 +62,10 @@ impl ToolHandler for FeishuCalendarHandler {
                 body.insert("summary".into(), json!(summary));
 
                 if let Some(v) = params.get("start_time").and_then(|v| v.as_str()) {
-                    body.insert(
-                        "start_time".into(),
-                        json!({ "timestamp": v }),
-                    );
+                    body.insert("start_time".into(), json!({ "timestamp": v }));
                 }
                 if let Some(v) = params.get("end_time").and_then(|v| v.as_str()) {
-                    body.insert(
-                        "end_time".into(),
-                        json!({ "timestamp": v }),
-                    );
+                    body.insert("end_time".into(), json!({ "timestamp": v }));
                 }
                 if let Some(v) = params.get("description").and_then(|v| v.as_str()) {
                     body.insert("description".into(), json!(v));

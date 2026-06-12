@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::model_metadata::supports_vision;
 use crate::vision_media::file_to_data_url_sync;

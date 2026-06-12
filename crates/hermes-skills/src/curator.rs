@@ -14,12 +14,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::future::Future;
 
 use crate::curator_prompt::CURATOR_REVIEW_PROMPT;
-use crate::usage::{is_protected_skill, UsageStore, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE};
+use crate::usage::{is_protected_skill, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE, UsageStore};
 
 /// Curator persistent state (stored at `store.dir()/.curator_state`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -69,11 +69,12 @@ pub fn load_curator_state(store: &UsageStore) -> CuratorState {
 pub fn save_curator_state(store: &UsageStore, state: &CuratorState) -> Result<(), std::io::Error> {
     fs::create_dir_all(store.dir())?;
     let path = store.dir().join(STATE_FILE);
-    let tmp = store.dir().join(format!(".curator_state_{}.tmp", std::process::id()));
+    let tmp = store
+        .dir()
+        .join(format!(".curator_state_{}.tmp", std::process::id()));
 
-    let body = serde_json::to_string_pretty(state).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
+    let body = serde_json::to_string_pretty(state)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
     {
         let mut file = fs::File::create(&tmp)?;
@@ -188,13 +189,11 @@ pub struct TransitionResult {
 /// - stale 阈值: now - stale_after_days
 /// - 活跃锚点: last_used_at / last_viewed_at / last_patched_at 中最大值
 /// - 转换: active→stale, stale→active(reactivation), *→archived
-pub fn apply_automatic_transitions(
-    store: &UsageStore,
-    config: &CuratorConfig,
-) -> TransitionResult {
+pub fn apply_automatic_transitions(store: &UsageStore, config: &CuratorConfig) -> TransitionResult {
     let now = Utc::now();
     let stale_cutoff = now - chrono::Duration::seconds((config.stale_after_days * 86400) as i64);
-    let archive_cutoff = now - chrono::Duration::seconds((config.archive_after_days * 86400) as i64);
+    let archive_cutoff =
+        now - chrono::Duration::seconds((config.archive_after_days * 86400) as i64);
 
     let usage = store.load_usage();
     let mut result = TransitionResult::default();
@@ -233,7 +232,8 @@ pub fn apply_automatic_transitions(
             Err(e) => {
                 tracing::warn!(
                     "curator: failed to parse anchor timestamp for skill '{}': {}",
-                    name, e
+                    name,
+                    e
                 );
                 continue;
             }
@@ -627,7 +627,10 @@ pub fn parse_structured_summary(llm_final: &str) -> StructuredSummary {
     let mut result = StructuredSummary::default();
 
     // Parse consolidations
-    if let Some(consolidations) = yaml_value.get("consolidations").and_then(|v| v.as_sequence()) {
+    if let Some(consolidations) = yaml_value
+        .get("consolidations")
+        .and_then(|v| v.as_sequence())
+    {
         for item in consolidations {
             let from = item
                 .get("from")
@@ -708,7 +711,10 @@ pub fn extract_absorbed_into_declarations(
             continue;
         };
 
-        let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+        let action = args
+            .get("action")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if action != "delete" {
             continue;
         }
@@ -764,8 +770,14 @@ pub fn classify_removed_skills(
             if tc.name == "skill_manage"
                 && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
             {
-                let action = args.get("action").and_then(|v| v.as_str()).unwrap_or_default();
-                let tc_name = args.get("name").and_then(|v| v.as_str()).unwrap_or_default();
+                let action = args
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
+                let tc_name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default();
                 if action == "delete" && tc_name == skill_name {
                     continue;
                 }
@@ -938,7 +950,11 @@ pub fn reconcile_classification(
         }
 
         // Priority 5: Model YAML pruning
-        if let Some(model_prune) = model_summary.prunings.iter().find(|p| p.name == *skill_name) {
+        if let Some(model_prune) = model_summary
+            .prunings
+            .iter()
+            .find(|p| p.name == *skill_name)
+        {
             result.pruned.push(PruningEntry {
                 name: skill_name.clone(),
                 reason: model_prune.reason.clone(),
@@ -999,9 +1015,8 @@ pub fn write_curator_report(
     fs::create_dir_all(&dir)?;
 
     // Write run.json
-    let json_content = serde_json::to_string_pretty(report).map_err(|e| {
-        CuratorError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-    })?;
+    let json_content = serde_json::to_string_pretty(report)
+        .map_err(|e| CuratorError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, e)))?;
     let json_path = dir.join("run.json");
     fs::write(&json_path, json_content)?;
 
@@ -1031,10 +1046,7 @@ fn build_report_markdown(report: &CuratorRunReport) -> String {
 
     // Auto-transitions
     md.push_str("## Auto-transitions\n\n");
-    md.push_str(&format!(
-        "- Checked: {}\n",
-        report.auto_transitions.checked
-    ));
+    md.push_str(&format!("- Checked: {}\n", report.auto_transitions.checked));
     md.push_str(&format!(
         "- Marked stale: {}\n",
         report.auto_transitions.marked_stale

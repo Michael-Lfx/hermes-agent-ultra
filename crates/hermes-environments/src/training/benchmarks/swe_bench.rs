@@ -13,7 +13,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use super::super::{load_hf_dataset_via_python, EnvTask, HermesBaseEnv, Trajectory};
+use super::super::{EnvTask, HermesBaseEnv, Trajectory, load_hf_dataset_via_python};
 
 /// SWE-bench task metadata (matches HuggingFace dataset columns).
 #[derive(Debug, Clone, Serialize, Deserialize)]

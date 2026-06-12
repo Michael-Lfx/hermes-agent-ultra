@@ -786,10 +786,7 @@ mod tests {
             }
         }));
         // mapping: "kimi-coding" → "kimi-for-coding"
-        assert_eq!(
-            c.lookup_context("kimi-coding", "kimi-k2.6"),
-            Some(131_072)
-        );
+        assert_eq!(c.lookup_context("kimi-coding", "kimi-k2.6"), Some(131_072));
     }
 
     #[test]
@@ -803,10 +800,7 @@ mod tests {
                 }
             }
         }));
-        assert_eq!(
-            c.lookup_context("kimi-coding", "kimi-k2.6"),
-            Some(65_536)
-        );
+        assert_eq!(c.lookup_context("kimi-coding", "kimi-k2.6"), Some(65_536));
     }
 
     #[test]

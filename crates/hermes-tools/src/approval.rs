@@ -5,7 +5,7 @@
 
 use regex::Regex;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use std::time::Duration;
@@ -1927,11 +1927,13 @@ mod tests {
         .expect("cron guard should return");
 
         assert!(!result.approved);
-        assert!(result
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("cron jobs run without a user present"));
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("cron jobs run without a user present")
+        );
         assert!(!has_blocking_approval(session));
         unregister_gateway_notify(session);
         reset_approval_state_unlocked();
@@ -2227,11 +2229,13 @@ mod tests {
         .expect("gateway guard should return");
 
         assert!(!result.approved);
-        assert!(result
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("timed out"));
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("timed out")
+        );
         assert!(!has_blocking_approval(session));
         unregister_gateway_notify(session);
         reset_approval_state_unlocked();
@@ -2453,11 +2457,13 @@ mod tests {
         .unwrap();
 
         assert!(!result.approved);
-        assert!(result
-            .message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("BLOCKED"));
+        assert!(
+            result
+                .message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("BLOCKED")
+        );
         assert_eq!(result.pattern_key.as_deref(), Some("tirith:unknown"));
     }
 

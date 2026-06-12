@@ -41,8 +41,8 @@ pub enum PlanApprovalParseStyle {
 }
 
 const PLAN_MODE_SUBCOMMANDS: &[&str] = &[
-    "on", "enable", "off", "disable", "status", "show", "approve", "accept", "a", "reject",
-    "deny", "r", "edit", "e", "help", "usage",
+    "on", "enable", "off", "disable", "status", "show", "approve", "accept", "a", "reject", "deny",
+    "r", "edit", "e", "help", "usage",
 ];
 
 /// Whether the first token of a `/plan-mode` task is a reserved subcommand.
@@ -115,10 +115,16 @@ pub fn parse_plan_approval_reply(
 
     let bare_reject = match style {
         PlanApprovalParseStyle::Interactive => {
-            matches!(lower.as_str(), "reject" | "deny" | "r" | "no" | "n" | "拒绝" | "驳回")
+            matches!(
+                lower.as_str(),
+                "reject" | "deny" | "r" | "no" | "n" | "拒绝" | "驳回"
+            )
         }
         PlanApprovalParseStyle::Channel => {
-            matches!(lower.as_str(), "reject" | "deny" | "no" | "n" | "拒绝" | "驳回")
+            matches!(
+                lower.as_str(),
+                "reject" | "deny" | "no" | "n" | "拒绝" | "驳回"
+            )
         }
     };
     if bare_reject {
@@ -308,9 +314,8 @@ pub async fn handle_plan_mode_slash_action(
             }
             host.agent().set_pending_plan(Some(plan.clone()));
             host.agent().set_plan_phase(PlanPhase::Executing);
-            host.messages_mut().push(Message::user(format!(
-                "Plan updated and approved:\n{plan}"
-            )));
+            host.messages_mut()
+                .push(Message::user(format!("Plan updated and approved:\n{plan}")));
             host.run_agent_turn().await?;
         }
         PlanModeSlashAction::Task { task } => {

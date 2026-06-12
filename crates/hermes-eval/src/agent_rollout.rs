@@ -21,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use hermes_agent::AgentLoop;
 use hermes_core::Message;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::adapter::TaskSpec;
 use crate::error::{EvalError, EvalResult};

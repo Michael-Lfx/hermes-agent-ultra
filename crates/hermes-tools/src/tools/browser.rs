@@ -6,9 +6,9 @@
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 // ---------------------------------------------------------------------------
 // BrowserBackend trait
@@ -44,11 +44,7 @@ pub trait BrowserBackend: Send + Sync {
         selector: Option<&str>,
         task_id: Option<&str>,
     ) -> Result<String, ToolError>;
-    async fn vision(
-        &self,
-        instruction: &str,
-        task_id: Option<&str>,
-    ) -> Result<String, ToolError>;
+    async fn vision(&self, instruction: &str, task_id: Option<&str>) -> Result<String, ToolError>;
     async fn console(&self, action: &str, task_id: Option<&str>) -> Result<String, ToolError>;
 }
 
@@ -568,18 +564,10 @@ mod tests {
         ) -> Result<String, ToolError> {
             Ok(format!("Images: {:?}", sel))
         }
-        async fn vision(
-            &self,
-            inst: &str,
-            _task_id: Option<&str>,
-        ) -> Result<String, ToolError> {
+        async fn vision(&self, inst: &str, _task_id: Option<&str>) -> Result<String, ToolError> {
             Ok(format!("Vision: {}", inst))
         }
-        async fn console(
-            &self,
-            action: &str,
-            _task_id: Option<&str>,
-        ) -> Result<String, ToolError> {
+        async fn console(&self, action: &str, _task_id: Option<&str>) -> Result<String, ToolError> {
             Ok(format!("Console: {}", action))
         }
     }

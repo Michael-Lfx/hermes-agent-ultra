@@ -56,11 +56,7 @@ impl PlatformAdapter for MockDiscordAdapter {
         ))
     }
 
-    async fn delete_message(
-        &self,
-        chat_id: &str,
-        message_id: &str,
-    ) -> Result<bool, GatewayError> {
+    async fn delete_message(&self, chat_id: &str, message_id: &str) -> Result<bool, GatewayError> {
         if !self.delete_ok {
             return Err(GatewayError::SendFailed("delete failed".into()));
         }
@@ -100,18 +96,17 @@ async fn final_edit_failure_deletes_placeholder_before_resend() {
     };
 
     let chunks = vec!["final body".to_string()];
-    deliver_legacy_stream_final(
-        &adapter,
-        "discord",
-        "ch1",
-        Some("msg-1"),
-        &chunks,
-    )
-    .await
-    .expect("delivery");
+    deliver_legacy_stream_final(&adapter, "discord", "ch1", Some("msg-1"), &chunks)
+        .await
+        .expect("delivery");
 
     let out = messages.lock().unwrap();
-    assert_eq!(out.len(), 1, "expected one message after delete+send, got {:?}", out);
+    assert_eq!(
+        out.len(),
+        1,
+        "expected one message after delete+send, got {:?}",
+        out
+    );
     assert_eq!(out[0].1, "final body");
 }
 
@@ -127,15 +122,9 @@ async fn final_edit_failure_without_delete_clears_placeholder() {
     };
 
     let chunks = vec!["final body".to_string()];
-    deliver_legacy_stream_final(
-        &adapter,
-        "discord",
-        "ch1",
-        Some("msg-1"),
-        &chunks,
-    )
-    .await
-    .expect("delivery");
+    deliver_legacy_stream_final(&adapter, "discord", "ch1", Some("msg-1"), &chunks)
+        .await
+        .expect("delivery");
 
     let out = messages.lock().unwrap();
     assert_eq!(out.len(), 2, "placeholder cleared + new message: {:?}", out);

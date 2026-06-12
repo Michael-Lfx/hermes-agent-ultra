@@ -31,17 +31,14 @@ impl MessageDedup {
         if self.queue.len() >= DEDUP_MAX {
             self.queue.pop_front();
         }
-        self.queue.push_back((message_id.to_string(), Instant::now()));
+        self.queue
+            .push_back((message_id.to_string(), Instant::now()));
         false
     }
 
     fn evict_expired(&mut self) {
         let cutoff = Instant::now() - DEDUP_WINDOW;
-        while self
-            .queue
-            .front()
-            .is_some_and(|(_, t)| *t < cutoff)
-        {
+        while self.queue.front().is_some_and(|(_, t)| *t < cutoff) {
             self.queue.pop_front();
         }
     }

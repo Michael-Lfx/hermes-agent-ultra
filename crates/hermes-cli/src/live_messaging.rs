@@ -52,6 +52,9 @@ fn register_live_send_message_tool(registry: &ToolRegistry, gateway: Arc<Gateway
     let schema = handler.schema();
     let name = schema.name.clone();
     let desc = schema.description.clone();
+    // Deregister first to avoid noisy overwrite warnings, matching
+    // the pattern used by register_runtime_tool in runtime_tool_wiring.
+    let _ = registry.deregister(&name);
     registry.register(
         name,
         "messaging",

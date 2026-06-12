@@ -7,7 +7,7 @@
 use hermes_config::GatewayConfig;
 
 use crate::platform_requirements::{
-    evaluate_gateway_requirements, RequirementScope, RequirementSeverity,
+    RequirementScope, RequirementSeverity, evaluate_gateway_requirements,
 };
 
 /// Return human-readable issues for any **enabled** platform that is missing

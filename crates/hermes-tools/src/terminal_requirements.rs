@@ -11,8 +11,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use hermes_config::managed_gateway::{
-    has_direct_modal_credentials, is_managed_tool_gateway_ready, managed_nous_tools_enabled,
-    resolve_modal_backend_state, ModalMode, ResolveOptions, SelectedBackend,
+    ModalMode, ResolveOptions, SelectedBackend, has_direct_modal_credentials,
+    is_managed_tool_gateway_ready, managed_nous_tools_enabled, resolve_modal_backend_state,
 };
 
 const REQUIREMENT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
@@ -384,11 +384,13 @@ mod tests {
         let _env = EnvGuard::set("TERMINAL_ENV", "unknown-backend");
         let report = terminal_requirements_report();
         assert!(!report.available);
-        assert!(report
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("Unknown TERMINAL_ENV 'unknown-backend'"));
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Unknown TERMINAL_ENV 'unknown-backend'")
+        );
     }
 
     #[test]
@@ -398,11 +400,13 @@ mod tests {
         let _env = EnvGuard::set("TERMINAL_ENV", "ssh");
         let report = terminal_requirements_report();
         assert!(!report.available);
-        assert!(report
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("TERMINAL_SSH_HOST and TERMINAL_SSH_USER"));
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("TERMINAL_SSH_HOST and TERMINAL_SSH_USER")
+        );
 
         let _host = EnvGuard::set("TERMINAL_SSH_HOST", "example.invalid");
         let _user = EnvGuard::set("TERMINAL_SSH_USER", "hermes");
@@ -447,10 +451,12 @@ mod tests {
         let report = terminal_requirements_report();
         assert!(!report.available);
         assert_eq!(report.backend, "vercel_sandbox");
-        assert!(report
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not available in the Rust terminal runtime"));
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("not available in the Rust terminal runtime")
+        );
     }
 }

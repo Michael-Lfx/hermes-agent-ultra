@@ -4,7 +4,7 @@
 
 use hermes_config::PlatformConfig;
 use hermes_gateway::platforms::discord::{
-    parse_bool_like, DiscordAdapter, DiscordAllowedMentions, DiscordConfig,
+    DiscordAdapter, DiscordAllowedMentions, DiscordConfig, parse_bool_like,
 };
 use serde_json::Value;
 use wiremock::matchers::{method, path_regex};

@@ -2,15 +2,15 @@
 
 use async_trait::async_trait;
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
+use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use reqwest::{Client, Url};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Instant;
 use tracing::{debug, trace};
 
 use crate::tools::web::{WebExtractBackend, WebSearchBackend};
 use hermes_config::managed_gateway::{
-    resolve_managed_tool_gateway, ManagedToolGatewayConfig, ResolveOptions,
+    ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
 };
 use hermes_core::ToolError;
 
@@ -59,8 +59,7 @@ impl WebSearchBackend for FallbackSearchBackend {
         let mut attempts = Vec::new();
         debug!(
             query_chars = query.chars().count(),
-            limit,
-            "web_search fallback chain start"
+            limit, "web_search fallback chain start"
         );
 
         // Run all three backends in parallel; use the first non-empty result.
@@ -363,9 +362,9 @@ fn normalize_duckduckgo_url(raw: &str) -> Option<String> {
         return None;
     }
 
-    let parsed = Url::parse(&raw).or_else(|_| {
-        Url::parse("https://duckduckgo.com").and_then(|base| base.join(&raw))
-    }).ok()?;
+    let parsed = Url::parse(&raw)
+        .or_else(|_| Url::parse("https://duckduckgo.com").and_then(|base| base.join(&raw)))
+        .ok()?;
 
     let mut target = parsed.to_string();
     if parsed
@@ -435,17 +434,20 @@ fn normalize_fallback_result(item: &Value, source: &str, default_title: &str) ->
         ],
     )
     .unwrap_or("");
-    let title = first_value_str(item, &["title", "heading", "name", "story_title", "Heading"])
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            if text.is_empty() {
-                None
-            } else {
-                Some(truncate_fallback_text(text, 180))
-            }
-        })
-        .unwrap_or_else(|| default_title.to_string());
+    let title = first_value_str(
+        item,
+        &["title", "heading", "name", "story_title", "Heading"],
+    )
+    .filter(|v| !v.is_empty())
+    .map(str::to_string)
+    .or_else(|| {
+        if text.is_empty() {
+            None
+        } else {
+            Some(truncate_fallback_text(text, 180))
+        }
+    })
+    .unwrap_or_else(|| default_title.to_string());
 
     Some(json!({
         "title": title,
@@ -477,8 +479,16 @@ fn unique_and_limit_results(rows: Vec<Value>, limit: usize) -> Vec<Value> {
         if url.is_empty() {
             continue;
         }
-        let title = row.get("title").and_then(Value::as_str).unwrap_or("").trim();
-        let key = format!("{}|{}", url.to_ascii_lowercase(), title.to_ascii_lowercase());
+        let title = row
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        let key = format!(
+            "{}|{}",
+            url.to_ascii_lowercase(),
+            title.to_ascii_lowercase()
+        );
         if seen.insert(key) {
             out.push(row);
         }
@@ -531,15 +541,11 @@ const SEARXNG_SEARCH_PATH: &str = "/search";
 /// Chrome-like User-Agent for direct HTML fetches (many sites block bot UAs with 403).
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 
-const BROWSER_ACCEPT_HTML: &str =
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const BROWSER_ACCEPT_HTML: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
 fn build_browser_like_http_client(timeout_secs: u64) -> Client {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        ACCEPT,
-        HeaderValue::from_static(BROWSER_ACCEPT_HTML),
-    );
+    headers.insert(ACCEPT, HeaderValue::from_static(BROWSER_ACCEPT_HTML));
     Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
         .user_agent(BROWSER_USER_AGENT)
@@ -1078,7 +1084,10 @@ impl WebSearchBackend for SearxngSearchBackend {
 /// 6. Free fallback chain (DuckDuckGo Lite, DuckDuckGo Instant, vertical search)
 pub fn search_backend_from_env_or_fallback() -> Box<dyn WebSearchBackend> {
     let choice = search_backend_choice_from_env();
-    debug!(backend = choice, "web_search backend resolved from environment");
+    debug!(
+        backend = choice,
+        "web_search backend resolved from environment"
+    );
     match choice {
         "exa" => ExaSearchBackend::from_env()
             .map(|b| Box::new(b) as Box<dyn WebSearchBackend>)

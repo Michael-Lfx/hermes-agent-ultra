@@ -5,10 +5,10 @@
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Map, Number, Value};
+use serde_json::{Map, Number, Value, json};
 use std::sync::Arc;
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SpotifyHttpMethod {

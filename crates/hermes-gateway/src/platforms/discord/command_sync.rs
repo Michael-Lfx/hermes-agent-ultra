@@ -14,11 +14,7 @@ use super::gateway_loop::DiscordInner;
 use super::types::SlashCommand;
 
 fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
-    bytes
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
 const DISCORD_COMMANDS_STATE_DIR: &str = "discord";
@@ -132,16 +128,13 @@ fn load_state() -> SlashCommandsStateFile {
 fn save_state(state: &SlashCommandsStateFile) -> Result<(), GatewayError> {
     let path = slash_commands_state_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            GatewayError::Platform(format!("create slash commands state dir: {e}"))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| GatewayError::Platform(format!("create slash commands state dir: {e}")))?;
     }
-    let text = serde_json::to_string_pretty(state).map_err(|e| {
-        GatewayError::Platform(format!("serialize slash commands state: {e}"))
-    })?;
-    std::fs::write(&path, text).map_err(|e| {
-        GatewayError::Platform(format!("write slash commands state: {e}"))
-    })
+    let text = serde_json::to_string_pretty(state)
+        .map_err(|e| GatewayError::Platform(format!("serialize slash commands state: {e}")))?;
+    std::fs::write(&path, text)
+        .map_err(|e| GatewayError::Platform(format!("write slash commands state: {e}")))
 }
 
 fn patchable_diff(desired: &CommandFingerprint, existing: &CommandFingerprint) -> bool {
@@ -152,7 +145,9 @@ fn patchable_diff(desired: &CommandFingerprint, existing: &CommandFingerprint) -
 }
 
 impl DiscordInner {
-    pub async fn list_global_slash_commands(&self) -> Result<Vec<GlobalCommandRecord>, GatewayError> {
+    pub async fn list_global_slash_commands(
+        &self,
+    ) -> Result<Vec<GlobalCommandRecord>, GatewayError> {
         let app_id = self.config.application_id.as_deref().ok_or_else(|| {
             GatewayError::Platform("application_id required for slash commands".into())
         })?;

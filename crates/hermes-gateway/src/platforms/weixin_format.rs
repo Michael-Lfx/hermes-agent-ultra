@@ -48,8 +48,7 @@ fn is_table_rule_line(stripped: &str) -> bool {
         let c = cell.trim();
         !c.is_empty()
             && c.len() >= 3
-            && c.chars()
-                .all(|ch| ch == '-' || ch == ':' || ch == ' ')
+            && c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ')
             && c.contains('-')
     })
 }
@@ -507,7 +506,10 @@ mod tests {
 
     #[test]
     fn format_heading_rewrite() {
-        assert_eq!(format_message_for_weixin("# Hello"), "\u{3010}Hello\u{3011}");
+        assert_eq!(
+            format_message_for_weixin("# Hello"),
+            "\u{3010}Hello\u{3011}"
+        );
         assert_eq!(format_message_for_weixin("## World"), "**World**");
         assert_eq!(format_message_for_weixin("### Sub"), "**Sub**");
     }
@@ -580,7 +582,11 @@ mod tests {
         let units = split_delivery_units(&big_block, 200);
         assert!(units.len() > 1);
         for u in &units {
-            assert!(u.chars().count() <= 200, "unit too long: {} chars", u.chars().count());
+            assert!(
+                u.chars().count() <= 200,
+                "unit too long: {} chars",
+                u.chars().count()
+            );
         }
     }
 

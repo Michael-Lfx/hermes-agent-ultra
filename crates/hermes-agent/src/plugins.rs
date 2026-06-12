@@ -131,9 +131,7 @@ pub(crate) fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(
                 .map(Value::is_number)
                 .unwrap_or(false);
             if !has_attempt && !has_api_call_count {
-                return Err(
-                    "missing required field: attempt (or api_call_count)".to_string(),
-                );
+                return Err("missing required field: attempt (or api_call_count)".to_string());
             }
             require_type(obj, "model", "string", Value::is_string)?;
             if let Some(v) = obj.get("stream") {
@@ -172,9 +170,7 @@ pub(crate) fn validate_hook_payload(hook: HookType, context: &Value) -> Result<(
                 .unwrap_or(false);
             let has_completed = obj.get("completed").map(Value::is_boolean).unwrap_or(false);
             if !has_finished && !has_completed {
-                return Err(
-                    "missing required field: finished_naturally (or completed)".to_string(),
-                );
+                return Err("missing required field: finished_naturally (or completed)".to_string());
             }
             require_type(obj, "interrupted", "boolean", Value::is_boolean)?;
             if let Some(v) = obj.get("turns") {
@@ -577,7 +573,9 @@ impl PluginManager {
     ///
     /// Returns `None` when no hooks or native plugins are registered (caller
     /// may skip [`AgentLoop::with_plugins`]).
-    pub fn build_runtime_manager(hermes_home: &Path) -> Option<std::sync::Arc<std::sync::Mutex<Self>>> {
+    pub fn build_runtime_manager(
+        hermes_home: &Path,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<Self>>> {
         let mut mgr = Self::new();
         register_builtin_plugins(&mut mgr);
         crate::shell_hooks::register_config_shell_hooks(&mut mgr, hermes_home);
@@ -772,9 +770,7 @@ mod tests {
                         .get("interrupted")
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    HookResult::InjectContext(format!(
-                        "session_end:{completed}:{interrupted}"
-                    ))
+                    HookResult::InjectContext(format!("session_end:{completed}:{interrupted}"))
                 }),
             );
         }
@@ -1063,13 +1059,17 @@ dependencies:
         let discovered =
             PluginManager::discover_plugins_with_options(home.path(), Some(cwd.path()), true);
         assert_eq!(discovered.len(), 2);
-        assert!(discovered
-            .iter()
-            .any(|d| d.manifest.name == "user_bundle" && d.source == PluginDiscoverySource::User));
-        assert!(discovered
-            .iter()
-            .any(|d| d.manifest.name == "project_bundle"
-                && d.source == PluginDiscoverySource::Project));
+        assert!(
+            discovered.iter().any(
+                |d| d.manifest.name == "user_bundle" && d.source == PluginDiscoverySource::User
+            )
+        );
+        assert!(
+            discovered
+                .iter()
+                .any(|d| d.manifest.name == "project_bundle"
+                    && d.source == PluginDiscoverySource::Project)
+        );
     }
 
     #[test]
@@ -1150,8 +1150,7 @@ dependencies:
             assert!(path.is_file(), "missing fixture for {}", hook.as_str());
             let ctx: Value =
                 serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            validate_hook_payload(*hook, &ctx)
-                .unwrap_or_else(|e| panic!("{}: {e}", hook.as_str()));
+            validate_hook_payload(*hook, &ctx).unwrap_or_else(|e| panic!("{}: {e}", hook.as_str()));
         }
     }
 

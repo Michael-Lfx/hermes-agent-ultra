@@ -101,7 +101,9 @@ impl PolicyGuardConfig {
     /// Require admin header for mutating policy routes.
     pub fn check_mutation_admin(&self, headers: &HeaderMap) -> Result<(), &'static str> {
         if self.require_admin && self.admin_key.is_none() {
-            return Err("HERMES_HTTP_POLICY_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty");
+            return Err(
+                "HERMES_HTTP_POLICY_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty",
+            );
         }
         if let Some(ref key) = self.admin_key {
             let got = header_policy_admin(headers);
@@ -118,7 +120,9 @@ impl PolicyGuardConfig {
             return Ok(());
         }
         let Some(ref key) = self.admin_key else {
-            return Err("HERMES_HTTP_POLICY_EXPORT_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty");
+            return Err(
+                "HERMES_HTTP_POLICY_EXPORT_REQUIRE_ADMIN is set but HERMES_POLICY_ADMIN_TOKEN (or HERMES_HTTP_POLICY_ADMIN_KEY) is empty",
+            );
         };
         let got = header_policy_admin(headers);
         if got != Some(key.as_ref()) {
@@ -165,11 +169,7 @@ impl HttpSecurity {
 fn parse_allowed_ips_from_env() -> Option<Vec<IpAddr>> {
     let raw = std::env::var("HERMES_HTTP_ALLOWED_IPS").ok()?;
     let ips = parse_allowed_ips(&raw);
-    if ips.is_empty() {
-        None
-    } else {
-        Some(ips)
-    }
+    if ips.is_empty() { None } else { Some(ips) }
 }
 
 /// Parse a comma-separated IP list (for tests and tooling).

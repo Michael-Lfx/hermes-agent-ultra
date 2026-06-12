@@ -1,9 +1,9 @@
 //! Real session search backend using shared `state_db` search APIs.
 
+use crate::state_db::{StateDb, decode_content_preview};
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use crate::state_db::{StateDb, decode_content_preview};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::task::JoinSet;
@@ -272,15 +272,15 @@ impl SqliteSessionSearchBackend {
     }
 
     pub fn new(db_path: &str) -> Result<Self, ToolError> {
-        StateDb::open(db_path).map(|db| Self { db }).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to open state DB: {}", e))
-        })
+        StateDb::open(db_path)
+            .map(|db| Self { db })
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to open state DB: {}", e)))
     }
 
     pub fn default_path() -> Result<Self, ToolError> {
-        StateDb::open_default().map(|db| Self { db }).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to open state DB: {}", e))
-        })
+        StateDb::open_default()
+            .map(|db| Self { db })
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to open state DB: {}", e)))
     }
 }
 
@@ -321,14 +321,7 @@ impl SessionSearchBackend for SqliteSessionSearchBackend {
         if query.is_empty() {
             let rows = self
                 .db
-                .list_sessions_rich(
-                    None,
-                    HIDDEN_SESSION_SOURCES,
-                    limit,
-                    0,
-                    0,
-                    true,
-                )
+                .list_sessions_rich(None, HIDDEN_SESSION_SOURCES, limit, 0, 0, true)
                 .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
             let mut results = Vec::new();
             for row in rows {
@@ -483,7 +476,10 @@ mod tests {
 
     #[test]
     fn format_timestamp_handles_none() {
-        assert_eq!(SqliteSessionSearchBackend::format_timestamp(None), "unknown");
+        assert_eq!(
+            SqliteSessionSearchBackend::format_timestamp(None),
+            "unknown"
+        );
     }
 
     #[test]

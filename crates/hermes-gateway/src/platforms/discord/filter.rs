@@ -97,8 +97,7 @@ fn allow_other_bot_message(raw: &RawDiscordMessage, cfg: &DiscordInboundConfig) 
             let Some(bot_id) = cfg.bot_user_id.as_deref() else {
                 return false;
             };
-            raw.mentions.iter().any(|m| m == bot_id)
-                || content_mentions_bot(&raw.content, bot_id)
+            raw.mentions.iter().any(|m| m == bot_id) || content_mentions_bot(&raw.content, bot_id)
         }
     }
 }
@@ -223,10 +222,7 @@ mod tests {
             guild_id: None,
             ..human_guild("hi", vec![])
         };
-        assert!(!should_accept_message(
-            &raw,
-            &cfg(false, Some("bot99"))
-        ));
+        assert!(!should_accept_message(&raw, &cfg(false, Some("bot99"))));
     }
 
     #[test]

@@ -26,9 +26,7 @@ fn is_root_dm(incoming: &IncomingMessage) -> bool {
 }
 
 fn is_topic_dm(incoming: &IncomingMessage) -> bool {
-    incoming.platform == "telegram"
-        && incoming.is_dm
-        && incoming.message_thread_id.is_some()
+    incoming.platform == "telegram" && incoming.is_dm && incoming.message_thread_id.is_some()
 }
 
 /// Compose session key including Telegram DM topic thread when present.
@@ -37,7 +35,10 @@ pub fn compose_telegram_session_key(incoming: &IncomingMessage) -> Option<String
         return None;
     }
     let thread = incoming.message_thread_id.as_deref()?;
-    Some(format!("{}:{}:{}", incoming.platform, incoming.chat_id, thread))
+    Some(format!(
+        "{}:{}:{}",
+        incoming.platform, incoming.chat_id, thread
+    ))
 }
 
 /// Returns `Some(reply)` when the message was fully handled as a topic command.
@@ -60,11 +61,7 @@ pub fn try_handle_topic_command(incoming: &IncomingMessage) -> Option<String> {
     }
     if is_topic_dm(incoming) {
         return Some(handle_thread_topic_command(
-            &db,
-            incoming,
-            chat_id,
-            user_id,
-            sub,
+            &db, incoming, chat_id, user_id, sub,
         ));
     }
     None
@@ -87,9 +84,9 @@ fn handle_root_topic_command(
             "Telegram multi-session topic mode disabled for this chat.".into()
         }
         Some("help") => ONBOARDING.to_string(),
-        Some(other) => format!(
-            "Unknown /topic subcommand '{other}'. Try /topic, /topic off, or /topic help."
-        ),
+        Some(other) => {
+            format!("Unknown /topic subcommand '{other}'. Try /topic, /topic off, or /topic help.")
+        }
     }
 }
 
@@ -111,7 +108,8 @@ For parallel work, create another topic with the + button.",
                     binding.session_id, binding.session_key
                 )
             } else {
-                "This topic is not linked yet — your next message will create a session lane.".into()
+                "This topic is not linked yet — your next message will create a session lane."
+                    .into()
             }
         }
         Some(session_id) => {
@@ -198,11 +196,7 @@ pub fn bound_session_id(incoming: &IncomingMessage) -> Option<String> {
 }
 
 /// Auto-bind a new topic lane on first message (when no binding exists).
-pub fn maybe_bind_new_topic_lane(
-    incoming: &IncomingMessage,
-    session_key: &str,
-    session_id: &str,
-) {
+pub fn maybe_bind_new_topic_lane(incoming: &IncomingMessage, session_key: &str, session_id: &str) {
     if !is_topic_dm(incoming) {
         return;
     }
@@ -220,12 +214,5 @@ pub fn maybe_bind_new_topic_lane(
     {
         return;
     }
-    let _ = db.bind_telegram_topic(
-        chat_id,
-        thread_id,
-        user_id,
-        session_key,
-        session_id,
-        "auto",
-    );
+    let _ = db.bind_telegram_topic(chat_id, thread_id, user_id, session_key, session_id, "auto");
 }

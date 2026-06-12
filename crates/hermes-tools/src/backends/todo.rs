@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::tools::todo::{dedupe_by_id, validate_item, TodoBackend, TodoItem, VALID_STATUSES};
+use crate::tools::todo::{TodoBackend, TodoItem, VALID_STATUSES, dedupe_by_id, validate_item};
 use hermes_core::ToolError;
 
 // ---------------------------------------------------------------------------
@@ -25,7 +25,11 @@ struct StoredItem {
 
 impl From<StoredItem> for TodoItem {
     fn from(s: StoredItem) -> Self {
-        TodoItem { id: s.id, content: s.content, status: s.status }
+        TodoItem {
+            id: s.id,
+            content: s.content,
+            status: s.status,
+        }
     }
 }
 
@@ -64,7 +68,10 @@ impl FileTodoBackend {
         } else {
             Vec::new()
         };
-        Self { file_path, items: Mutex::new(items) }
+        Self {
+            file_path,
+            items: Mutex::new(items),
+        }
     }
 
     /// Create a backend using the default `<hermes_home>/todos.json` path.
@@ -75,16 +82,13 @@ impl FileTodoBackend {
 
     fn save(&self, items: &[StoredItem]) -> Result<(), ToolError> {
         if let Some(parent) = self.file_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolError::ExecutionFailed(format!("Failed to create dir: {e}"))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Failed to create dir: {e}")))?;
         }
-        let json = serde_json::to_string_pretty(items).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to serialize todos: {e}"))
-        })?;
-        std::fs::write(&self.file_path, json).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to write todos: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(items)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to serialize todos: {e}")))?;
+        std::fs::write(&self.file_path, json)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write todos: {e}")))?;
         Ok(())
     }
 }
@@ -105,8 +109,7 @@ impl TodoBackend for FileTodoBackend {
 
     async fn write_all(&self, todos: Vec<TodoItem>) -> Result<Vec<TodoItem>, ToolError> {
         // Dedup by id (keep last) then validate each item
-        let validated: Vec<TodoItem> =
-            dedupe_by_id(todos).into_iter().map(validate_item).collect();
+        let validated: Vec<TodoItem> = dedupe_by_id(todos).into_iter().map(validate_item).collect();
         let stored: Vec<StoredItem> = validated.iter().cloned().map(StoredItem::from).collect();
 
         let mut items = self

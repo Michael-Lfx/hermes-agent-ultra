@@ -92,12 +92,7 @@ pub fn resolve(
         if entry.confirm_id != confirm_id {
             return Err(());
         }
-        if entry
-            .created_at
-            .elapsed()
-            .unwrap_or(Duration::ZERO)
-            > timeout
-        {
+        if entry.created_at.elapsed().unwrap_or(Duration::ZERO) > timeout {
             pending.remove(session_key);
             return Err(());
         }

@@ -23,17 +23,17 @@
 //! only manages configuration and state; actual audio I/O is delegated to the
 //! caller via the `AudioSource` / `AudioSink` traits.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tokio::sync::{watch, Mutex};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, watch};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 // ---------------------------------------------------------------------------
 // Global voice mode flag

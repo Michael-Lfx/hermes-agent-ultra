@@ -9,14 +9,14 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use async_trait::async_trait;
-use serde_json::{json, Value};
-use tokio::process::Command;
-use tokio::sync::Mutex;
 use super::browser_auth::BrowserAuthContext;
 use super::browser_snapshot_util::process_snapshot_text;
 use crate::tools::browser::BrowserBackend;
+use async_trait::async_trait;
 use hermes_core::ToolError;
+use serde_json::{Value, json};
+use tokio::process::Command;
+use tokio::sync::Mutex;
 
 const DEFAULT_TASK_ID: &str = "default";
 const COMMAND_TIMEOUT_SECS: u64 = 30;
@@ -186,8 +186,7 @@ impl AgentBrowserBackend {
             .args(args)
             .env("AGENT_BROWSER_SOCKET_DIR", &socket_dir);
         auth.apply_to_command(&mut cmd);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         #[cfg(windows)]
         {
@@ -434,11 +433,7 @@ impl BrowserBackend for AgentBrowserBackend {
         .to_string())
     }
 
-    async fn vision(
-        &self,
-        instruction: &str,
-        task_id: Option<&str>,
-    ) -> Result<String, ToolError> {
+    async fn vision(&self, instruction: &str, task_id: Option<&str>) -> Result<String, ToolError> {
         let task = effective_task_id(task_id);
         Ok(json!({
             "success": false,
@@ -450,11 +445,7 @@ impl BrowserBackend for AgentBrowserBackend {
         .to_string())
     }
 
-    async fn console(
-        &self,
-        action: &str,
-        task_id: Option<&str>,
-    ) -> Result<String, ToolError> {
+    async fn console(&self, action: &str, task_id: Option<&str>) -> Result<String, ToolError> {
         let task = effective_task_id(task_id);
         let (cmd, args): (&str, Vec<String>) = match action {
             "clear" => ("console", vec!["--clear".to_string()]),

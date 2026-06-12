@@ -7,12 +7,11 @@
 
 pub mod anthropic_adapter;
 pub mod auxiliary;
-pub mod image_routing;
-pub mod vision_media;
 pub mod context_engine;
 pub mod credential_pool;
 pub mod display;
 pub mod error_classifier;
+pub mod image_routing;
 pub mod insights;
 pub mod model_metadata;
 pub mod models_dev;
@@ -20,31 +19,32 @@ pub mod prompt;
 pub mod redact;
 pub mod rl;
 pub mod router;
+pub mod runtime_main;
 pub mod session_insights;
 pub mod swarm_runtime;
-pub mod runtime_main;
 pub mod title;
 pub mod usage;
 pub mod usage_pricing;
+pub mod vision_media;
 
 pub use error_classifier::{ErrorCategory, ErrorClassifier, RetryStrategy};
 pub use insights::Insights;
 pub use prompt::PromptBuilder;
-pub use redact::{redact_sensitive_text, RedactionPattern, Redactor};
+pub use redact::{RedactionPattern, Redactor, redact_sensitive_text};
 pub use router::{
     ModelCapability, ModelInfo as RouterModelInfo, ModelRequirements, RouterError, SmartModelRouter,
 };
 pub use swarm_runtime::{
-    build_swarm_execution_plan, swarm_runtime_status, SwarmExecutionMode, SwarmExecutionPlan,
-    SwarmRuntimeStatus,
+    SwarmExecutionMode, SwarmExecutionPlan, SwarmRuntimeStatus, build_swarm_execution_plan,
+    swarm_runtime_status,
 };
 pub use title::{TitleError, TitleGenerator};
 pub use usage::{ModelPricing, ModelUsage, UsageRecord, UsageSummary, UsageTracker};
 
 pub use anthropic_adapter::{
-    default_anthropic_beta_header_value, default_anthropic_beta_list, fast_mode_request_beta_list,
     AnthropicContent, AnthropicContentBlock, AnthropicMessage, AnthropicTool,
     NormalizedAssistantMessage, NormalizedToolCall, ReasoningConfig, ReasoningEffort,
+    default_anthropic_beta_header_value, default_anthropic_beta_list, fast_mode_request_beta_list,
 };
 pub use context_engine::{
     ContextEngine, ContextError, DefaultContextEngine, ImportanceBasedEngine,
@@ -59,13 +59,13 @@ pub use image_routing::{
     build_native_content_parts, decide_image_input_mode, explicit_aux_vision_override,
 };
 pub use model_metadata::{
-    estimate_messages_tokens_rough, estimate_request_tokens_rough, estimate_tokens_rough,
-    get_model_context_length, get_model_info, get_next_probe_tier, infer_provider_from_url,
-    is_local_endpoint, known_models, max_output_tokens, supports_tools, supports_vision,
-    ModelMetadataEntry,
+    ModelMetadataEntry, estimate_messages_tokens_rough, estimate_request_tokens_rough,
+    estimate_tokens_rough, get_model_context_length, get_model_info, get_next_probe_tier,
+    infer_provider_from_url, is_local_endpoint, known_models, max_output_tokens, supports_tools,
+    supports_vision,
 };
 pub use usage_pricing::{
+    BillingMode, BillingRoute, CanonicalUsage, CostResult, CostSource, CostStatus, PricingEntry,
     calculate_cost, format_token_count_compact, get_pricing, get_pricing_entry, has_known_pricing,
-    normalize_usage, resolve_billing_route, BillingMode, BillingRoute, CanonicalUsage, CostResult,
-    CostSource, CostStatus, PricingEntry,
+    normalize_usage, resolve_billing_route,
 };

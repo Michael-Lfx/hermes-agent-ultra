@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::job::{deliver_target_from_str, CronJob, DeliverConfig, JobStatus, ModelConfig};
+use crate::job::{CronJob, DeliverConfig, JobStatus, ModelConfig, deliver_target_from_str};
 use crate::schedule::parse_schedule_value;
 
 /// Job origin for `deliver: origin` (Python `origin` dict).
@@ -45,8 +45,7 @@ pub fn cron_job_from_python_value(raw: &Value) -> Result<CronJob, String> {
         .unwrap_or(schedule_display.clone());
 
     let status = python_job_status(raw);
-    let created_at =
-        parse_time_field(raw.get("created_at")).unwrap_or_else(hermes_core::now_utc);
+    let created_at = parse_time_field(raw.get("created_at")).unwrap_or_else(hermes_core::now_utc);
     let last_run = parse_time_field(raw.get("last_run_at"));
     let next_run = parse_time_field(raw.get("next_run_at"))
         .or_else(|| crate::schedule::compute_next_run(&schedule_spec, last_run));
@@ -123,7 +122,10 @@ pub fn cron_job_from_python_value(raw: &Value) -> Result<CronJob, String> {
             .get("script")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
-        no_agent: raw.get("no_agent").and_then(|v| v.as_bool()).unwrap_or(false),
+        no_agent: raw
+            .get("no_agent")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         script_timeout_seconds: None,
         script_shell: None,
         context_from: raw
@@ -243,7 +245,5 @@ pub fn load_python_jobs_file(contents: &str) -> Result<Vec<CronJob>, String> {
         .get("jobs")
         .and_then(|v| v.as_array())
         .ok_or("jobs.json missing jobs array")?;
-    jobs.iter()
-        .map(cron_job_from_python_value)
-        .collect()
+    jobs.iter().map(cron_job_from_python_value).collect()
 }

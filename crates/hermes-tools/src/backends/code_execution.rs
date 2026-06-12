@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command as TokioCommand;
 
+use crate::ToolRegistry;
 use crate::code_execution_env::prepare_child_env;
-use crate::code_execution_ptc::{execute_python_ptc, ptc_enabled, PtcConfig};
+use crate::code_execution_ptc::{PtcConfig, execute_python_ptc, ptc_enabled};
 use crate::tools::code_execution::CodeExecutionBackend;
 use crate::tools::env_passthrough::is_env_passthrough;
-use crate::ToolRegistry;
 use hermes_core::ToolError;
 
 /// Code execution backend using local interpreters and optional PTC RPC sandbox.
@@ -94,20 +94,17 @@ async fn spawn_python(
             }
         };
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            async {
-                let output = child.wait_with_output().await.map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Failed to wait for process: {}", e))
-                })?;
-                Ok::<_, ToolError>((
-                    output.status.code().unwrap_or(-1),
-                    output.stdout,
-                    output.stderr,
-                    program.clone(),
-                ))
-            },
-        )
+        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
+            let output = child.wait_with_output().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to wait for process: {}", e))
+            })?;
+            Ok::<_, ToolError>((
+                output.status.code().unwrap_or(-1),
+                output.stdout,
+                output.stderr,
+                program.clone(),
+            ))
+        })
         .await;
 
         return match result {
@@ -160,8 +157,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
                     }
                 }
             }
-            let (exit_code, stdout, stderr, interpreter) =
-                spawn_python(code, timeout_secs).await?;
+            let (exit_code, stdout, stderr, interpreter) = spawn_python(code, timeout_secs).await?;
             let stdout_str = String::from_utf8_lossy(&stdout).to_string();
             let stderr_str = String::from_utf8_lossy(&stderr).to_string();
             return Ok(json!({
@@ -182,7 +178,7 @@ impl CodeExecutionBackend for LocalCodeExecutionBackend {
                 return Err(ToolError::InvalidParams(format!(
                     "Unsupported language: {}",
                     other
-                )))
+                )));
             }
         };
 

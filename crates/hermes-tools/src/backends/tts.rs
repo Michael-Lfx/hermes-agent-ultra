@@ -6,17 +6,17 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-use hermes_config::voice::TtsConfig;
 use hermes_config::managed_gateway::{
-    resolve_managed_tool_gateway, resolve_openai_audio_api_key, ManagedToolGatewayConfig,
-    ResolveOptions,
+    ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
+    resolve_openai_audio_api_key,
 };
+use hermes_config::voice::TtsConfig;
 
 use crate::tools::tts::TtsBackend;
 use crate::tts_streaming::minimax::MiniMaxTtsBackend;
 use crate::voice_providers::{
-    edge_tts_synthesize, gemini_tts_synthesize, mistral_tts_synthesize, tts_result_json,
-    TtsSettings, xai_tts_synthesize,
+    TtsSettings, edge_tts_synthesize, gemini_tts_synthesize, mistral_tts_synthesize,
+    tts_result_json, xai_tts_synthesize,
 };
 use hermes_core::ToolError;
 
@@ -117,11 +117,7 @@ impl MultiTtsBackend {
                             .into(),
                     ));
                 }
-                (
-                    format!("{}/audio/speech", base_url),
-                    key,
-                    "direct",
-                )
+                (format!("{}/audio/speech", base_url), key, "direct")
             }
         };
 

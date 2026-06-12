@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use hermes_core::{now_utc, AgentResult, MessageRole};
-use tokio::sync::{broadcast, Mutex, Notify};
+use hermes_core::{AgentResult, MessageRole, now_utc};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::time::{self, Duration};
 
 use crate::completion::CronCompletionEvent;
@@ -55,7 +55,9 @@ fn cron_sleep_duration(
         return Duration::ZERO;
     }
     let remaining_secs = (next - now).num_seconds().max(0) as u64;
-    let capped = remaining_secs.min(max_poll.as_secs()).max(CRON_MIN_POLL_SECS);
+    let capped = remaining_secs
+        .min(max_poll.as_secs())
+        .max(CRON_MIN_POLL_SECS);
     Duration::from_secs(capped).max(min_poll)
 }
 
@@ -333,7 +335,10 @@ impl CronScheduler {
 
                 let now = now_utc();
                 let mut guard = jobs.lock().await;
-                let active_jobs = guard.values().filter(|j| j.status == JobStatus::Active).count();
+                let active_jobs = guard
+                    .values()
+                    .filter(|j| j.status == JobStatus::Active)
+                    .count();
                 let mut tick_dirty = false;
                 for job in guard.values_mut() {
                     if job.prepare_for_tick(now) {
@@ -345,7 +350,11 @@ impl CronScheduler {
                     drop(guard);
                     for job in snapshot {
                         if let Err(e) = persistence.save_job(&job).await {
-                            tracing::error!("Failed to persist tick-adjusted job '{}': {}", job.id, e);
+                            tracing::error!(
+                                "Failed to persist tick-adjusted job '{}': {}",
+                                job.id,
+                                e
+                            );
                         }
                     }
                     guard = jobs.lock().await;
@@ -465,12 +474,7 @@ impl CronScheduler {
                                     del_err
                                 );
                             }
-                            Self::emit_completion(
-                                &completion_tx,
-                                &job,
-                                "schedule",
-                                Err(err_msg),
-                            );
+                            Self::emit_completion(&completion_tx, &job, "schedule", Err(err_msg));
                             job.mark_failed();
                         }
                     }
@@ -533,12 +537,7 @@ impl CronScheduler {
                                     del_err
                                 );
                             }
-                            Self::emit_completion(
-                                &completion_tx,
-                                &job,
-                                "schedule",
-                                Err(err_msg),
-                            );
+                            Self::emit_completion(&completion_tx, &job, "schedule", Err(err_msg));
                             job.mark_failed();
                             let gen_after = *generation.lock().await;
                             if gen_after != gen_before {
@@ -787,20 +786,12 @@ impl CronScheduler {
         let run_result = self.runner.run_job(&runnable_job).await;
         let delivery_error = match &run_result {
             Ok(outcome) => {
-                Self::emit_completion(
-                    &self.completion_tx,
-                    &job,
-                    "manual",
-                    Ok(&outcome.result),
-                );
+                Self::emit_completion(&self.completion_tx, &job, "manual", Ok(&outcome.result));
                 outcome.delivery_error.clone()
             }
             Err(e) => {
                 let err_msg = e.to_string();
-                let delivery_error = self
-                    .runner
-                    .delivery_error_for_failure(&job, &err_msg)
-                    .await;
+                let delivery_error = self.runner.delivery_error_for_failure(&job, &err_msg).await;
                 if let Some(ref del_err) = delivery_error {
                     tracing::warn!(
                         "Cron job '{}' failed to deliver manual error alert: {}",

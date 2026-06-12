@@ -4,17 +4,17 @@ use std::collections::HashSet;
 use std::io::Cursor;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tracing::{debug, info, warn};
+use wa_rs::Jid;
 use wa_rs::bot::Bot;
 use wa_rs::store::SqliteStore;
 use wa_rs::types::events::Event;
 use wa_rs::types::message::MessageInfo;
-use wa_rs::Jid;
 use wa_rs_core::download::MediaType;
 use wa_rs_core::proto_helpers::MessageExt;
 use wa_rs_proto::whatsapp as wa;
@@ -115,9 +115,8 @@ impl WhatsAppRustClient {
         pair_only: bool,
     ) -> Result<Bot, GatewayError> {
         let session_path = self.config.session_path();
-        ensure_session_dir(&session_path).map_err(|e| {
-            GatewayError::ConnectionFailed(format!("create session dir: {e}"))
-        })?;
+        ensure_session_dir(&session_path)
+            .map_err(|e| GatewayError::ConnectionFailed(format!("create session dir: {e}")))?;
         let db_path = session_db_path(&session_path);
         let db_path_str = db_path.to_string_lossy().into_owned();
 
@@ -277,9 +276,8 @@ impl WhatsAppRustClient {
     ) -> Result<(), GatewayError> {
         let client = self.client().await?;
         let jid = parse_jid(chat_id)?;
-        let data = std::fs::read(file_path).map_err(|e| {
-            GatewayError::SendFailed(format!("read media file {}: {e}", file_path))
-        })?;
+        let data = std::fs::read(file_path)
+            .map_err(|e| GatewayError::SendFailed(format!("read media file {}: {e}", file_path)))?;
         let path = Path::new(file_path);
         let ext = path
             .extension()
@@ -360,9 +358,7 @@ async fn handle_event(
             info!("WhatsApp pair-success received");
             pairing_crypto_done.store(true, Ordering::SeqCst);
             if pair_only {
-                println!(
-                    "\nQR accepted — completing login on your phone (keep WhatsApp open)..."
-                );
+                println!("\nQR accepted — completing login on your phone (keep WhatsApp open)...");
             }
             let pn = success.id.to_string();
             let lid = success.lid.to_string();
@@ -632,8 +628,9 @@ async fn convert_incoming_message(
     let sender_id = info.source.sender.to_string();
     let is_group = info.source.is_group;
     let mut body = extract_body(&msg);
-    let (has_media, media_type, media_urls) =
-        extract_media(client, session_path, &msg).await.unwrap_or_default();
+    let (has_media, media_type, media_urls) = extract_media(client, session_path, &msg)
+        .await
+        .unwrap_or_default();
 
     if has_media && body.trim().is_empty() {
         body = format!("[{media_type} received]");
@@ -700,7 +697,11 @@ async fn extract_media(
                 std::fs::write(&path, buf.into_inner()).map_err(|e| {
                     GatewayError::ConnectionFailed(format!("write media cache: {e}"))
                 })?;
-                return Ok((true, $type_name.to_string(), vec![path.to_string_lossy().into_owned()]));
+                return Ok((
+                    true,
+                    $type_name.to_string(),
+                    vec![path.to_string_lossy().into_owned()],
+                ));
             }
         };
     }
@@ -736,9 +737,8 @@ async fn extract_media(
             .await
             .map_err(|e| GatewayError::ConnectionFailed(format!("download document: {e}")))?;
         let dir = cache_root.join("document_cache");
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            GatewayError::ConnectionFailed(format!("create document cache: {e}"))
-        })?;
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| GatewayError::ConnectionFailed(format!("create document cache: {e}")))?;
         let safe_name = doc
             .file_name
             .as_deref()
@@ -747,9 +747,8 @@ async fn extract_media(
             .filter(|c| c.is_alphanumeric() || matches!(c, '.' | '_' | '-'))
             .collect::<String>();
         let path = dir.join(format!("doc_{}_{safe_name}", random_hex()));
-        std::fs::write(&path, buf.into_inner()).map_err(|e| {
-            GatewayError::ConnectionFailed(format!("write document cache: {e}"))
-        })?;
+        std::fs::write(&path, buf.into_inner())
+            .map_err(|e| GatewayError::ConnectionFailed(format!("write document cache: {e}")))?;
         return Ok((
             true,
             "document".to_string(),
@@ -900,7 +899,13 @@ fn parse_jid(chat_id: &str) -> Result<Jid, GatewayError> {
 }
 
 fn jid_user_part(jid: &str) -> String {
-    jid.split('@').next().unwrap_or(jid).split(':').next().unwrap_or(jid).to_string()
+    jid.split('@')
+        .next()
+        .unwrap_or(jid)
+        .split(':')
+        .next()
+        .unwrap_or(jid)
+        .to_string()
 }
 
 fn random_hex() -> String {
@@ -954,7 +959,13 @@ mod tests {
             &ids,
             session
         ));
-        assert!(chat_matches_self("248662248677608@lid", &pn, &lid, &ids, session));
+        assert!(chat_matches_self(
+            "248662248677608@lid",
+            &pn,
+            &lid,
+            &ids,
+            session
+        ));
         assert!(!chat_matches_self(
             "15551234567@s.whatsapp.net",
             &pn,

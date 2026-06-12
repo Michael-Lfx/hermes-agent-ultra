@@ -6,11 +6,11 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use chrono::Utc;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use hermes_config::paths::hermes_home;
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 fn inbox_dir() -> PathBuf {
     hermes_home().join("inbox")
@@ -174,7 +174,10 @@ mod tests {
             .expect("save");
         let saved_v: Value = serde_json::from_str(&saved).expect("json");
         assert_eq!(saved_v["saved"], true);
-        let listed = handler.execute(json!({"action":"list"})).await.expect("list");
+        let listed = handler
+            .execute(json!({"action":"list"}))
+            .await
+            .expect("list");
         let listed_v: Value = serde_json::from_str(&listed).expect("json");
         assert!(listed_v["count"].as_u64().unwrap_or(0) >= 1);
         unsafe {

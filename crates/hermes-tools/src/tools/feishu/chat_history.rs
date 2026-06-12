@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::debug;
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use super::FeishuApiClient;
 
@@ -169,8 +169,6 @@ fn iso8601_to_unix(ts: &str) -> Result<String, ToolError> {
     let dt = chrono::DateTime::parse_from_rfc3339(ts)
         .or_else(|_| chrono::DateTime::parse_from_str(ts, "%Y-%m-%dT%H:%M:%S"))
         .or_else(|_| chrono::DateTime::parse_from_str(ts, "%Y-%m-%d %H:%M:%S"))
-        .map_err(|e| {
-            ToolError::InvalidParams(format!("Invalid timestamp '{ts}': {e}"))
-        })?;
+        .map_err(|e| ToolError::InvalidParams(format!("Invalid timestamp '{ts}': {e}")))?;
     Ok(dt.timestamp().to_string())
 }

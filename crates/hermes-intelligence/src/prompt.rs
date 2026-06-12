@@ -3,8 +3,8 @@
 //!
 //! Requirements 16.6–16.7
 
-use hermes_core::types::{CacheControl, CacheType, Message};
 use hermes_core::ToolSchema;
+use hermes_core::types::{CacheControl, CacheType, Message};
 
 // ---------------------------------------------------------------------------
 // PromptBuilder

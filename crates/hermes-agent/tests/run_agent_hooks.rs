@@ -3,16 +3,16 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use hermes_agent::{
+    AgentConfig, AgentLoop,
     agent_loop::ToolRegistry,
     plugins::{HookResult, HookType, Plugin, PluginContext, PluginManager, PluginMeta},
-    AgentConfig, AgentLoop,
 };
 use hermes_core::{
-    AgentError, FunctionCall, JsonSchema, LlmProvider, LlmResponse, Message, StreamChunk,
-    ToolCall, ToolSchema,
+    AgentError, FunctionCall, JsonSchema, LlmProvider, LlmResponse, Message, StreamChunk, ToolCall,
+    ToolSchema,
 };
 
 #[derive(Clone, Default)]
@@ -20,7 +20,10 @@ struct HookCounter(Arc<Mutex<Vec<String>>>);
 
 impl HookCounter {
     fn push(&self, label: &str) {
-        self.0.lock().expect("hook counter lock").push(label.to_string());
+        self.0
+            .lock()
+            .expect("hook counter lock")
+            .push(label.to_string());
     }
 }
 
@@ -52,10 +55,13 @@ impl Plugin for CountingHookPlugin {
     fn register(&self, ctx: &mut PluginContext) {
         let counter = self.counter.clone();
         let label = self.label;
-        ctx.on(self.hook, Arc::new(move |_ctx_val: &serde_json::Value| {
-            counter.push(label);
-            HookResult::Ok
-        }));
+        ctx.on(
+            self.hook,
+            Arc::new(move |_ctx_val: &serde_json::Value| {
+                counter.push(label);
+                HookResult::Ok
+            }),
+        );
     }
 }
 
@@ -72,7 +78,9 @@ impl LlmProvider for ToolThenStopProvider {
         _model: Option<&str>,
         _extra_body: Option<&serde_json::Value>,
     ) -> Result<LlmResponse, AgentError> {
-        let saw_tool = messages.iter().any(|m| m.tool_call_id.as_deref() == Some("tc1"));
+        let saw_tool = messages
+            .iter()
+            .any(|m| m.tool_call_id.as_deref() == Some("tc1"));
         if !saw_tool {
             Ok(LlmResponse {
                 message: Message::assistant_with_tool_calls(
@@ -89,16 +97,17 @@ impl LlmProvider for ToolThenStopProvider {
                 usage: None,
                 model: "test".into(),
                 finish_reason: Some("tool_calls".into()),
-            
-                ..Default::default()})
+
+                ..Default::default()
+            })
         } else {
             Ok(LlmResponse {
                 message: Message::assistant("done"),
                 usage: None,
                 model: "test".into(),
                 finish_reason: Some("stop".into()),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
     }
 

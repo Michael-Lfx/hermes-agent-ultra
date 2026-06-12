@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hermes_core::{Message, MessageRole, ToolCall};
 use lazy_static::lazy_static;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, warn};
 
 use crate::credential_pool::CredentialPool;
@@ -26,11 +26,15 @@ pub const TOOL_CALL_ARGUMENTS_CORRUPTION_MARKER: &str = concat!(
 
 /// Roles accepted on the wire by OpenAI-compatible APIs (Python `AIAgent._VALID_API_ROLES`).
 pub const VALID_API_ROLES: &[&str] = &[
-    "system", "user", "assistant", "tool", "function", "developer",
+    "system",
+    "user",
+    "assistant",
+    "tool",
+    "function",
+    "developer",
 ];
 
-const STUB_TOOL_RESULT_CONTENT: &str =
-    "[Result unavailable — see context summary above]";
+const STUB_TOOL_RESULT_CONTENT: &str = "[Result unavailable — see context summary above]";
 
 const TRAJECTORY_SYSTEM_TEMPLATE: &str = "\
 You are a function calling AI model. You are provided with function signatures within <tools> </tools> XML tags. \
@@ -128,7 +132,10 @@ pub fn convert_to_trajectory_format(
             MessageRole::Assistant => {
                 if let Some(tool_calls) = msg.tool_calls.as_ref().filter(|t| !t.is_empty()) {
                     let mut content = String::new();
-                    if let Some(r) = msg.reasoning_content.as_deref().filter(|s| !s.trim().is_empty())
+                    if let Some(r) = msg
+                        .reasoning_content
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
                     {
                         content.push_str(&format!("<think>\n{r}\n</think>\n"));
                     }
@@ -203,7 +210,10 @@ pub fn convert_to_trajectory_format(
                     }
                 } else {
                     let mut content = String::new();
-                    if let Some(r) = msg.reasoning_content.as_deref().filter(|s| !s.trim().is_empty())
+                    if let Some(r) = msg
+                        .reasoning_content
+                        .as_deref()
+                        .filter(|s| !s.trim().is_empty())
                     {
                         content.push_str(&format!("<think>\n{r}\n</think>\n"));
                     }
@@ -231,10 +241,7 @@ pub fn convert_to_trajectory_format(
 // Tool-call argument sanitization
 // ---------------------------------------------------------------------------
 
-pub fn sanitize_tool_call_arguments(
-    messages: &mut Vec<Message>,
-    session_id: Option<&str>,
-) -> u32 {
+pub fn sanitize_tool_call_arguments(messages: &mut Vec<Message>, session_id: Option<&str>) -> u32 {
     let mut repaired = 0u32;
     let mut message_index = 0usize;
     while message_index < messages.len() {
@@ -624,9 +631,7 @@ pub fn sanitize_api_messages(messages: Vec<Message>) -> Vec<Message> {
 // ---------------------------------------------------------------------------
 
 fn norm_tool_name(s: &str) -> String {
-    s.to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_")
+    s.to_ascii_lowercase().replace('-', "_").replace(' ', "_")
 }
 
 fn camel_to_snake(s: &str) -> String {
@@ -645,7 +650,11 @@ fn strip_tool_suffix(s: &str) -> Option<String> {
     for suffix in ["_tool", "-tool", "tool"] {
         if lc.ends_with(suffix) {
             let trimmed = &s[..s.len().saturating_sub(suffix.len())];
-            return Some(trimmed.trim_end_matches(|c| c == '_' || c == '-').to_string());
+            return Some(
+                trimmed
+                    .trim_end_matches(|c| c == '_' || c == '-')
+                    .to_string(),
+            );
         }
     }
     None
@@ -667,9 +676,7 @@ fn levenshtein_distance(a: &str, b: &str) -> usize {
         curr[0] = i;
         for j in 1..=n {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j] + 1)
-                .min(curr[j - 1] + 1)
-                .min(prev[j - 1] + cost);
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -933,10 +940,7 @@ pub fn extract_api_error_context(
 ) -> Value {
     let mut context = serde_json::Map::new();
     if let Some(body) = body {
-        let payload = body
-            .get("error")
-            .filter(|e| e.is_object())
-            .unwrap_or(body);
+        let payload = body.get("error").filter(|e| e.is_object()).unwrap_or(body);
         if let Some(obj) = payload.as_object() {
             for key in ["code", "type", "error"] {
                 if let Some(reason) = obj.get(key).and_then(|v| v.as_str()) {
@@ -998,9 +1002,18 @@ pub fn extract_api_error_context(
                 };
                 context.insert("reset_at".into(), json!(now + seconds));
             } else if let Some(caps) = EXTRACT_RESETS_IN.captures(msg) {
-                let hours: f64 = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-                let minutes: f64 = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
-                let seconds: f64 = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0.0);
+                let hours: f64 = caps
+                    .get(1)
+                    .and_then(|m| m.as_str().parse().ok())
+                    .unwrap_or(0.0);
+                let minutes: f64 = caps
+                    .get(2)
+                    .and_then(|m| m.as_str().parse().ok())
+                    .unwrap_or(0.0);
+                let seconds: f64 = caps
+                    .get(3)
+                    .and_then(|m| m.as_str().parse().ok())
+                    .unwrap_or(0.0);
                 if hours + minutes + seconds > 0.0 {
                     context.insert(
                         "reset_at".into(),
@@ -1102,7 +1115,10 @@ pub fn dump_api_request_debug(
     if let Some(err) = error {
         payload["error"] = json!({ "message": err });
     }
-    match std::fs::write(&dump_file, serde_json::to_string_pretty(&payload).unwrap_or_default()) {
+    match std::fs::write(
+        &dump_file,
+        serde_json::to_string_pretty(&payload).unwrap_or_default(),
+    ) {
         Ok(()) => Some(dump_file),
         Err(e) => {
             warn!("Failed to dump API request debug payload: {e}");
@@ -1183,13 +1199,11 @@ pub fn recover_with_credential_pool(
         return (false, has_retried_429);
     };
 
-    let effective_reason = classified_reason.unwrap_or_else(|| {
-        match status_code {
-            Some(402) => FailoverReason::Billing,
-            Some(429) => FailoverReason::RateLimit,
-            Some(401) | Some(403) => FailoverReason::Auth,
-            _ => FailoverReason::Unknown,
-        }
+    let effective_reason = classified_reason.unwrap_or_else(|| match status_code {
+        Some(402) => FailoverReason::Billing,
+        Some(429) => FailoverReason::RateLimit,
+        Some(401) | Some(403) => FailoverReason::Auth,
+        _ => FailoverReason::Unknown,
     });
 
     let rotate = || {
@@ -1299,10 +1313,7 @@ mod tests {
 
     #[test]
     fn repair_merges_consecutive_user_messages() {
-        let mut messages = vec![
-            Message::user("first"),
-            Message::user("second"),
-        ];
+        let mut messages = vec![Message::user("first"), Message::user("second")];
         let repairs = repair_message_sequence(&mut messages);
         assert_eq!(repairs, 1);
         assert_eq!(messages.len(), 1);
@@ -1334,10 +1345,7 @@ mod tests {
     fn repair_preserves_valid_tool_chain() {
         let mut messages = vec![
             Message::user("list files"),
-            Message::assistant_with_tool_calls(
-                None,
-                vec![tc("t1", "ls", "{}")],
-            ),
+            Message::assistant_with_tool_calls(None, vec![tc("t1", "ls", "{}")]),
             Message {
                 role: MessageRole::Tool,
                 content: Some("a.txt".into()),
@@ -1376,7 +1384,10 @@ mod tests {
         ];
         let out = drop_thinking_only_and_merge_users(msgs);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].content.as_deref(), Some("help me with X\n\nok continue"));
+        assert_eq!(
+            out[0].content.as_deref(),
+            Some("help me with X\n\nok continue")
+        );
     }
 
     #[test]
@@ -1388,7 +1399,9 @@ mod tests {
         let repaired = sanitize_tool_call_arguments(&mut messages, Some("session-123"));
         assert_eq!(repaired, 1);
         assert_eq!(
-            messages[0].tool_calls.as_ref().unwrap()[0].function.arguments,
+            messages[0].tool_calls.as_ref().unwrap()[0]
+                .function
+                .arguments,
             "{}"
         );
         assert_eq!(messages.len(), 2);
@@ -1431,8 +1444,14 @@ mod tests {
             "read_file".to_string(),
             "patch".to_string(),
         ];
-        assert_eq!(repair_tool_name("TodoTool_tool", &valid).as_deref(), Some("todo"));
-        assert_eq!(repair_tool_name("read-file", &valid).as_deref(), Some("read_file"));
+        assert_eq!(
+            repair_tool_name("TodoTool_tool", &valid).as_deref(),
+            Some("todo")
+        );
+        assert_eq!(
+            repair_tool_name("read-file", &valid).as_deref(),
+            Some("read_file")
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Extract domain POI candidates from session user text.
 
 use hermes_insights::sanitize::{
-    is_weak_domain_key_raw, is_weak_v3_domain_key, normalize_domain_key, sanitize_text, slugify_name,
+    is_weak_domain_key_raw, is_weak_v3_domain_key, normalize_domain_key, sanitize_text,
+    slugify_name,
 };
 use hermes_insights::types::DomainPoiPayload;
 
@@ -366,7 +367,15 @@ fn domain_key_from_signal(signal: &InterestSignal, label: &str) -> String {
 
 fn llm_domain_key_from_tags(tags: &[String]) -> Option<String> {
     const META: &[&str] = &[
-        "domain", "interest", "contextual", "keyword", "path", "lang", "tech", "llm", "rules",
+        "domain",
+        "interest",
+        "contextual",
+        "keyword",
+        "path",
+        "lang",
+        "tech",
+        "llm",
+        "rules",
         "declared",
     ];
     tags.iter().find_map(|tag| {

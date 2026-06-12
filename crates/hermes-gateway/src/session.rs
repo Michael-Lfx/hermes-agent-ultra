@@ -406,13 +406,20 @@ impl SessionManager {
         is_dm: Option<bool>,
     ) -> String {
         if platform.eq_ignore_ascii_case("whatsapp") {
-            let session_root = hermes_config::hermes_home().join("whatsapp").join("session");
-            let canonical_chat =
-                crate::whatsapp_identity::canonical_whatsapp_identifier(chat_id, Some(&session_root));
+            let session_root = hermes_config::hermes_home()
+                .join("whatsapp")
+                .join("session");
+            let canonical_chat = crate::whatsapp_identity::canonical_whatsapp_identifier(
+                chat_id,
+                Some(&session_root),
+            );
             let canonical_user = if user_id.trim().is_empty() {
                 String::new()
             } else {
-                crate::whatsapp_identity::canonical_whatsapp_identifier(user_id, Some(&session_root))
+                crate::whatsapp_identity::canonical_whatsapp_identifier(
+                    user_id,
+                    Some(&session_root),
+                )
             };
             let session_type = match is_dm {
                 Some(true) => SessionType::Dm,

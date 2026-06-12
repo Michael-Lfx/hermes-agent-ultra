@@ -3,7 +3,7 @@
 //! **Scope:** CLI/TUI (`--plan`, `/plan-mode`) and messaging Gateway channels
 //! (WeCom, Weixin, Telegram, etc.) via `/plan-mode` slash commands and text approval replies.
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Turn-level plan mode state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -205,9 +205,21 @@ mod tests {
     #[test]
     fn read_tools_allowed_in_planning() {
         let phase = PlanPhase::Planning;
-        assert!(plan_allows_tool(phase, "read_file", &json!({"path": "a.rs"})));
-        assert!(plan_allows_tool(phase, "search_files", &json!({"pattern": "foo"})));
-        assert!(plan_allows_tool(phase, "web_search", &json!({"query": "x"})));
+        assert!(plan_allows_tool(
+            phase,
+            "read_file",
+            &json!({"path": "a.rs"})
+        ));
+        assert!(plan_allows_tool(
+            phase,
+            "search_files",
+            &json!({"pattern": "foo"})
+        ));
+        assert!(plan_allows_tool(
+            phase,
+            "web_search",
+            &json!({"query": "x"})
+        ));
         assert!(plan_allows_tool(
             phase,
             "memory",
@@ -223,7 +235,11 @@ mod tests {
     #[test]
     fn write_tools_blocked_in_planning() {
         let phase = PlanPhase::Planning;
-        assert!(!plan_allows_tool(phase, "write_file", &json!({"path": "a.rs"})));
+        assert!(!plan_allows_tool(
+            phase,
+            "write_file",
+            &json!({"path": "a.rs"})
+        ));
         assert!(!plan_allows_tool(phase, "patch", &json!({"path": "a.rs"})));
         assert!(!plan_allows_tool(
             phase,
@@ -245,8 +261,16 @@ mod tests {
     #[test]
     fn write_tools_allowed_in_executing() {
         let phase = PlanPhase::Executing;
-        assert!(plan_allows_tool(phase, "write_file", &json!({"path": "a.rs"})));
-        assert!(plan_allows_tool(phase, "terminal", &json!({"command": "ls"})));
+        assert!(plan_allows_tool(
+            phase,
+            "write_file",
+            &json!({"path": "a.rs"})
+        ));
+        assert!(plan_allows_tool(
+            phase,
+            "terminal",
+            &json!({"command": "ls"})
+        ));
     }
 
     #[test]

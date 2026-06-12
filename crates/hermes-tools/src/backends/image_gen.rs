@@ -13,11 +13,11 @@
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::tools::image_gen::ImageGenBackend;
 use hermes_config::managed_gateway::{
-    resolve_managed_tool_gateway, ManagedToolGatewayConfig, ResolveOptions,
+    ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
 };
 use hermes_core::ToolError;
 

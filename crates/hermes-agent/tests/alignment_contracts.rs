@@ -1,8 +1,8 @@
 //! Phase A — contract scenarios (see `message_sanitization` module docs in `hermes-agent`).
 
 use hermes_agent::{
-    leading_system_prompt_for_persist, message_sanitization, AgentConfig, AgentLoop, SessionFlushCursor,
-    SessionPersistence,
+    AgentConfig, AgentLoop, SessionFlushCursor, SessionPersistence,
+    leading_system_prompt_for_persist, message_sanitization,
 };
 use hermes_core::{AgentResult, Message};
 

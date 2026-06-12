@@ -447,10 +447,8 @@ mod tests {
 
     #[test]
     fn format_clarify_prompt_lists_choices() {
-        let text = super::format_clarify_prompt_for_ui(
-            "pick one",
-            &["alpha".into(), "beta".into()],
-        );
+        let text =
+            super::format_clarify_prompt_for_ui("pick one", &["alpha".into(), "beta".into()]);
         assert!(text.contains("1. alpha"));
         assert!(text.contains("2. beta"));
     }

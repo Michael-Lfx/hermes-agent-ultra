@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use hermes_config::{
-    hermes_home, load_user_config_file, save_config_yaml, validate_config, PlatformConfig,
+    PlatformConfig, hermes_home, load_user_config_file, save_config_yaml, validate_config,
 };
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 fn normalize_host(input: Option<&Value>) -> String {
     let raw = input

@@ -19,7 +19,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 
 use hermes_config::managed_gateway::{
-    resolve_managed_tool_gateway, ManagedToolGatewayConfig, ResolveOptions,
+    ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
 };
 use hermes_core::{AgentError, CommandOutput, TerminalBackend};
 
@@ -496,10 +496,11 @@ mod managed_modal_tests {
         let b = ManagedModalBackend::from_env_or_managed().unwrap();
         assert_eq!(b.transport_label(), "managed");
         assert_eq!(b.transport.bearer(), "nous-fallback");
-        assert!(b
-            .transport
-            .endpoint("/v1/workspaces")
-            .ends_with("/v1/workspaces"));
+        assert!(
+            b.transport
+                .endpoint("/v1/workspaces")
+                .ends_with("/v1/workspaces")
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-﻿//! Parse ops-server batch upload responses (supports common API wrappers).
+//! Parse ops-server batch upload responses (supports common API wrappers).
 
 use crate::types::BatchUploadResponse;
 
@@ -9,7 +9,10 @@ use crate::types::BatchUploadResponse;
 /// - Wrapped `{ "data": { ... } }` / `{ "result": { ... } }`
 /// - `{ "code": 0|200, "data": { ... } }` (Flowy-style)
 /// - Empty body on HTTP 200 -> treat all contributions as accepted
-pub fn parse_batch_upload_response(body: &str, contribution_count: usize) -> Result<BatchUploadResponse, String> {
+pub fn parse_batch_upload_response(
+    body: &str,
+    contribution_count: usize,
+) -> Result<BatchUploadResponse, String> {
     let trimmed = body.trim();
     if trimmed.is_empty() {
         return Ok(fallback_success(contribution_count));
@@ -99,11 +102,8 @@ mod tests {
 
     #[test]
     fn direct_shape() {
-        let r = parse_batch_upload_response(
-            r#"{"accepted":2,"duplicates":1,"rejected":[]}"#,
-            3,
-        )
-        .unwrap();
+        let r = parse_batch_upload_response(r#"{"accepted":2,"duplicates":1,"rejected":[]}"#, 3)
+            .unwrap();
         assert_eq!(r.accepted, 2);
         assert_eq!(r.duplicates, 1);
     }

@@ -113,9 +113,7 @@ pub trait PlatformAdapter: Send + Sync {
         text: &str,
         parse_mode: Option<ParseMode>,
     ) -> Result<(), GatewayError> {
-        let _ = self
-            .send_message_with_id(chat_id, text, parse_mode)
-            .await?;
+        let _ = self.send_message_with_id(chat_id, text, parse_mode).await?;
         Ok(())
     }
 

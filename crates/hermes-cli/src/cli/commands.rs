@@ -700,7 +700,10 @@ struct ChatArgs {
     preload_skill: Option<String>,
     #[arg(long)]
     yolo: bool,
-    #[arg(long, help = "Enable plan-then-execute mode (read-only planning until approved)")]
+    #[arg(
+        long,
+        help = "Enable plan-then-execute mode (read-only planning until approved)"
+    )]
     plan: bool,
 }
 

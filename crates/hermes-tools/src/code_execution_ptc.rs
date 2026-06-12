@@ -3,23 +3,23 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
 #[cfg(unix)]
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::process::Command as TokioCommand;
 #[cfg(unix)]
 use tracing::warn;
 
+use crate::ToolRegistry;
 use crate::code_execution_env::SANDBOX_ALLOWED_TOOLS;
 use crate::code_execution_env::prepare_child_env;
-use crate::code_execution_stubs::{generate_hermes_tools_module, RpcTransport};
+use crate::code_execution_stubs::{RpcTransport, generate_hermes_tools_module};
 use crate::dispatch;
 use crate::tools::env_passthrough::is_env_passthrough;
-use crate::ToolRegistry;
 use hermes_core::{FunctionCall, ToolCall, ToolError};
 
 pub const DEFAULT_PTC_TIMEOUT_SECS: u64 = 300;
@@ -64,12 +64,11 @@ impl RpcServer {
     }
 
     fn bind_tcp() -> Result<(Self, String), ToolError> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
-            ToolError::ExecutionFailed(format!("RPC tcp bind failed: {e}"))
-        })?;
-        let port = listener.local_addr().map_err(|e| {
-            ToolError::ExecutionFailed(format!("RPC tcp local_addr: {e}"))
-        })?;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .map_err(|e| ToolError::ExecutionFailed(format!("RPC tcp bind failed: {e}")))?;
+        let port = listener
+            .local_addr()
+            .map_err(|e| ToolError::ExecutionFailed(format!("RPC tcp local_addr: {e}")))?;
         Ok((
             RpcServer::Tcp(listener),
             format!("tcp://127.0.0.1:{}", port.port()),
@@ -84,9 +83,8 @@ impl RpcServer {
         if path.exists() {
             let _ = std::fs::remove_file(&path);
         }
-        let listener = UnixListener::bind(&path).map_err(|e| {
-            ToolError::ExecutionFailed(format!("RPC unix bind failed: {e}"))
-        })?;
+        let listener = UnixListener::bind(&path)
+            .map_err(|e| ToolError::ExecutionFailed(format!("RPC unix bind failed: {e}")))?;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         let env_value = path.display().to_string();
         Ok((RpcServer::Unix(listener, path), env_value))
@@ -101,7 +99,9 @@ impl RpcServer {
         rt: tokio::runtime::Handle,
     ) -> Result<(), String> {
         match self {
-            RpcServer::Tcp(listener) => accept_tcp_loop(listener, registry, allowed, max_calls, stop, rt),
+            RpcServer::Tcp(listener) => {
+                accept_tcp_loop(listener, registry, allowed, max_calls, stop, rt)
+            }
             #[cfg(unix)]
             RpcServer::Unix(listener, path) => {
                 let result = accept_unix_loop(listener, registry, allowed, max_calls, stop, rt);
@@ -113,11 +113,7 @@ impl RpcServer {
 }
 
 fn sandbox_tool_names(registry: &ToolRegistry) -> Vec<String> {
-    let registered: BTreeSet<String> = registry
-        .list_tools()
-        .into_iter()
-        .map(|e| e.name)
-        .collect();
+    let registered: BTreeSet<String> = registry.list_tools().into_iter().map(|e| e.name).collect();
     SANDBOX_ALLOWED_TOOLS
         .iter()
         .filter(|t| registered.iter().any(|r| r == *t))
@@ -235,15 +231,24 @@ fn rpc_read_loop<C: RpcConn>(
                     if line.is_empty() {
                         continue;
                     }
-                    let resp =
-                        handle_rpc_line(&line, &allowed, &mut call_count, max_calls, &registry, &rt);
+                    let resp = handle_rpc_line(
+                        &line,
+                        &allowed,
+                        &mut call_count,
+                        max_calls,
+                        &registry,
+                        &rt,
+                    );
                     stream
                         .write_all(format!("{resp}\n").as_bytes())
                         .map_err(|e| e.to_string())?;
                     stream.flush().map_err(|e| e.to_string())?;
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => return Err(e.to_string()),
@@ -260,9 +265,7 @@ fn accept_tcp_loop(
     stop: Arc<Mutex<bool>>,
     rt: tokio::runtime::Handle,
 ) -> Result<(), String> {
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| e.to_string())?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let start = Instant::now();
     let (stream, _) = loop {
         match listener.accept() {
@@ -292,9 +295,7 @@ fn accept_unix_loop(
     stop: Arc<Mutex<bool>>,
     rt: tokio::runtime::Handle,
 ) -> Result<(), String> {
-    listener
-        .set_nonblocking(true)
-        .map_err(|e| e.to_string())?;
+    listener.set_nonblocking(true).map_err(|e| e.to_string())?;
     let start = Instant::now();
     let (stream, _) = loop {
         match listener.accept() {

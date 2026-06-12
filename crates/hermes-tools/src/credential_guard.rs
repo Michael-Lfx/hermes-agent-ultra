@@ -487,9 +487,11 @@ mod tests {
     fn test_check_read_access_blocked() {
         let guard = CredentialGuard::new();
         assert!(guard.check_read_access(Path::new(".env")).is_err());
-        assert!(guard
-            .check_read_access(Path::new("/home/.ssh/id_rsa"))
-            .is_err());
+        assert!(
+            guard
+                .check_read_access(Path::new("/home/.ssh/id_rsa"))
+                .is_err()
+        );
     }
 
     #[test]
@@ -502,42 +504,54 @@ mod tests {
     #[test]
     fn test_check_write_access_blocked_path() {
         let guard = CredentialGuard::new();
-        assert!(guard
-            .check_write_access(Path::new(".env"), "hello")
-            .is_err());
-        assert!(guard
-            .check_write_access(Path::new("/etc/passwd"), "root:x:0:0")
-            .is_err());
+        assert!(
+            guard
+                .check_write_access(Path::new(".env"), "hello")
+                .is_err()
+        );
+        assert!(
+            guard
+                .check_write_access(Path::new("/etc/passwd"), "root:x:0:0")
+                .is_err()
+        );
     }
 
     #[test]
     fn test_check_write_access_blocked_content() {
         let guard = CredentialGuard::new();
         // Contains an API key pattern
-        assert!(guard
-            .check_write_access(
-                Path::new("config.txt"),
-                "OPENAI_API_KEY=sk-abc123def456ghi789jkl012mno345"
-            )
-            .is_err());
+        assert!(
+            guard
+                .check_write_access(
+                    Path::new("config.txt"),
+                    "OPENAI_API_KEY=sk-abc123def456ghi789jkl012mno345"
+                )
+                .is_err()
+        );
         // Contains a private key
-        assert!(guard
-            .check_write_access(
-                Path::new("notes.txt"),
-                "-----BEGIN PRIVATE KEY-----\nMIIEvgABCD\n-----END PRIVATE KEY-----"
-            )
-            .is_err());
+        assert!(
+            guard
+                .check_write_access(
+                    Path::new("notes.txt"),
+                    "-----BEGIN PRIVATE KEY-----\nMIIEvgABCD\n-----END PRIVATE KEY-----"
+                )
+                .is_err()
+        );
     }
 
     #[test]
     fn test_check_write_access_allowed() {
         let guard = CredentialGuard::new();
-        assert!(guard
-            .check_write_access(Path::new("output.txt"), "Hello world")
-            .is_ok());
-        assert!(guard
-            .check_write_access(Path::new("main.rs"), "fn main() {}")
-            .is_ok());
+        assert!(
+            guard
+                .check_write_access(Path::new("output.txt"), "Hello world")
+                .is_ok()
+        );
+        assert!(
+            guard
+                .check_write_access(Path::new("main.rs"), "fn main() {}")
+                .is_ok()
+        );
     }
 
     #[test]
@@ -546,12 +560,14 @@ mod tests {
         // Path check still works
         assert!(guard.check_read_access(Path::new(".env")).is_err());
         // But content scanning is disabled
-        assert!(guard
-            .check_write_access(
-                Path::new("output.txt"),
-                "OPENAI_API_KEY=sk-abc123def456ghi789jkl012mno345"
-            )
-            .is_ok());
+        assert!(
+            guard
+                .check_write_access(
+                    Path::new("output.txt"),
+                    "OPENAI_API_KEY=sk-abc123def456ghi789jkl012mno345"
+                )
+                .is_ok()
+        );
     }
 
     #[test]

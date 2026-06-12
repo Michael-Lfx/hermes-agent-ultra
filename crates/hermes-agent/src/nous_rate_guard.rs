@@ -85,10 +85,7 @@ pub fn record_nous_rate_limit(
         recorded_at: now,
         reset_seconds: reset_at - now,
     };
-    let tmp = dir.join(format!(
-        "nous-{}.tmp",
-        std::process::id()
-    ));
+    let tmp = dir.join(format!("nous-{}.tmp", std::process::id()));
     if let Ok(mut f) = fs::File::create(&tmp) {
         if serde_json::to_writer(&mut f, &state).is_ok() {
             let _ = f.flush();

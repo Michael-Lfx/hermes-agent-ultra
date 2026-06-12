@@ -20,7 +20,14 @@ static V3_TAXONOMY_CODE_RE: LazyLock<Regex> =
 const VALID_DURATION_BANDS: &[&str] = &["0-5m", "5-15m", "15-30m", "30m+"];
 
 const POI_BLOCKLIST: &[&str] = &[
-    "user", "assistant", "system", "memory", "interest", "config", "session", "prompt",
+    "user",
+    "assistant",
+    "system",
+    "memory",
+    "interest",
+    "config",
+    "session",
+    "prompt",
 ];
 
 /// Local-only id (`interest:<hex>`) — meaningless to ops without client DB.
@@ -48,7 +55,9 @@ pub fn sanitize_text(text: &str) -> String {
     let redactor = Redactor::new();
     let mut out = redactor.redact(text);
     out = HOME_PATH_RE.replace_all(&out, "{{PATH}}").to_string();
-    out = GIT_REMOTE_RE.replace_all(&out, "{{GIT_REMOTE}}").to_string();
+    out = GIT_REMOTE_RE
+        .replace_all(&out, "{{GIT_REMOTE}}")
+        .to_string();
     out = ABS_PATH_RE.replace_all(&out, " {{PATH}} ").to_string();
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -400,13 +409,7 @@ pub fn slugify_name(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
     let slug: String = lower
         .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     let collapsed = slug
         .split('-')
@@ -444,8 +447,14 @@ mod tests {
 
     #[test]
     fn persistable_local_rejects_keyword_and_path() {
-        assert!(!is_persistable_local_poi("keyword:database", "keyword: database"));
-        assert!(!is_persistable_local_poi("path:crates/foo", "path: crates/foo"));
+        assert!(!is_persistable_local_poi(
+            "keyword:database",
+            "keyword: database"
+        ));
+        assert!(!is_persistable_local_poi(
+            "path:crates/foo",
+            "path: crates/foo"
+        ));
         assert!(is_persistable_local_poi("lang:rust", "language: rust"));
     }
 
@@ -471,7 +480,9 @@ mod tests {
             normalize_domain_key("finance.reconciliation"),
             "finance.reconciliation"
         );
-        assert!(is_valid_v3_domain_key(&normalize_domain_key("topic:session-7852986e")));
+        assert!(is_valid_v3_domain_key(&normalize_domain_key(
+            "topic:session-7852986e"
+        )));
     }
 
     #[test]

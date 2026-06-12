@@ -1169,12 +1169,14 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].messages.len(), 2);
         assert_eq!(result[0].outcome, TrajectoryOutcome::Success);
-        assert!(result[0]
-            .messages
-            .get(1)
-            .and_then(|m| m.content.as_deref())
-            .unwrap_or("")
-            .contains("Baseline rollout generated"));
+        assert!(
+            result[0]
+                .messages
+                .get(1)
+                .and_then(|m| m.content.as_deref())
+                .unwrap_or("")
+                .contains("Baseline rollout generated")
+        );
     }
 
     #[test]
@@ -1255,9 +1257,10 @@ mod tests {
         assert!(names.contains(&"tinker"));
         assert!(names.contains(&"atropos"));
         assert!(names.contains(&"custom"));
-        assert!(envs
-            .iter()
-            .all(|e| e.config_schema.get("type").and_then(|v| v.as_str()) == Some("object")));
+        assert!(
+            envs.iter()
+                .all(|e| e.config_schema.get("type").and_then(|v| v.as_str()) == Some("object"))
+        );
     }
 
     #[test]
@@ -1346,10 +1349,12 @@ mod tests {
         assert_eq!(report.trajectories[0].prompt_index, 2);
         assert_eq!(report.trajectories[0].toolsets_used, ["rl_training"]);
         assert_eq!(report.checkpoint.completed_prompts, [0, 1, 2]);
-        assert!(report
-            .checkpoint
-            .completed_prompt_texts
-            .contains(&"Verify the behavior".to_string()));
+        assert!(
+            report
+                .checkpoint
+                .completed_prompt_texts
+                .contains(&"Verify the behavior".to_string())
+        );
         assert_eq!(
             report.checkpoint.batch_stats.get("0").unwrap(),
             &BatchCheckpointStats {

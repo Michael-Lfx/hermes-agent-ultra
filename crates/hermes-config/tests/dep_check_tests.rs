@@ -4,7 +4,7 @@
 //! as a *separate* binary — independent of any `#[cfg(test)]` code in sibling
 //! modules that may have pre-existing compilation issues.
 
-use hermes_config::dep_check::{all_deps, description, is_available, RuntimeDep};
+use hermes_config::dep_check::{RuntimeDep, all_deps, description, is_available};
 
 #[test]
 fn description_matches_python() {
@@ -16,8 +16,14 @@ fn description_matches_python() {
         description(RuntimeDep::Browser),
         "Browser engine (Chromium, for web browsing tools)"
     );
-    assert_eq!(description(RuntimeDep::Ripgrep), "ripgrep (fast file search)");
-    assert_eq!(description(RuntimeDep::Ffmpeg), "ffmpeg (TTS voice messages)");
+    assert_eq!(
+        description(RuntimeDep::Ripgrep),
+        "ripgrep (fast file search)"
+    );
+    assert_eq!(
+        description(RuntimeDep::Ffmpeg),
+        "ffmpeg (TTS voice messages)"
+    );
 }
 
 #[test]

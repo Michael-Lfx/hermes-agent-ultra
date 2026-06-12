@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub const SNAPSHOT_SUMMARIZE_THRESHOLD: usize = 8000;
 

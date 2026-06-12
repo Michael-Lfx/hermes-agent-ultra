@@ -22,7 +22,8 @@ impl StateDb {
             std::fs::create_dir_all(parent)
                 .map_err(|e| StateDbError(format!("create state db dir: {e}")))?;
         }
-        let conn = Connection::open(&path).map_err(|e| StateDbError(format!("open state db: {e}")))?;
+        let conn =
+            Connection::open(&path).map_err(|e| StateDbError(format!("open state db: {e}")))?;
         conn.busy_timeout(Duration::from_secs(1))
             .map_err(|e| StateDbError(format!("busy_timeout: {e}")))?;
         let initialized: bool = conn

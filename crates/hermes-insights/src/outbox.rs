@@ -3,10 +3,10 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::types::ContributionEnvelope;
-use crate::types::{work_package_id, ContributionType};
+use crate::types::{ContributionType, work_package_id};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutboxStatus {
@@ -126,8 +126,11 @@ impl ContributionOutbox {
         }
         let conn = self.conn.lock().map_err(|e| e.to_string())?;
         for id in ids {
-            conn.execute("DELETE FROM contributions WHERE id = ?1", rusqlite::params![id])
-                .map_err(|e| e.to_string())?;
+            conn.execute(
+                "DELETE FROM contributions WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .map_err(|e| e.to_string())?;
         }
         Ok(())
     }

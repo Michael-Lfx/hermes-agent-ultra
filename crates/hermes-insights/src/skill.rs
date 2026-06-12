@@ -14,8 +14,7 @@ use crate::types::{
     WorkPackageSkillPayload, sha256_hex,
 };
 
-static HEADING_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.+)$").unwrap());
+static HEADING_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^#{1,6}\s+(.+)$").unwrap());
 static ORDERED_STEP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*\d+\.\s+").unwrap());
 
@@ -26,8 +25,9 @@ const MAX_REFERENCE_BYTES: usize = 8 * 1024;
 const ALLOWED_SKILL_SUBDIRS: &[&str] = &["references", "templates", "scripts", "assets"];
 
 /// Text-like extensions uploaded after sanitization; binary assets (images, fonts) are skipped.
-const UPLOADABLE_TEXT_EXTENSIONS: &[&str] =
-    &["md", "txt", "markdown", "py", "yaml", "yml", "json", "tex", "sh"];
+const UPLOADABLE_TEXT_EXTENSIONS: &[&str] = &[
+    "md", "txt", "markdown", "py", "yaml", "yml", "json", "tex", "sh",
+];
 
 #[derive(Debug, Clone, Copy)]
 pub enum SkillChangeKind {
@@ -510,7 +510,10 @@ mod tests {
         let opts = SkillPatternOptions::from_change_kind(SkillChangeKind::Agent);
         let pattern = build_work_package_skill(&skill_dir, &skills_root, &opts).unwrap();
         assert_eq!(pattern.references_redacted.len(), 1);
-        assert_eq!(pattern.references_redacted[0].relative_path, "references/guide.md");
+        assert_eq!(
+            pattern.references_redacted[0].relative_path,
+            "references/guide.md"
+        );
     }
 
     #[test]
@@ -574,7 +577,10 @@ mod tests {
         let opts = SkillPatternOptions::from_change_kind(SkillChangeKind::Agent);
         let pattern = build_work_package_skill(&skill_dir, &skills_root, &opts).unwrap();
         assert_eq!(pattern.references_redacted.len(), 1);
-        assert_eq!(pattern.references_redacted[0].relative_path, "assets/readme.txt");
+        assert_eq!(
+            pattern.references_redacted[0].relative_path,
+            "assets/readme.txt"
+        );
     }
 
     #[test]

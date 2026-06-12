@@ -53,13 +53,13 @@ fn python_test_suite_manifest_covers_all_backlog_rows_and_references_real_tests(
         "manifest paths must be unique"
     );
 
-    let required_prefixes: BTreeSet<String> = manifest["summary"]
-        ["required_backlog_classification_paths"]
-        .as_array()
-        .expect("required_backlog_classification_paths should be array")
-        .iter()
-        .map(|value| value.as_str().expect("classification path").to_string())
-        .collect();
+    let required_prefixes: BTreeSet<String> =
+        manifest["summary"]["required_backlog_classification_paths"]
+            .as_array()
+            .expect("required_backlog_classification_paths should be array")
+            .iter()
+            .map(|value| value.as_str().expect("classification path").to_string())
+            .collect();
     assert_eq!(
         required_prefixes,
         BTreeSet::from_iter([
@@ -134,7 +134,9 @@ fn python_suite_top_level_install_packaging_contracts_are_rust_owned() {
     assert!(install.contains("INSTALL_LEGACY_ALIAS=\"${INSTALL_LEGACY_ALIAS:-false}\""));
     assert!(install.contains("-u PYTHONHOME"));
     assert!(install.contains("-u PYTHONPATH"));
-    assert!(install.contains("cargo build --release -p hermes-cli --bin \"${CANONICAL_BIN_NAME}\""));
+    assert!(
+        install.contains("cargo build --release -p hermes-cli --bin \"${CANONICAL_BIN_NAME}\"")
+    );
     let legacy_gate = install
         .find("truthy_env \"${INSTALL_LEGACY_ALIAS}\"")
         .expect("legacy alias gate");

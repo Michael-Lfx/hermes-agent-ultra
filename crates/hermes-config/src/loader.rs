@@ -621,10 +621,9 @@ fn parse_positive_timeout_seconds(key: &str, value: &str) -> Result<f64, ConfigE
 fn normalize_provider_api_mode(value: &str) -> Result<String, ConfigError> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
-        "chat_completions"
-        | "anthropic_messages"
-        | "codex_responses"
-        | "bedrock_converse" => Ok(normalized),
+        "chat_completions" | "anthropic_messages" | "codex_responses" | "bedrock_converse" => {
+            Ok(normalized)
+        }
         _ => Err(ConfigError::ValidationError(format!(
             "llm provider api_mode must be one of chat_completions, anthropic_messages, codex_responses, bedrock_converse: {}",
             value
@@ -1023,8 +1022,10 @@ fn apply_user_config_patch_dotted(
             config.insights.contribution.resolution_mode = value.trim().to_string();
         }
         ["insights", "contribution", "resolution_llm_on_session_end"] => {
-            config.insights.contribution.resolution_llm_on_session_end =
-                parse_bool_config_value(value, "insights.contribution.resolution_llm_on_session_end")?;
+            config.insights.contribution.resolution_llm_on_session_end = parse_bool_config_value(
+                value,
+                "insights.contribution.resolution_llm_on_session_end",
+            )?;
         }
         ["insights", "contribution", "skill_min_age_hours"] => {
             config.insights.contribution.skill_min_age_hours = value.parse().map_err(|_| {
@@ -1315,11 +1316,13 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
         ["insights", "contribution", "enabled"] => {
             Ok(config.insights.contribution.enabled.to_string())
         }
-        ["insights", "contribution", "endpoint"] => Ok(if config.insights.contribution.endpoint.is_empty() {
-            "(not set)".to_string()
-        } else {
-            config.insights.contribution.endpoint.clone()
-        }),
+        ["insights", "contribution", "endpoint"] => {
+            Ok(if config.insights.contribution.endpoint.is_empty() {
+                "(not set)".to_string()
+            } else {
+                config.insights.contribution.endpoint.clone()
+            })
+        }
         ["insights", "contribution", "upload_interests"] => {
             Ok(config.insights.contribution.upload_interests.to_string())
         }
@@ -1338,25 +1341,27 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
         ["insights", "contribution", "exclude_verdicts"] => {
             Ok(config.insights.contribution.exclude_verdicts.join(","))
         }
-        ["insights", "contribution", "require_skill_binding"] => {
-            Ok(config.insights.contribution.require_skill_binding.to_string())
-        }
+        ["insights", "contribution", "require_skill_binding"] => Ok(config
+            .insights
+            .contribution
+            .require_skill_binding
+            .to_string()),
         ["insights", "contribution", "min_work_turns"] => {
             Ok(config.insights.contribution.min_work_turns.to_string())
         }
         ["insights", "contribution", "resolution_mode"] => {
             Ok(config.insights.contribution.resolution_mode.clone())
         }
-        ["insights", "contribution", "resolution_llm_on_session_end"] => {
-            Ok(config
-                .insights
-                .contribution
-                .resolution_llm_on_session_end
-                .to_string())
-        }
-        ["insights", "contribution", "upload_skills_refresh"] => {
-            Ok(config.insights.contribution.upload_skills_refresh.to_string())
-        }
+        ["insights", "contribution", "resolution_llm_on_session_end"] => Ok(config
+            .insights
+            .contribution
+            .resolution_llm_on_session_end
+            .to_string()),
+        ["insights", "contribution", "upload_skills_refresh"] => Ok(config
+            .insights
+            .contribution
+            .upload_skills_refresh
+            .to_string()),
         ["insights", "contribution", "redacted_body"] => {
             Ok(config.insights.contribution.redacted_body.to_string())
         }
@@ -2612,11 +2617,13 @@ mod tests {
         let loaded: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(loaded, json!({"key": "value", "nested": {"a": 1}}));
-        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| entry
-            .unwrap()
-            .file_name()
-            .to_string_lossy()
-            .contains(".tmp.")));
+        assert!(!std::fs::read_dir(dir.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp.")
+        }));
     }
 
     #[test]
@@ -2723,9 +2730,11 @@ llm_providers:
         assert!(result.wrote_env());
         assert!(!result.wrote_config());
         assert_eq!(result.env_key.as_deref(), Some("OPENAI_API_KEY"));
-        assert!(std::fs::read_to_string(dir.path().join(".env"))
-            .unwrap()
-            .contains("OPENAI_API_KEY=sk-test"));
+        assert!(
+            std::fs::read_to_string(dir.path().join(".env"))
+                .unwrap()
+                .contains("OPENAI_API_KEY=sk-test")
+        );
         assert!(!dir.path().join("config.yaml").exists());
 
         // SAFETY: test process serializes env mutation via ENV_LOCK.
@@ -3258,9 +3267,11 @@ llm_providers:
             "https://ops.example.com/v1/insights/batch"
         );
         assert!(c.insights.contribution.enabled);
-        assert!(user_config_field_display(&c, "llm.openai.api_key")
-            .unwrap()
-            .starts_with("***"));
+        assert!(
+            user_config_field_display(&c, "llm.openai.api_key")
+                .unwrap()
+                .starts_with("***")
+        );
         assert_eq!(
             user_config_field_display(&c, "llm.openai.command").unwrap(),
             "copilot-language-server"

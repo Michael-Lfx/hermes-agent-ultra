@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use regex::Regex;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::adapter::{BenchmarkAdapter, BenchmarkMetadata, TaskSpec};
 use crate::error::{EvalError, EvalResult};
@@ -72,7 +72,7 @@ impl ConfiguredBenchmarkAdapter {
                 return Err(EvalError::DatasetLoad(format!(
                     "unsupported benchmark file extension for {} (expected .toml or .json)",
                     path.display()
-                )))
+                )));
             }
         };
         if spec.tasks.is_empty() {

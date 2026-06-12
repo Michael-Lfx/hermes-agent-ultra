@@ -43,7 +43,12 @@ pub fn extract_media(content: &str) -> (Vec<(String, bool)>, String) {
             }
         }
         path = path
-            .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '.' | ';' | ':' | ')' | '}' | ']'))
+            .trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '`' | '"' | '\'' | ',' | '.' | ';' | ':' | ')' | '}' | ']'
+                )
+            })
             .to_string();
         if path.is_empty() {
             continue;
@@ -72,8 +77,7 @@ mod tests {
 
     #[test]
     fn extracts_media_tag_and_strips_from_message() {
-        let (media, cleaned) =
-            extract_media("Hello\nMEDIA:/workspace/photo.png\nWorld");
+        let (media, cleaned) = extract_media("Hello\nMEDIA:/workspace/photo.png\nWorld");
         assert_eq!(media.len(), 1);
         assert!(media[0].0.ends_with("photo.png") || media[0].0.contains("photo.png"));
         assert!(!cleaned.contains("MEDIA:"));
@@ -97,8 +101,7 @@ mod tests {
 
     #[test]
     fn extracts_windows_drive_path() {
-        let (media, cleaned) =
-            extract_media("MEDIA:C:/code/flowy/hermes-agent-ultra/AGENTS.md");
+        let (media, cleaned) = extract_media("MEDIA:C:/code/flowy/hermes-agent-ultra/AGENTS.md");
         assert_eq!(media.len(), 1);
         assert!(media[0].0.contains("AGENTS.md"));
         assert!(cleaned.is_empty());

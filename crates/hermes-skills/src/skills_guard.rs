@@ -16,11 +16,7 @@ use walkdir::WalkDir;
 // Trust policy (mirrors Python INSTALL_POLICY / TRUSTED_REPOS)
 // ---------------------------------------------------------------------------
 
-pub const TRUSTED_REPOS: &[&str] = &[
-    "openai/skills",
-    "anthropics/skills",
-    "huggingface/skills",
-];
+pub const TRUSTED_REPOS: &[&str] = &["openai/skills", "anthropics/skills", "huggingface/skills"];
 
 /// Install decision aligned with Python `(allowed, reason)` where `allowed` may be `None`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,14 +83,13 @@ const SCANNABLE_EXTENSIONS: &[&str] = &[
 ];
 
 const SUSPICIOUS_BINARY_EXTENSIONS: &[&str] = &[
-    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".com", ".msi", ".dmg", ".app", ".deb",
-    ".rpm",
+    ".exe", ".dll", ".so", ".dylib", ".bin", ".dat", ".com", ".msi", ".dmg", ".app", ".deb", ".rpm",
 ];
 
 const INVISIBLE_CHARS: &[char] = &[
-    '\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2062}', '\u{2063}', '\u{2064}',
-    '\u{feff}', '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}',
-    '\u{2067}', '\u{2068}', '\u{2069}',
+    '\u{200b}', '\u{200c}', '\u{200d}', '\u{2060}', '\u{2062}', '\u{2063}', '\u{2064}', '\u{feff}',
+    '\u{202a}', '\u{202b}', '\u{202c}', '\u{202d}', '\u{202e}', '\u{2066}', '\u{2067}', '\u{2068}',
+    '\u{2069}',
 ];
 
 fn compiled_patterns() -> &'static [CompiledThreatPattern] {
@@ -119,12 +114,7 @@ fn compiled_patterns() -> &'static [CompiledThreatPattern] {
 /// Map a source identifier to trust level (Python `_resolve_trust_level`).
 pub fn resolve_trust_level(source: &str) -> String {
     let mut normalized = source.trim();
-    for prefix in [
-        "skills-sh/",
-        "skills.sh/",
-        "skils-sh/",
-        "skils.sh/",
-    ] {
+    for prefix in ["skills-sh/", "skills.sh/", "skils-sh/", "skils.sh/"] {
         if let Some(rest) = normalized.strip_prefix(prefix) {
             normalized = rest;
             break;
@@ -385,7 +375,13 @@ pub fn content_hash(skill_path: &Path) -> String {
     format!("sha256:{hex}").chars().take(23).collect()
 }
 
-fn build_summary(name: &str, source: &str, trust: &str, verdict: &str, findings: &[Finding]) -> String {
+fn build_summary(
+    name: &str,
+    source: &str,
+    trust: &str,
+    verdict: &str,
+    findings: &[Finding],
+) -> String {
     if findings.is_empty() {
         return format!("{name}: clean scan, no threats detected");
     }
@@ -422,7 +418,9 @@ fn check_structure(skill_dir: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
     let mut file_count = 0usize;
     let mut total_size = 0u64;
-    let skill_canon = skill_dir.canonicalize().unwrap_or_else(|_| skill_dir.to_path_buf());
+    let skill_canon = skill_dir
+        .canonicalize()
+        .unwrap_or_else(|_| skill_dir.to_path_buf());
 
     for entry in WalkDir::new(skill_dir).into_iter().filter_map(|e| e.ok()) {
         let f = entry.path();
@@ -477,10 +475,7 @@ fn check_structure(skill_dir: &Path) -> Vec<Finding> {
                 file: rel.clone(),
                 line: 0,
                 match_text: format!("{}KB", size / 1024),
-                description: format!(
-                    "file is {}KB (limit: {MAX_SINGLE_FILE_KB}KB)",
-                    size / 1024
-                ),
+                description: format!("file is {}KB (limit: {MAX_SINGLE_FILE_KB}KB)", size / 1024),
             });
         }
         if let Some(ext) = f.extension().and_then(|e| e.to_str()) {
@@ -493,7 +488,9 @@ fn check_structure(skill_dir: &Path) -> Vec<Finding> {
                     file: rel.clone(),
                     line: 0,
                     match_text: format!("binary: {lower}"),
-                    description: format!("binary/executable file ({lower}) should not be in a skill"),
+                    description: format!(
+                        "binary/executable file ({lower}) should not be in a skill"
+                    ),
                 });
             }
         }
@@ -512,8 +509,7 @@ fn check_structure(skill_dir: &Path) -> Vec<Finding> {
                     line: 0,
                     match_text: "executable bit set".into(),
                     description:
-                        "file has executable permission but is not a recognized script type"
-                            .into(),
+                        "file has executable permission but is not a recognized script type".into(),
                 });
             }
         }

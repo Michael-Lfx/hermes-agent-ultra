@@ -1,7 +1,7 @@
+use hermes_tools::prepare_child_env;
 use hermes_tools::tools::env_passthrough::{
     clear_env_passthrough, get_all_passthrough, is_env_passthrough, register_env_passthrough,
 };
-use hermes_tools::prepare_child_env;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
@@ -87,12 +87,8 @@ fn registered_names_are_thread_scoped() {
 fn provider_credential_floor_is_visible_to_callers() {
     let _guard = reset();
 
-    assert!(hermes_tools::tools::env_passthrough::is_hermes_provider_credential(
-        "OPENAI_API_KEY"
-    ));
-    assert!(!hermes_tools::tools::env_passthrough::is_hermes_provider_credential(
-        "TENOR_API_KEY"
-    ));
+    assert!(hermes_tools::tools::env_passthrough::is_hermes_provider_credential("OPENAI_API_KEY"));
+    assert!(!hermes_tools::tools::env_passthrough::is_hermes_provider_credential("TENOR_API_KEY"));
 }
 
 #[test]

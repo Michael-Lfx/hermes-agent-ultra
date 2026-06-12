@@ -35,7 +35,10 @@ pub fn classify_attachment(content_type: Option<&str>, filename: &str) -> Attach
     {
         return AttachmentMediaKind::Image;
     }
-    if lower.ends_with(".ogg") || lower.ends_with(".opus") || lower.ends_with(".mp3") || lower.ends_with(".wav")
+    if lower.ends_with(".ogg")
+        || lower.ends_with(".opus")
+        || lower.ends_with(".mp3")
+        || lower.ends_with(".wav")
     {
         return AttachmentMediaKind::Audio;
     }
@@ -81,9 +84,8 @@ pub async fn download_attachment_bytes(
     let mut stream = resp.bytes_stream();
     use futures::StreamExt;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| {
-            GatewayError::ConnectionFailed(format!("Discord attachment read: {e}"))
-        })?;
+        let chunk = chunk
+            .map_err(|e| GatewayError::ConnectionFailed(format!("Discord attachment read: {e}")))?;
         if max_bytes > 0 && buf.len() as u64 + chunk.len() as u64 > max_bytes {
             return Err(GatewayError::ConnectionFailed(format!(
                 "Discord attachment exceeds max size ({max_bytes} bytes)"
@@ -94,7 +96,11 @@ pub async fn download_attachment_bytes(
     Ok(buf)
 }
 
-async fn download_bytes(inner: &DiscordInner, url: &str, max_bytes: u64) -> Result<Vec<u8>, GatewayError> {
+async fn download_bytes(
+    inner: &DiscordInner,
+    url: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, GatewayError> {
     download_attachment_bytes(&inner.client, &inner.auth_header(), url, max_bytes).await
 }
 

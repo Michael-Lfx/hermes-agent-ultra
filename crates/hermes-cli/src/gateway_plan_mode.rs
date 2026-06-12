@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use hermes_agent::agent_loop::ToolRegistry as AgentToolRegistry;
-use hermes_gateway::{Gateway, GatewayError};
 use hermes_gateway::gateway::IncomingMessage;
+use hermes_gateway::{Gateway, GatewayError};
 use hermes_tools::PlanPhase;
 
 use hermes_cli::app::bridge_tool_registry;
@@ -36,18 +36,18 @@ async fn gateway_agent_for_session(
     session_key: &str,
     deps: &GatewayHandlerDeps,
 ) -> Result<Arc<tokio::sync::Mutex<hermes_agent::AgentLoop>>, GatewayError> {
-    let ctx = gateway.runtime_context_for_route(incoming, session_key).await;
+    let ctx = gateway
+        .runtime_context_for_route(incoming, session_key)
+        .await;
     let agent_tools: Arc<AgentToolRegistry> = Arc::new(bridge_tool_registry(&deps.runtime_tools));
-    Ok(
-        get_or_build_gateway_cached_agent(
-            &deps.gateway_agent_cache,
-            deps.config.as_ref(),
-            &ctx,
-            agent_tools,
-            deps.runtime_tools.clone(),
-        )
-        .await,
+    Ok(get_or_build_gateway_cached_agent(
+        &deps.gateway_agent_cache,
+        deps.config.as_ref(),
+        &ctx,
+        agent_tools,
+        deps.runtime_tools.clone(),
     )
+    .await)
 }
 
 /// Handle `/plan-mode` from a messaging channel (WeCom, Weixin, etc.).
@@ -170,4 +170,3 @@ pub async fn execute_plan_mode_slash_command(
     }
     Ok(())
 }
-

@@ -18,13 +18,13 @@ pub use session_store::{
     clear_pairing_session, ensure_session_dir, has_legacy_baileys_session, is_paired,
     legacy_creds_path, mark_paired, session_db_path,
 };
-pub use text_batch::{batch_key, TextBatchState};
+pub use text_batch::{TextBatchState, batch_key};
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tracing::{info, warn};
 
 use hermes_core::errors::GatewayError;
@@ -97,8 +97,7 @@ impl WhatsAppAdapter {
     }
 
     async fn connect(&self) -> Result<(), GatewayError> {
-        if self.inner.client.is_connected().await
-            && self.inner.inbound_task.lock().await.is_some()
+        if self.inner.client.is_connected().await && self.inner.inbound_task.lock().await.is_some()
         {
             return Ok(());
         }
@@ -124,9 +123,7 @@ impl WhatsAppAdapter {
                 "WhatsApp enabled but not paired — run `hermes whatsapp` to pair.",
             )
             .await;
-            return Err(GatewayError::ConnectionFailed(
-                "WhatsApp not paired".into(),
-            ));
+            return Err(GatewayError::ConnectionFailed("WhatsApp not paired".into()));
         }
 
         let (wa_tx, mut wa_rx) = mpsc::unbounded_channel();
@@ -229,9 +226,7 @@ async fn dispatch_incoming(inner: &Arc<WhatsAppInner>, incoming: IncomingMessage
                         "[whatsapp] Failed to hand off to gateway router (preview={preview:?}): {e}"
                     );
                 } else {
-                    println!(
-                        "[whatsapp] Handed off to gateway router (preview={preview:?})"
-                    );
+                    println!("[whatsapp] Handed off to gateway router (preview={preview:?})");
                 }
             }
         })
@@ -260,9 +255,7 @@ impl WhatsAppAdapter {
             }
         }
         if outbound_chat != chat_id {
-            println!(
-                "[whatsapp] Outbound chat resolved {chat_id} → {outbound_chat}"
-            );
+            println!("[whatsapp] Outbound chat resolved {chat_id} → {outbound_chat}");
         }
         let reply_to = if self.inner.config.whatsapp_mode() == "self-chat" {
             None

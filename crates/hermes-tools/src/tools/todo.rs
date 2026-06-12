@@ -13,9 +13,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 // ---------------------------------------------------------------------------
 // Public types shared with the backend
@@ -33,8 +33,7 @@ pub struct TodoItem {
 // Constants / helpers — pub(crate) so backends/todo.rs can reuse them
 // ---------------------------------------------------------------------------
 
-pub(crate) const VALID_STATUSES: &[&str] =
-    &["pending", "in_progress", "completed", "cancelled"];
+pub(crate) const VALID_STATUSES: &[&str] = &["pending", "in_progress", "completed", "cancelled"];
 
 /// Validate and normalise a `TodoItem`. Mirrors Python `TodoStore._validate`.
 ///
@@ -59,7 +58,11 @@ pub(crate) fn validate_item(item: TodoItem) -> TodoItem {
         "pending".to_string()
     };
 
-    TodoItem { id, content, status }
+    TodoItem {
+        id,
+        content,
+        status,
+    }
 }
 
 /// Deduplicate by id, keeping the **last** occurrence at its sorted-index position.
@@ -85,7 +88,11 @@ pub(crate) fn dedupe_by_id(todos: Vec<TodoItem>) -> Vec<TodoItem> {
 #[inline]
 fn norm_id(id: &str) -> String {
     let t = id.trim();
-    if t.is_empty() { "?".to_string() } else { t.to_string() }
+    if t.is_empty() {
+        "?".to_string()
+    } else {
+        t.to_string()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +119,11 @@ pub trait TodoBackend: Send + Sync {
 /// Parse a raw JSON value into a `TodoItem` with sensible defaults.
 fn parse_raw_item(v: &Value) -> TodoItem {
     TodoItem {
-        id: v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        id: v
+            .get("id")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string(),
         content: v
             .get("content")
             .and_then(|x| x.as_str())
@@ -174,9 +185,9 @@ impl ToolHandler for TodoHandler {
             // todos absent or explicitly null → read mode
             None | Some(Value::Null) => self.backend.read().await?,
             Some(val) => {
-                let arr = val.as_array().ok_or_else(|| {
-                    ToolError::InvalidParams("'todos' must be an array".into())
-                })?;
+                let arr = val
+                    .as_array()
+                    .ok_or_else(|| ToolError::InvalidParams("'todos' must be an array".into()))?;
                 let todos: Vec<TodoItem> = arr.iter().map(parse_raw_item).collect();
                 if merge {
                     self.backend.merge_items(todos).await?
@@ -268,7 +279,9 @@ mod tests {
 
     impl MockTodoBackend {
         fn new() -> Self {
-            Self { items: Mutex::new(Vec::new()) }
+            Self {
+                items: Mutex::new(Vec::new()),
+            }
         }
     }
 

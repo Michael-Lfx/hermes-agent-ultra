@@ -160,7 +160,9 @@ fn encrypt_token_cache(
     let plaintext = serde_json::to_vec(cache).map_err(|e| AgentError::Config(e.to_string()))?;
     let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| AgentError::Config(e.to_string()))?;
     let mut nonce_bytes = [0u8; TOKEN_STORE_NONCE_BYTES];
-    rand::rngs::SysRng.try_fill_bytes(&mut nonce_bytes).map_err(|e| AgentError::Config(e.to_string()))?;
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut nonce_bytes)
+        .map_err(|e| AgentError::Config(e.to_string()))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_ref())
@@ -216,7 +218,9 @@ async fn load_or_create_store_key(path: &Path) -> Result<[u8; TOKEN_STORE_KEY_BY
     }
 
     let mut key = [0u8; TOKEN_STORE_KEY_BYTES];
-    rand::rngs::SysRng.try_fill_bytes(&mut key).map_err(|e| AgentError::Config(e.to_string()))?;
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut key)
+        .map_err(|e| AgentError::Config(e.to_string()))?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(key);
     write_file_private(path, encoded.as_bytes()).await?;
     Ok(key)
@@ -515,9 +519,11 @@ mod tests {
         assert!(!raw.contains("super-secret-token"));
         let envelope: TokenStoreEnvelope = serde_json::from_str(&raw).unwrap();
         assert_eq!(envelope.version, TOKEN_STORE_ENVELOPE_VERSION);
-        assert!(tokio::fs::try_exists(path.with_extension("key"))
-            .await
-            .unwrap());
+        assert!(
+            tokio::fs::try_exists(path.with_extension("key"))
+                .await
+                .unwrap()
+        );
 
         let reopened = FileTokenStore::new(&path).await.unwrap();
         let got = reopened.get("openai").await.unwrap();

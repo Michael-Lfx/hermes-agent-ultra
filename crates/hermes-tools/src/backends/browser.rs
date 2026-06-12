@@ -4,12 +4,12 @@
 //! and provides browser automation capabilities.
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::process::Stdio;
-use tokio::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 use crate::tools::browser::BrowserBackend;
 use hermes_core::ToolError;
@@ -76,10 +76,7 @@ impl CdpBrowserBackend {
 
     /// Probe CDP HTTP endpoint (`/json/version`).
     pub async fn probe_endpoint(client: &reqwest::Client, endpoint: &str) -> bool {
-        let url = format!(
-            "{}/json/version",
-            endpoint.trim_end_matches('/')
-        );
+        let url = format!("{}/json/version", endpoint.trim_end_matches('/'));
         client
             .get(&url)
             .timeout(Duration::from_secs(3))
@@ -272,7 +269,10 @@ impl BrowserBackend for CdpBrowserBackend {
         let result = self
             .cdp_command("Page.navigate", json!({"url": url}))
             .await?;
-        Ok(json!({"status": "navigated", "url": url, "task_id": task_id, "cdp": result}).to_string())
+        Ok(
+            json!({"status": "navigated", "url": url, "task_id": task_id, "cdp": result})
+                .to_string(),
+        )
     }
 
     async fn snapshot(
@@ -286,7 +286,8 @@ impl BrowserBackend for CdpBrowserBackend {
             .cdp_command("Accessibility.getFullAXTree", json!({}))
             .await?;
         let raw = result.to_string();
-        let snapshot_text = super::browser_snapshot_util::process_snapshot_text(&raw, user_task).await;
+        let snapshot_text =
+            super::browser_snapshot_util::process_snapshot_text(&raw, user_task).await;
         Ok(json!({
             "status": "snapshot",
             "full": full,
@@ -309,7 +310,10 @@ impl BrowserBackend for CdpBrowserBackend {
         let result = self
             .cdp_command("Runtime.evaluate", json!({"expression": js}))
             .await?;
-        Ok(json!({"status": "clicked", "ref": ref_id, "task_id": task_id, "cdp": result}).to_string())
+        Ok(
+            json!({"status": "clicked", "ref": ref_id, "task_id": task_id, "cdp": result})
+                .to_string(),
+        )
     }
 
     async fn r#type(
@@ -376,7 +380,10 @@ impl BrowserBackend for CdpBrowserBackend {
                 }),
             )
             .await?;
-        Ok(json!({"status": "key_pressed", "key": key, "task_id": task_id, "cdp": result}).to_string())
+        Ok(
+            json!({"status": "key_pressed", "key": key, "task_id": task_id, "cdp": result})
+                .to_string(),
+        )
     }
 
     async fn get_images(
@@ -395,14 +402,13 @@ impl BrowserBackend for CdpBrowserBackend {
                 json!({"expression": js, "returnByValue": true}),
             )
             .await?;
-        Ok(json!({"status": "images_found", "selector": sel, "task_id": task_id, "cdp": result}).to_string())
+        Ok(
+            json!({"status": "images_found", "selector": sel, "task_id": task_id, "cdp": result})
+                .to_string(),
+        )
     }
 
-    async fn vision(
-        &self,
-        instruction: &str,
-        task_id: Option<&str>,
-    ) -> Result<String, ToolError> {
+    async fn vision(&self, instruction: &str, task_id: Option<&str>) -> Result<String, ToolError> {
         // Take a screenshot and analyze with vision model
         let result = self
             .cdp_command("Page.captureScreenshot", json!({"format": "png"}))
@@ -423,7 +429,10 @@ impl BrowserBackend for CdpBrowserBackend {
                 let result = self.cdp_command("Runtime.evaluate", json!({
                     "expression": "'Console messages require Runtime.consoleAPICalled event listener'"
                 })).await?;
-                Ok(json!({"status": "console_read", "task_id": task_id, "cdp": result}).to_string())
+                Ok(
+                    json!({"status": "console_read", "task_id": task_id, "cdp": result})
+                        .to_string(),
+                )
             }
             "clear" => {
                 let result = self
@@ -432,7 +441,10 @@ impl BrowserBackend for CdpBrowserBackend {
                         json!({"expression": "console.clear(); 'cleared'"}),
                     )
                     .await?;
-                Ok(json!({"status": "console_cleared", "task_id": task_id, "cdp": result}).to_string())
+                Ok(
+                    json!({"status": "console_cleared", "task_id": task_id, "cdp": result})
+                        .to_string(),
+                )
             }
             other => Err(ToolError::InvalidParams(format!(
                 "Unknown console action: {}",
@@ -490,11 +502,7 @@ impl BrowserBackend for CamoFoxBrowserBackend {
     ) -> Result<String, ToolError> {
         self.inner.get_images(selector, task_id).await
     }
-    async fn vision(
-        &self,
-        instruction: &str,
-        task_id: Option<&str>,
-    ) -> Result<String, ToolError> {
+    async fn vision(&self, instruction: &str, task_id: Option<&str>) -> Result<String, ToolError> {
         self.inner.vision(instruction, task_id).await
     }
     async fn console(&self, action: &str, task_id: Option<&str>) -> Result<String, ToolError> {

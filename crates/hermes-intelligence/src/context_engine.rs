@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::time::Duration;
 
-use crate::model_metadata::estimate_tokens_rough;
 pub use crate::model_metadata::IMAGE_TOKEN_ESTIMATE;
+use crate::model_metadata::estimate_tokens_rough;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -542,12 +542,14 @@ mod tests {
         let messages = make_messages(20);
         let result = engine.compress(&messages, 100).await.unwrap();
         assert!(result.len() < 20);
-        assert!(result[0]
-            .get("content")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .contains("compressed"));
+        assert!(
+            result[0]
+                .get("content")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .contains("compressed")
+        );
     }
 
     #[tokio::test]

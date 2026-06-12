@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use super::FeishuApiClient;
 
@@ -34,9 +34,7 @@ impl ToolHandler for FeishuTaskHandler {
                 let summary = params
                     .get("summary")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams("create requires 'summary'".into())
-                    })?;
+                    .ok_or_else(|| ToolError::InvalidParams("create requires 'summary'".into()))?;
 
                 let mut body = serde_json::Map::new();
                 body.insert("summary".into(), json!(summary));
@@ -64,9 +62,7 @@ impl ToolHandler for FeishuTaskHandler {
                 let task_id = params
                     .get("task_id")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams("update requires 'task_id'".into())
-                    })?;
+                    .ok_or_else(|| ToolError::InvalidParams("update requires 'task_id'".into()))?;
 
                 let mut body = serde_json::Map::new();
                 if let Some(v) = params.get("summary").and_then(|v| v.as_str()) {

@@ -34,7 +34,7 @@ pub mod mapping;
 pub mod parse;
 pub mod types;
 
-pub use client::{ModelsDevClient, SearchHit, MODELS_DEV_URL};
+pub use client::{MODELS_DEV_URL, ModelsDevClient, SearchHit};
 pub use mapping::{forward_map, resolve_models_dev_id, reverse_map, to_hermes, to_models_dev};
 pub use types::{InterleavedFlag, ModelCapabilities, ModelInfo, ProviderInfo};
 

@@ -3,13 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::sanitize::{
-    contains_residual_pii, normalize_domain_key, normalize_duration_band, normalize_taxonomy_code,
-    is_valid_v3_domain_key,
+    contains_residual_pii, is_valid_v3_domain_key, normalize_domain_key, normalize_duration_band,
+    normalize_taxonomy_code,
 };
-use crate::skill::{build_work_package_skill, SkillPatternOptions};
+use crate::skill::{SkillPatternOptions, build_work_package_skill};
 use crate::types::{
-    validate_signal_codes, DomainPoiPayload, DomainWorkPackage, ResolutionPayload,
-    WorkMetricsPayload, DOMAIN_WORK_PACKAGE_SCHEMA_VERSION,
+    DOMAIN_WORK_PACKAGE_SCHEMA_VERSION, DomainPoiPayload, DomainWorkPackage, ResolutionPayload,
+    WorkMetricsPayload, validate_signal_codes,
 };
 
 #[derive(Debug, Clone)]
@@ -57,7 +57,11 @@ pub fn build_domain_work_package(input: &WorkPackageBuildInput) -> Option<Domain
     opts.binding_role = input.binding_role.clone();
 
     let skill = build_work_package_skill(&input.skill_dir, &input.skills_root, &opts)?;
-    if !skill.domain_keys.iter().any(|k| k == &domain_poi.domain_key) {
+    if !skill
+        .domain_keys
+        .iter()
+        .any(|k| k == &domain_poi.domain_key)
+    {
         return None;
     }
 

@@ -1,4 +1,4 @@
-﻿//! Python `agent.conversation_loop.run_conversation`
+//! Python `agent.conversation_loop.run_conversation`
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -636,9 +636,9 @@ async fn run_with_message_prelude(
     } else {
         None
     };
-    let web_research_ctrl = web_research_cfg.enabled.then(|| {
-        WebResearchController::with_user_message(web_research_cfg, &first_user)
-    });
+    let web_research_ctrl = web_research_cfg
+        .enabled
+        .then(|| WebResearchController::with_user_message(web_research_cfg, &first_user));
 
     // Enter the turn state machine
     let max_turns_limit = effective_max_turns(agent.config().max_turns);

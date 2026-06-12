@@ -40,17 +40,9 @@ fn as_positive_u64(v: &Value) -> Option<u64> {
     match v {
         Value::Number(n) => {
             if let Some(i) = n.as_u64() {
-                if i > 0 {
-                    Some(i)
-                } else {
-                    None
-                }
+                if i > 0 { Some(i) } else { None }
             } else if let Some(f) = n.as_f64() {
-                if f > 0.0 {
-                    Some(f as u64)
-                } else {
-                    None
-                }
+                if f > 0.0 { Some(f as u64) } else { None }
             } else {
                 None
             }

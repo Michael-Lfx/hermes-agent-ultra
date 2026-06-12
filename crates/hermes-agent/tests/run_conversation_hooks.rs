@@ -3,11 +3,11 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use hermes_agent::{
+    AgentConfig, AgentLoop,
     agent_loop::ToolRegistry,
     plugins::{HookResult, HookType, Plugin, PluginContext, PluginManager, PluginMeta},
-    AgentConfig, AgentLoop,
 };
 use hermes_core::{AgentError, LlmProvider, Message, StreamChunk, ToolSchema};
 use serde_json::Value;
@@ -17,7 +17,10 @@ struct HookCounter(Arc<Mutex<Vec<String>>>);
 
 impl HookCounter {
     fn push(&self, label: &str) {
-        self.0.lock().expect("hook counter lock").push(label.to_string());
+        self.0
+            .lock()
+            .expect("hook counter lock")
+            .push(label.to_string());
     }
 }
 
@@ -49,17 +52,20 @@ impl Plugin for CountingHookPlugin {
     fn register(&self, ctx: &mut PluginContext) {
         let counter = self.counter.clone();
         let label = self.label;
-        ctx.on(self.hook, Arc::new(move |ctx_val: &Value| {
-            counter.push(label);
-            if label == "on_session_end" {
-                let _ = ctx_val.get("completed").and_then(Value::as_bool);
-                let _ = ctx_val.get("interrupted").and_then(Value::as_bool);
-            }
-            if label == "pre_api_request" {
-                let _ = ctx_val.get("api_call_count").and_then(Value::as_u64);
-            }
-            HookResult::Ok
-        }));
+        ctx.on(
+            self.hook,
+            Arc::new(move |ctx_val: &Value| {
+                counter.push(label);
+                if label == "on_session_end" {
+                    let _ = ctx_val.get("completed").and_then(Value::as_bool);
+                    let _ = ctx_val.get("interrupted").and_then(Value::as_bool);
+                }
+                if label == "pre_api_request" {
+                    let _ = ctx_val.get("api_call_count").and_then(Value::as_u64);
+                }
+                HookResult::Ok
+            }),
+        );
     }
 }
 
@@ -81,7 +87,7 @@ impl LlmProvider for StopAssistantProvider {
             usage: None,
             model: "test".into(),
             finish_reason: Some("stop".into()),
-        ..Default::default()
+            ..Default::default()
         })
     }
 

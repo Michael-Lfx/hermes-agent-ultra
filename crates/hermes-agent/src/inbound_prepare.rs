@@ -5,13 +5,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use hermes_core::{
-    transport_fallback_message, AgentError, InboundEvent, InboundMessagePreparer,
-    InboundPrepareContext, Message,
+    AgentError, InboundEvent, InboundMessagePreparer, InboundPrepareContext, Message,
+    transport_fallback_message,
 };
 use hermes_intelligence::auxiliary::{AuxiliaryClient, AuxiliaryRequest, AuxiliaryTask};
-use hermes_intelligence::image_routing::{
-    build_native_content_parts, decide_image_input_mode,
-};
+use hermes_intelligence::image_routing::{build_native_content_parts, decide_image_input_mode};
 use hermes_intelligence::vision_media;
 use tracing::debug;
 
@@ -154,8 +152,7 @@ impl InboundMessagePreparer for AgentInboundPreparer {
                 model = model,
                 "skipping auxiliary vision pre-analysis (native image mode)"
             );
-            let (parts, _skipped) =
-                build_native_content_parts(&event.text, &image_paths);
+            let (parts, _skipped) = build_native_content_parts(&event.text, &image_paths);
             if parts.is_empty() {
                 return Ok(transport_fallback_message(event));
             }

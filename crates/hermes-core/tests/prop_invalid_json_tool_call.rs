@@ -6,7 +6,7 @@
 
 use proptest::prelude::*;
 
-use hermes_core::{parse_tool_calls, AgentError};
+use hermes_core::{AgentError, parse_tool_calls};
 
 // ---------------------------------------------------------------------------
 // Strategy for invalid JSON strings

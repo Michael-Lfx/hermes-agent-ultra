@@ -13,7 +13,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 const DEFAULT_OSV_ENDPOINT: &str = "https://api.osv.dev/v1/query";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,7 +41,11 @@ pub async fn check_package_for_malware(command: &str, args: &[String]) -> Option
         .take(3)
         .map(|m| {
             let s = m.summary.as_deref().unwrap_or(&m.id);
-            if s.len() > 100 { s[..100].to_string() } else { s.to_string() }
+            if s.len() > 100 {
+                s[..100].to_string()
+            } else {
+                s.to_string()
+            }
         })
         .collect();
 
@@ -120,8 +124,8 @@ async fn query_osv(
     ecosystem: &str,
     version: Option<&str>,
 ) -> Result<Vec<MalwareVuln>, String> {
-    let endpoint = std::env::var("OSV_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_OSV_ENDPOINT.to_string());
+    let endpoint =
+        std::env::var("OSV_ENDPOINT").unwrap_or_else(|_| DEFAULT_OSV_ENDPOINT.to_string());
 
     let mut payload = serde_json::Map::new();
     let mut pkg = serde_json::Map::new();
@@ -146,7 +150,11 @@ async fn query_osv(
         .map_err(|e| e.to_string())?;
 
     let body: Value = resp.json().await.map_err(|e| e.to_string())?;
-    let vulns = body.get("vulns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let vulns = body
+        .get("vulns")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let malware: Vec<MalwareVuln> = vulns
         .iter()
@@ -155,7 +163,10 @@ async fn query_osv(
             if !id.starts_with("MAL-") {
                 return None;
             }
-            let summary = v.get("summary").and_then(|s| s.as_str()).map(|s| s.to_string());
+            let summary = v
+                .get("summary")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string());
             Some(MalwareVuln { id, summary })
         })
         .collect();
@@ -176,7 +187,11 @@ impl ToolHandler for OsvCheckHandler {
         let args: Vec<String> = params
             .get("args")
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         if command.is_empty() {
@@ -193,7 +208,10 @@ impl ToolHandler for OsvCheckHandler {
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
-        props.insert("command".into(), json!({"type": "string", "description": "Command like npx or uvx"}));
+        props.insert(
+            "command".into(),
+            json!({"type": "string", "description": "Command like npx or uvx"}),
+        );
         props.insert(
             "args".into(),
             json!({"type": "array", "items": {"type": "string"}, "description": "Command arguments"}),

@@ -214,10 +214,7 @@ impl UsageStore {
     }
 
     /// Atomically persist the usage map.
-    pub fn save_usage(
-        &self,
-        usage: &BTreeMap<String, SkillUsageRecord>,
-    ) -> Result<(), SkillError> {
+    pub fn save_usage(&self, usage: &BTreeMap<String, SkillUsageRecord>) -> Result<(), SkillError> {
         fs::create_dir_all(&self.skills_dir)?;
         let path = self.usage_file();
         let tmp = self
@@ -434,10 +431,7 @@ impl UsageStore {
 // ── Skill lifecycle (archive / restore) ─────────────────────────────────
 
 impl UsageStore {
-    pub fn archive_skill(
-        &self,
-        skill_name: &str,
-    ) -> Result<(bool, String), SkillError> {
+    pub fn archive_skill(&self, skill_name: &str) -> Result<(bool, String), SkillError> {
         let name = skill_name.trim();
         if name.is_empty() {
             return Ok((false, "Skill name is required.".to_string()));
@@ -456,10 +450,7 @@ impl UsageStore {
         Ok((true, format!("Skill '{name}' archived.")))
     }
 
-    pub fn restore_skill(
-        &self,
-        skill_name: &str,
-    ) -> Result<(bool, String), SkillError> {
+    pub fn restore_skill(&self, skill_name: &str) -> Result<(bool, String), SkillError> {
         let name = skill_name.trim();
         if name.is_empty() {
             return Ok((false, "Skill name is required.".to_string()));
@@ -710,10 +701,7 @@ mod tests {
         store.save_usage(&data).unwrap();
         assert_eq!(store.get_record("skill-a").use_count, 3);
         assert_eq!(store.get_record("missing").state, STATE_ACTIVE);
-        assert!(!store
-            .skills_dir
-            .join(".usage_")
-            .exists());
+        assert!(!store.skills_dir.join(".usage_").exists());
     }
 
     #[test]

@@ -2,9 +2,9 @@
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use std::path::Path;
 use std::sync::Arc;

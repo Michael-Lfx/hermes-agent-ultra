@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::Response;
-use tokio_tungstenite::{client_async, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async};
 use url::Url;
 
 use crate::adapter::AdapterProxyConfig;
@@ -80,9 +80,10 @@ async fn connect_websocket_via_http_proxy(
     let mut buf = Vec::with_capacity(512);
     let mut chunk = [0u8; 256];
     loop {
-        let n = stream.read(&mut chunk).await.map_err(|e| {
-            GatewayError::ConnectionFailed(format!("Proxy CONNECT read: {e}"))
-        })?;
+        let n = stream
+            .read(&mut chunk)
+            .await
+            .map_err(|e| GatewayError::ConnectionFailed(format!("Proxy CONNECT read: {e}")))?;
         if n == 0 {
             return Err(GatewayError::ConnectionFailed(
                 "Proxy closed before CONNECT response".into(),

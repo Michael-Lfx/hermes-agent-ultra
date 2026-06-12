@@ -95,8 +95,7 @@ pub async fn deliver_legacy_stream_final(
                 "streaming final edit failed"
             );
             if platform == "discord" {
-                deliver_discord_after_final_edit_failed(adapter, chat_id, message_id, chunks)
-                    .await
+                deliver_discord_after_final_edit_failed(adapter, chat_id, message_id, chunks).await
             } else {
                 adapter.send_message(chat_id, first, None).await?;
                 for chunk in chunks.iter().skip(1) {

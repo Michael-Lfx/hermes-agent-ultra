@@ -3,7 +3,7 @@
 //! Builders use stable field sets; `serde_json::Map` serializes keys in
 //! **lexicographic order**, which we assert in tests so drift is caught.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::gateway::IncomingMessage;
 

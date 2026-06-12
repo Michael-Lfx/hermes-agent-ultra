@@ -45,21 +45,19 @@ impl WhatsAppPolicy {
             return false;
         }
         let cid = chat_id.trim().to_lowercase();
-        cid == "status@broadcast"
-            || cid.ends_with("@broadcast")
-            || cid.ends_with("@newsletter")
+        cid == "status@broadcast" || cid.ends_with("@broadcast") || cid.ends_with("@newsletter")
     }
 
     pub fn should_process_message(&self, data: &Value) -> bool {
-        let chat_id_raw = data
-            .get("chatId")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let chat_id_raw = data.get("chatId").and_then(|v| v.as_str()).unwrap_or("");
         if Self::is_broadcast_chat(chat_id_raw) {
             return false;
         }
 
-        let is_group = data.get("isGroup").and_then(|v| v.as_bool()).unwrap_or(false);
+        let is_group = data
+            .get("isGroup")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         if is_group {
             if !self.is_group_allowed(chat_id_raw) {
                 return false;
@@ -83,7 +81,11 @@ impl WhatsAppPolicy {
         if !self.require_mention {
             return true;
         }
-        let body = data.get("body").and_then(|v| v.as_str()).unwrap_or("").trim();
+        let body = data
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
         if body.starts_with('/') {
             return true;
         }
@@ -143,9 +145,9 @@ impl WhatsAppPolicy {
         if allow.contains(&normalized) {
             return true;
         }
-        allow
-            .iter()
-            .any(|entry| crate::whatsapp_identity::normalize_whatsapp_identifier(entry) == normalized)
+        allow.iter().any(|entry| {
+            crate::whatsapp_identity::normalize_whatsapp_identifier(entry) == normalized
+        })
     }
 
     fn message_matches_mention_patterns(&self, body: &str) -> bool {

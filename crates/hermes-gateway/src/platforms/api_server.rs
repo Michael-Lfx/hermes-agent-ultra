@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 use hermes_core::errors::GatewayError;
@@ -541,7 +541,8 @@ async fn handle_connection(
             let body = serde_json::to_string(&err)?;
             let resp = format!(
                 "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             writer.write_all(resp.as_bytes()).await?;
             return Ok(());
@@ -814,7 +815,8 @@ async fn handle_connection(
                         let body = serde_json::to_string(&response)?;
                         let resp = format!(
                             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                            body.len(), body
+                            body.len(),
+                            body
                         );
                         writer.write_all(resp.as_bytes()).await?;
                     }
@@ -824,7 +826,8 @@ async fn handle_connection(
                     let body = serde_json::to_string(&err)?;
                     let resp = format!(
                         "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                        body.len(), body
+                        body.len(),
+                        body
                     );
                     writer.write_all(resp.as_bytes()).await?;
                 }
@@ -843,7 +846,8 @@ async fn handle_connection(
             let body = r#"{"error":{"message":"Not found","type":"not_found","code":"404"}}"#;
             let resp = format!(
                 "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
             writer.write_all(resp.as_bytes()).await?;
         }

@@ -508,7 +508,9 @@ fn capture_to_output(capture: &CaptureResult) -> Result<String, ToolError> {
 
 async fn capture_to_file_output(capture: &CaptureResult) -> Result<String, ToolError> {
     let b64 = capture.image_b64.as_deref().ok_or_else(|| {
-        ToolError::ExecutionFailed("capture_to_file requires image-capable capture mode".to_string())
+        ToolError::ExecutionFailed(
+            "capture_to_file requires image-capable capture mode".to_string(),
+        )
     })?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64)
@@ -522,17 +524,15 @@ async fn capture_to_file_output(capture: &CaptureResult) -> Result<String, ToolE
     fs::write(&path, bytes)
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("write capture file: {e}")))?;
-    Ok(
-        json!({
-            "ok": true,
-            "action": "capture_to_file",
-            "file_path": path.to_string_lossy().to_string(),
-            "mime": mime,
-            "mode": capture.mode,
-            "summary": "capture saved to local file; use send_message(file=...) to deliver it"
-        })
-        .to_string(),
-    )
+    Ok(json!({
+        "ok": true,
+        "action": "capture_to_file",
+        "file_path": path.to_string_lossy().to_string(),
+        "mime": mime,
+        "mode": capture.mode,
+        "summary": "capture saved to local file; use send_message(file=...) to deliver it"
+    })
+    .to_string())
 }
 
 const WINDOWS_CUA_DRIVER_HINT: &str = "Windows computer_use requires cua-driver on PATH; \
@@ -540,7 +540,9 @@ const WINDOWS_CUA_DRIVER_HINT: &str = "Windows computer_use requires cua-driver 
 
 async fn capture_desktop_to_path(path: &Path) -> Result<(), ToolError> {
     if cfg!(target_os = "windows") {
-        return Err(ToolError::ExecutionFailed(WINDOWS_CUA_DRIVER_HINT.to_string()));
+        return Err(ToolError::ExecutionFailed(
+            WINDOWS_CUA_DRIVER_HINT.to_string(),
+        ));
     }
     if cfg!(target_os = "macos") {
         run_capture_command("screencapture", &["-x", &path.to_string_lossy()]).await?;
@@ -598,16 +600,15 @@ mod tests {
     fn backend_selection_not_macos_gated() {
         let src = include_str!("tool.rs");
         assert!(
-            !src.contains("cfg!(target_os = \"macos\")\n            && cua_driver_binary_available()"),
+            !src.contains(
+                "cfg!(target_os = \"macos\")\n            && cua_driver_binary_available()"
+            ),
             "cua-driver backend must not be macOS-only"
         );
     }
 
     #[test]
     fn prefer_cua_driver_matches_binary_availability() {
-        assert_eq!(
-            prefer_cua_driver_backend(),
-            cua_driver_binary_available()
-        );
+        assert_eq!(prefer_cua_driver_backend(), cua_driver_binary_available());
     }
 }

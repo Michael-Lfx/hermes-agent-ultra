@@ -1,4 +1,4 @@
-﻿//! Skill guard: security validation for skill content and URLs.
+//! Skill guard: security validation for skill content and URLs.
 
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -481,7 +481,7 @@ pub fn check_skill_structure(skill_dir: &Path) -> Vec<SkillScanFinding> {
                 0,
                 "",
                 "skill directory does not exist",
-            )]
+            )];
         }
     };
 
@@ -884,8 +884,7 @@ impl SkillGuard {
                     scanned_at: String::new(),
                     summary: String::new(),
                 };
-                let (decision, reason) =
-                    crate::skills_guard::should_allow_install(&result, false);
+                let (decision, reason) = crate::skills_guard::should_allow_install(&result, false);
                 match decision {
                     crate::skills_guard::InstallDecision::Allowed => {}
                     crate::skills_guard::InstallDecision::NeedsConfirmation
@@ -918,11 +917,9 @@ impl SkillGuard {
         let (decision, reason) = crate::skills_guard::should_allow_install(&scan, force);
         match decision {
             crate::skills_guard::InstallDecision::Allowed => Ok(()),
-            crate::skills_guard::InstallDecision::NeedsConfirmation => {
-                Err(SkillError::GuardViolation(format!(
-                    "{reason}. Re-run with --force to override."
-                )))
-            }
+            crate::skills_guard::InstallDecision::NeedsConfirmation => Err(
+                SkillError::GuardViolation(format!("{reason}. Re-run with --force to override.")),
+            ),
             crate::skills_guard::InstallDecision::Blocked => Err(SkillError::GuardViolation(
                 format!("{reason}\n{}", scan.summary),
             )),
@@ -1113,9 +1110,11 @@ mod tests {
     #[test]
     fn test_custom_blocked_url() {
         let guard = SkillGuard::new(vec![], vec![r"evil\.com".to_string()]);
-        assert!(guard
-            .validate_skill_url("https://evil.com/payload")
-            .is_err());
+        assert!(
+            guard
+                .validate_skill_url("https://evil.com/payload")
+                .is_err()
+        );
     }
 
     #[test]
@@ -1145,17 +1144,21 @@ mod tests {
     #[test]
     fn test_relaxed_mode_allows_tmp_cleanup_rm() {
         let skill = make_skill("ok", "# Skill\n1. rm -rf /tmp/hermes-ultra-cache");
-        assert!(SkillGuard::with_mode(SkillGuardMode::Relaxed)
-            .validate_skill(&skill)
-            .is_ok());
+        assert!(
+            SkillGuard::with_mode(SkillGuardMode::Relaxed)
+                .validate_skill(&skill)
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_relaxed_mode_blocks_root_rm() {
         let skill = make_skill("bad", "# Skill\n1. rm -rf /");
-        assert!(SkillGuard::with_mode(SkillGuardMode::Relaxed)
-            .validate_skill(&skill)
-            .is_err());
+        assert!(
+            SkillGuard::with_mode(SkillGuardMode::Relaxed)
+                .validate_skill(&skill)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1255,13 +1258,17 @@ mod tests {
         .unwrap();
 
         let findings = scan_skill_file(&path, dir.path());
-        assert!(findings
-            .iter()
-            .any(|f| f.pattern_id == "prompt_injection_ignore"));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.pattern_id == "prompt_injection_ignore")
+        );
         assert!(findings.iter().any(|f| f.pattern_id == "env_exfil_curl"));
-        assert!(findings
-            .iter()
-            .any(|f| f.pattern_id == "destructive_root_rm"));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.pattern_id == "destructive_root_rm")
+        );
         assert_eq!(determine_verdict(&findings), SkillScanVerdict::Dangerous);
     }
 

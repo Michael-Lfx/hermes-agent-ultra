@@ -30,10 +30,7 @@ pub fn is_discord_user_authorized(
     if cfg.allowed_users.contains(user_id) {
         return true;
     }
-    if role_ids
-        .iter()
-        .any(|role| cfg.allowed_roles.contains(role))
-    {
+    if role_ids.iter().any(|role| cfg.allowed_roles.contains(role)) {
         if is_dm {
             if let Some(trusted) = cfg.dm_role_auth_guild.as_deref() {
                 return guild_id == Some(trusted);
@@ -136,7 +133,13 @@ mod tests {
         let cfg = DiscordAuthConfig::default();
         assert!(!cfg.has_restrictions());
         assert!(is_discord_user_authorized("anyone", &[], None, true, &cfg));
-        assert!(is_discord_user_authorized("anyone", &[], Some("g1"), false, &cfg));
+        assert!(is_discord_user_authorized(
+            "anyone",
+            &[],
+            Some("g1"),
+            false,
+            &cfg
+        ));
     }
 
     #[test]

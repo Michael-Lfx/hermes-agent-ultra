@@ -28,10 +28,12 @@ use serde_yaml::Value as YamlValue;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::delivery::{deliver_text, CronDeliveryBackend};
+use crate::delivery::{CronDeliveryBackend, deliver_text};
 use crate::job::CronJob;
 use crate::scheduler::CronError;
-use crate::timing::{is_ping_reminder, log_job_execute_finish, log_job_execute_start, format_ping_reminder_text};
+use crate::timing::{
+    format_ping_reminder_text, is_ping_reminder, log_job_execute_finish, log_job_execute_start,
+};
 
 /// Result of running a cron job, including optional delivery failure (Python `mark_job_run` `delivery_error`).
 #[derive(Debug, Clone)]
@@ -131,8 +133,8 @@ static CRON_EXFIL_PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new
 /// Unicode code points used as invisible steganographic characters.  Mirrors Python's
 /// `_CRON_INVISIBLE_CHARS`.
 const CRON_INVISIBLE_CHARS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{202A}', '\u{202B}',
-    '\u{202C}', '\u{202D}', '\u{202E}',
+    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{202A}', '\u{202B}', '\u{202C}',
+    '\u{202D}', '\u{202E}',
 ];
 
 const DEFAULT_SCRIPT_TIMEOUT_SECS: u64 = 120;
@@ -453,7 +455,9 @@ fn load_cron_tool_policy() -> CronToolPolicy {
         .and_then(|v| parse_yaml_string_list(Some(v)))
         .filter(|v| !v.is_empty());
     policy.default_model = match yaml_get(&doc, "model") {
-        Some(model) if model.is_mapping() => yaml_get(model, "default").and_then(|v| parse_yaml_string(Some(v))),
+        Some(model) if model.is_mapping() => {
+            yaml_get(model, "default").and_then(|v| parse_yaml_string(Some(v)))
+        }
         Some(model) => parse_yaml_string(Some(model)),
         None => None,
     };
@@ -705,8 +709,7 @@ impl CronRunner {
         log_job_execute_start(job, started_at);
         let outcome = self.run_job_inner(job).await;
         let now = hermes_core::now_utc();
-        let elapsed_ms =
-            i64::try_from(started_instant.elapsed().as_millis()).unwrap_or(i64::MAX);
+        let elapsed_ms = i64::try_from(started_instant.elapsed().as_millis()).unwrap_or(i64::MAX);
         match &outcome {
             Ok(o) => log_job_execute_finish(
                 job,
@@ -961,7 +964,12 @@ impl CronRunner {
             let shell = shell_for_inline_script(job);
             command = command_for_inline_script(&shell, script);
         }
-        if let Some(workdir) = job.workdir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(workdir) = job
+            .workdir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let path = std::path::Path::new(workdir);
             if path.is_dir() {
                 command.current_dir(path);
@@ -1045,7 +1053,12 @@ impl CronRunner {
         let prior_terminal_cwd = std::env::var("TERMINAL_CWD").ok();
         let prior_hermes_home = std::env::var("HERMES_HOME").ok();
 
-        if let Some(workdir) = job.workdir.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(workdir) = job
+            .workdir
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             let path = std::path::Path::new(workdir);
             if !path.is_dir() {
                 return Err(CronError::InvalidJob(format!(
@@ -1220,13 +1233,17 @@ impl CronRunner {
         if allow.is_empty() {
             return base;
         }
-        base.into_iter().filter(|schema| allow.contains(&schema.name)).collect()
+        base.into_iter()
+            .filter(|schema| allow.contains(&schema.name))
+            .collect()
     }
 
     /// Deliver an explicit error payload to the configured target.
     pub async fn deliver_error(&self, job: &CronJob, error_text: &str) -> Result<(), CronError> {
         if let Some(err) = self.delivery_error_for_failure(job, error_text).await {
-            return Err(CronError::Scheduler(format!("error delivery failed: {err}")));
+            return Err(CronError::Scheduler(format!(
+                "error delivery failed: {err}"
+            )));
         }
         Ok(())
     }
@@ -1247,10 +1264,7 @@ pub(crate) fn detect_cron_prompt_injection(text: &str) -> Option<&'static str> {
     {
         return Some(*name);
     }
-    if let Some((name, _)) = CRON_EXFIL_PATTERNS
-        .iter()
-        .find(|(_, re)| re.is_match(text))
-    {
+    if let Some((name, _)) = CRON_EXFIL_PATTERNS.iter().find(|(_, re)| re.is_match(text)) {
         return Some(*name);
     }
     None
@@ -1302,7 +1316,9 @@ mod tests {
                 "Manage cron jobs",
                 hermes_core::JsonSchema::new("object"),
             ),
-            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> { Ok("ok".to_string()) }),
+            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> {
+                Ok("ok".to_string())
+            }),
         );
         registry.register(
             "terminal",
@@ -1311,7 +1327,9 @@ mod tests {
                 "Run commands",
                 hermes_core::JsonSchema::new("object"),
             ),
-            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> { Ok("ok".to_string()) }),
+            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> {
+                Ok("ok".to_string())
+            }),
         );
         registry.register(
             "my_plugin__tool",
@@ -1320,7 +1338,9 @@ mod tests {
                 "Plugin tool",
                 hermes_core::JsonSchema::new("object"),
             ),
-            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> { Ok("ok".to_string()) }),
+            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> {
+                Ok("ok".to_string())
+            }),
         );
         registry.register(
             "github__mcp_tool",
@@ -1329,7 +1349,9 @@ mod tests {
                 "MCP tool",
                 hermes_core::JsonSchema::new("object"),
             ),
-            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> { Ok("ok".to_string()) }),
+            Arc::new(|_params: serde_json::Value| -> Result<String, ToolError> {
+                Ok("ok".to_string())
+            }),
         );
         Arc::new(registry)
     }
@@ -1450,7 +1472,10 @@ fallback_providers:
                     std::env::set_var("CRON_FB_MODEL", "anthropic/claude-sonnet-4");
                 }
                 let policy = load_cron_tool_policy();
-                assert_eq!(policy.default_model.as_deref(), Some("kimi-k2-0711-preview"));
+                assert_eq!(
+                    policy.default_model.as_deref(),
+                    Some("kimi-k2-0711-preview")
+                );
                 assert_eq!(policy.fallback_models.len(), 2);
                 assert_eq!(
                     policy.fallback_models.first().map(String::as_str),
@@ -1475,10 +1500,7 @@ fallback_providers:
         let mut job = CronJob::new("0 9 * * *", "Say hello");
         job.skills = Some(vec!["web_search".to_string(), "terminal".to_string()]);
 
-        let runner = CronRunner::new(
-            Arc::new(MockLlmProvider),
-            Arc::new(ToolRegistry::new()),
-        );
+        let runner = CronRunner::new(Arc::new(MockLlmProvider), Arc::new(ToolRegistry::new()));
 
         let messages = runner.build_messages(&job);
         // Should have skill context + prompt message
@@ -1492,10 +1514,7 @@ fallback_providers:
         let mut job = CronJob::new("0 9 * * *", "Say hello");
         job.script = Some("echo hello world".to_string());
 
-        let runner = CronRunner::new(
-            Arc::new(MockLlmProvider),
-            Arc::new(ToolRegistry::new()),
-        );
+        let runner = CronRunner::new(Arc::new(MockLlmProvider), Arc::new(ToolRegistry::new()));
 
         let messages = runner.build_messages(&job);
         // Script overrides prompt as user message
@@ -1528,7 +1547,12 @@ fallback_providers:
 
     #[async_trait::async_trait]
     impl CronDeliveryBackend for FailingDeliveryBackend {
-        async fn send(&self, _platform: &str, _chat_id: &str, _message: &str) -> Result<(), String> {
+        async fn send(
+            &self,
+            _platform: &str,
+            _chat_id: &str,
+            _message: &str,
+        ) -> Result<(), String> {
             Err("gateway send failed".into())
         }
     }
@@ -1563,7 +1587,12 @@ fallback_providers:
             total_turns: 1,
             ..AgentResult::default()
         };
-        assert!(runner.delivery_error_for_result(&job, &result).await.is_none());
+        assert!(
+            runner
+                .delivery_error_for_result(&job, &result)
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -1615,8 +1644,8 @@ fallback_providers:
                 usage: None,
                 model: "mock".to_string(),
                 finish_reason: Some("stop".to_string()),
-            ..Default::default()
-        })
+                ..Default::default()
+            })
         }
 
         fn chat_completion_stream(

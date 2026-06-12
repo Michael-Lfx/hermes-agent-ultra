@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Parser, ValueEnum};
-use hermes_config::{load_config, GatewayConfig};
+use hermes_config::{GatewayConfig, load_config};
 use hermes_core::SkillProvider;
 #[cfg(feature = "agent-loop")]
 use hermes_eval::AgentLoopRollout;

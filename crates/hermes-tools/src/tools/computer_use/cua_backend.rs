@@ -655,7 +655,9 @@ async fn call_cua_driver_tool(name: &str, arguments: Value) -> Result<McpRespons
             *guard = None;
             ensure_mcp_session(&mut guard).await?;
             let session = guard.as_mut().ok_or_else(|| {
-                ToolError::ExecutionFailed("cua-driver mcp session unavailable after restart".into())
+                ToolError::ExecutionFailed(
+                    "cua-driver mcp session unavailable after restart".into(),
+                )
             })?;
             run_tool_call(session, name, arguments).await
         }
@@ -944,9 +946,9 @@ async fn run_tool_call(
 }
 
 fn parse_mcp_response(response: Value) -> Result<McpResponse, ToolError> {
-    let result = response
-        .get("result")
-        .ok_or_else(|| ToolError::ExecutionFailed(format!("mcp tools/call missing result: {response}")))?;
+    let result = response.get("result").ok_or_else(|| {
+        ToolError::ExecutionFailed(format!("mcp tools/call missing result: {response}"))
+    })?;
     let is_error = result
         .get("isError")
         .and_then(|v| v.as_bool())

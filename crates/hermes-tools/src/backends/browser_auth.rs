@@ -146,11 +146,7 @@ pub fn ensure_profile_dir(path: &Path) -> std::io::Result<()> {
 }
 
 fn hex_prefix(bytes: &[u8], n: usize) -> String {
-    bytes
-        .iter()
-        .take(n)
-        .map(|b| format!("{b:02x}"))
-        .collect()
+    bytes.iter().take(n).map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

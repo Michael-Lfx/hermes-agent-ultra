@@ -433,9 +433,11 @@ mod tests {
             json!({"type": "object", "properties": {"x": {"type": "object"}}})
         )]);
         let _ = sanitize_tool_schemas(Some(&original));
-        assert!(original[0]["function"]["parameters"]["properties"]["x"]
-            .get("properties")
-            .is_none());
+        assert!(
+            original[0]["function"]["parameters"]["properties"]["x"]
+                .get("properties")
+                .is_none()
+        );
     }
 
     #[test]
@@ -528,12 +530,16 @@ mod tests {
             )
         ]);
         assert_eq!(strip_pattern_and_format(Some(&mut tools)), 2);
-        assert!(tools[0]["function"]["parameters"]["properties"]["query"]
-            .get("pattern")
-            .is_none());
-        assert!(tools[1]["parameters"]["properties"]["tz"]
-            .get("format")
-            .is_none());
+        assert!(
+            tools[0]["function"]["parameters"]["properties"]["query"]
+                .get("pattern")
+                .is_none()
+        );
+        assert!(
+            tools[1]["parameters"]["properties"]["tz"]
+                .get("format")
+                .is_none()
+        );
     }
 
     #[test]
@@ -589,9 +595,11 @@ mod tests {
             )
         ]);
         assert_eq!(strip_slash_enum(Some(&mut tools)), 1);
-        assert!(tools[0]["function"]["parameters"]["properties"]["model"]
-            .get("enum")
-            .is_none());
+        assert!(
+            tools[0]["function"]["parameters"]["properties"]["model"]
+                .get("enum")
+                .is_none()
+        );
         assert_eq!(
             tools[1]["parameters"]["properties"]["mode"]["enum"],
             json!(["fast", "slow"])

@@ -2,7 +2,7 @@
 
 //! WhatsApp streaming / edit_message tests (unit-level, no live WhatsApp).
 
-use hermes_gateway::platforms::whatsapp::{outgoing_chunks, WhatsAppConfig};
+use hermes_gateway::platforms::whatsapp::{WhatsAppConfig, outgoing_chunks};
 
 #[test]
 fn edit_chunks_long_progress_text() {

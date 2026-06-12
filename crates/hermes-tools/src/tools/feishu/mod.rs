@@ -95,10 +95,7 @@ impl FeishuApiClient {
             }
         }
 
-        let url = format!(
-            "{}/auth/v3/tenant_access_token/internal",
-            self.base_url
-        );
+        let url = format!("{}/auth/v3/tenant_access_token/internal", self.base_url);
         let body = serde_json::json!({
             "app_id": self.app_id,
             "app_secret": self.app_secret,
@@ -112,15 +109,11 @@ impl FeishuApiClient {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Feishu token request failed: {e}")))?;
 
-        let json: Value = resp
-            .json()
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("Feishu token response parse error: {e}")))?;
+        let json: Value = resp.json().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Feishu token response parse error: {e}"))
+        })?;
 
-        let code = json
-            .get("code")
-            .and_then(|c| c.as_i64())
-            .unwrap_or(-1);
+        let code = json.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
         if code != 0 {
             let msg = json
                 .get("msg")
@@ -135,7 +128,9 @@ impl FeishuApiClient {
             .get("tenant_access_token")
             .and_then(|t| t.as_str())
             .ok_or_else(|| {
-                ToolError::ExecutionFailed("Feishu token response missing tenant_access_token".into())
+                ToolError::ExecutionFailed(
+                    "Feishu token response missing tenant_access_token".into(),
+                )
             })?
             .to_string();
 
@@ -151,11 +146,7 @@ impl FeishuApiClient {
     // -- HTTP helpers -------------------------------------------------------
 
     /// Authenticated GET, returns `data` field from Feishu response.
-    pub async fn get(
-        &self,
-        path: &str,
-        query: &[(&str, &str)],
-    ) -> Result<Value, ToolError> {
+    pub async fn get(&self, path: &str, query: &[(&str, &str)]) -> Result<Value, ToolError> {
         let token = self.get_token().await?;
         let url = format!("{}{}", self.base_url, path);
 

@@ -300,7 +300,8 @@ pub type PlanModeSlashHandler = Arc<
             IncomingMessage,
             String,
             String,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), GatewayError>> + Send>>
+        )
+            -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), GatewayError>> + Send>>
         + Send
         + Sync,
 >;

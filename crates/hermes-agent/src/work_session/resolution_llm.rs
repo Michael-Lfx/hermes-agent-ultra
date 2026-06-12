@@ -124,9 +124,8 @@ pub async fn infer_resolution_from_transcript_llm(
         signals.closure_without_followup,
     );
 
-    let user = format!(
-        "Label resolution for this agent session transcript.\n\n{hints}\n\n---\n\n{body}"
-    );
+    let user =
+        format!("Label resolution for this agent session transcript.\n\n{hints}\n\n---\n\n{body}");
 
     let request = AuxiliaryRequest::new(
         AuxiliaryTask::Custom(RESOLUTION_LLM_TASK.to_string()),
@@ -273,10 +272,12 @@ mod tests {
         assert_eq!(parsed.verdict, "solved_inferred");
         assert_eq!(parsed.evidence_tier, "C");
         assert!(validate_signal_codes(&parsed.signal_codes));
-        assert!(parsed
-            .signal_codes
-            .iter()
-            .all(|c| ALLOWED_SIGNAL_CODES.contains(&c.as_str())));
+        assert!(
+            parsed
+                .signal_codes
+                .iter()
+                .all(|c| ALLOWED_SIGNAL_CODES.contains(&c.as_str()))
+        );
     }
 
     #[test]

@@ -1,4 +1,4 @@
-﻿//! `/curator` slash command handler and helpers.
+//! `/curator` slash command handler and helpers.
 
 use std::fmt::Write as _;
 

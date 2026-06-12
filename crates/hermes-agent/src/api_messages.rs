@@ -57,9 +57,7 @@ pub(crate) fn assemble_api_messages_from_ctx(
     use_native_cache_layout: bool,
     force_strip_images: bool,
 ) -> Vec<Message> {
-    let last_user_idx = source
-        .iter()
-        .rposition(|m| m.role == MessageRole::User);
+    let last_user_idx = source.iter().rposition(|m| m.role == MessageRole::User);
     let fenced = if prefetch.trim().is_empty() {
         String::new()
     } else {
@@ -103,14 +101,24 @@ mod tests {
     #[test]
     fn force_strip_overrides_vision_model_hint() {
         let mut msgs = vec![Message::user("see data:image/png;base64,abc")];
-        let out = assemble_api_messages_from_ctx(&msgs, "", None, "gpt-4o", "5m", false, false, true);
-        assert!(out[0]
-            .content
-            .as_deref()
-            .unwrap_or("")
-            .contains("Image content removed"));
+        let out =
+            assemble_api_messages_from_ctx(&msgs, "", None, "gpt-4o", "5m", false, false, true);
+        assert!(
+            out[0]
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("Image content removed")
+        );
         msgs = vec![Message::user("see data:image/png;base64,abc")];
-        let kept = assemble_api_messages_from_ctx(&msgs, "", None, "gpt-4o", "5m", false, false, false);
-        assert!(kept[0].content.as_deref().unwrap_or("").contains("data:image"));
+        let kept =
+            assemble_api_messages_from_ctx(&msgs, "", None, "gpt-4o", "5m", false, false, false);
+        assert!(
+            kept[0]
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("data:image")
+        );
     }
 }

@@ -1,7 +1,7 @@
 //! Parse provider usage JSON into [`hermes_core::UsageStats`] (Python `normalize_usage` parity).
 
 use hermes_core::UsageStats;
-use hermes_intelligence::usage_pricing::{normalize_usage, CanonicalUsage};
+use hermes_intelligence::usage_pricing::{CanonicalUsage, normalize_usage};
 use serde_json::Value;
 
 use crate::smart_model_routing::ApiMode;
@@ -48,12 +48,9 @@ pub fn usage_stats_from_raw(
     ]
     .iter()
     .any(|k| raw.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0)
-        || [
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-        ]
-        .iter()
-        .any(|k| raw.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
+        || ["cache_read_input_tokens", "cache_creation_input_tokens"]
+            .iter()
+            .any(|k| raw.get(*k).and_then(|v| v.as_u64()).unwrap_or(0) > 0);
     if !has_signal {
         return None;
     }

@@ -4,8 +4,8 @@
 //! Mirrors Python's `tools.managed_tool_gateway.resolve_managed_tool_gateway`
 //! and `is_managed_tool_gateway_ready`.
 
-use super::auth::{peek_nous_access_token, read_nous_access_token, TokenReader};
-use super::config::{build_vendor_gateway_url, GatewayBuilder, ManagedToolGatewayConfig};
+use super::auth::{TokenReader, peek_nous_access_token, read_nous_access_token};
+use super::config::{GatewayBuilder, ManagedToolGatewayConfig, build_vendor_gateway_url};
 use super::selection::managed_nous_tools_enabled;
 
 /// Optional injection points for hermetic tests / custom hosts.

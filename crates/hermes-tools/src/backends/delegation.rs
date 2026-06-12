@@ -168,8 +168,9 @@ mod tests {
             .await
             .expect_err("child depth above configured max should be rejected");
 
-        assert!(err
-            .to_string()
-            .contains("Delegation depth limit reached (100/99)"));
+        assert!(
+            err.to_string()
+                .contains("Delegation depth limit reached (100/99)")
+        );
     }
 }

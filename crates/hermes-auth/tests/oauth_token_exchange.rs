@@ -1,4 +1,4 @@
-use hermes_auth::{exchange_authorization_code, exchange_refresh_token, OAuth2Endpoints};
+use hermes_auth::{OAuth2Endpoints, exchange_authorization_code, exchange_refresh_token};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -236,9 +236,7 @@ pub async fn resolve_session_verdict(
     }
 
     let Some(aux) = auxiliary else {
-        warn!(
-            "resolution: session-end LLM enabled but auxiliary client unavailable — using rules"
-        );
+        warn!("resolution: session-end LLM enabled but auxiliary client unavailable — using rules");
         return rules;
     };
 
@@ -302,7 +300,10 @@ fn merge_payloads(rules: &ResolutionPayload, llm: &ResolutionPayload) -> Resolut
         } else {
             rules.evidence_tier.clone()
         },
-        user_feedback_band: prefer_feedback_band(&rules.user_feedback_band, &llm.user_feedback_band),
+        user_feedback_band: prefer_feedback_band(
+            &rules.user_feedback_band,
+            &llm.user_feedback_band,
+        ),
         objective_check_band: base
             .objective_check_band
             .clone()
@@ -312,18 +313,33 @@ fn merge_payloads(rules: &ResolutionPayload, llm: &ResolutionPayload) -> Resolut
     }
 }
 
-fn apply_skill_signal_boost(signals: &SessionSignals, mut res: ResolutionPayload) -> ResolutionPayload {
+fn apply_skill_signal_boost(
+    signals: &SessionSignals,
+    mut res: ResolutionPayload,
+) -> ResolutionPayload {
     if !(signals.skill_patched || signals.skill_created) {
         return res;
     }
     if tier_rank(&res.evidence_tier) >= tier_rank("C") {
         return res;
     }
-    if signals.skill_patched && !res.signal_codes.iter().any(|c| c == "skill_patched_this_session") {
-        res.signal_codes.push("skill_patched_this_session".to_string());
+    if signals.skill_patched
+        && !res
+            .signal_codes
+            .iter()
+            .any(|c| c == "skill_patched_this_session")
+    {
+        res.signal_codes
+            .push("skill_patched_this_session".to_string());
     }
-    if signals.skill_created && !res.signal_codes.iter().any(|c| c == "skill_created_this_session") {
-        res.signal_codes.push("skill_created_this_session".to_string());
+    if signals.skill_created
+        && !res
+            .signal_codes
+            .iter()
+            .any(|c| c == "skill_created_this_session")
+    {
+        res.signal_codes
+            .push("skill_created_this_session".to_string());
     }
     if res.verdict == "unresolved" || res.verdict == "abandoned" {
         res.verdict = "solved_inferred".to_string();
@@ -509,9 +525,11 @@ mod tests {
         let resolution = fuse_verdict(&signals);
         assert_eq!(resolution.verdict, "solved_inferred");
         assert_eq!(resolution.evidence_tier, "C");
-        assert!(resolution
-            .signal_codes
-            .contains(&"skill_patched_this_session".to_string()));
+        assert!(
+            resolution
+                .signal_codes
+                .contains(&"skill_patched_this_session".to_string())
+        );
     }
 
     #[test]

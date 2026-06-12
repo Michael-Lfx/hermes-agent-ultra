@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::json;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use tokio::time::timeout;
 use tracing::{debug, warn};
 use uuid::Uuid;
@@ -113,8 +113,8 @@ impl MessagingBackend for GatewayMessagingBackend {
         file_path: &str,
         caption: Option<&str>,
     ) -> Result<String, ToolError> {
-        let resolved = resolve_outbound_media_path(file_path)
-            .map_err(ToolError::ExecutionFailed)?;
+        let resolved =
+            resolve_outbound_media_path(file_path).map_err(ToolError::ExecutionFailed)?;
         let path_str = resolved.to_string_lossy().into_owned();
         self.gateway
             .send_file(platform, recipient, &path_str, caption)
@@ -243,7 +243,11 @@ pub struct PendingClarify {
 }
 
 impl PendingClarify {
-    pub async fn respond(self, dispatcher: &ClarifyDispatcher, answer: impl Into<String>) -> Result<(), String> {
+    pub async fn respond(
+        self,
+        dispatcher: &ClarifyDispatcher,
+        answer: impl Into<String>,
+    ) -> Result<(), String> {
         dispatcher.respond_by_id(&self.id, answer).await
     }
 }
@@ -263,7 +267,12 @@ impl ClarifyDispatcher {
         Self::default()
     }
 
-    async fn register(&self, question: &str, choices: &[String], session_key: Option<&str>) -> String {
+    async fn register(
+        &self,
+        question: &str,
+        choices: &[String],
+        session_key: Option<&str>,
+    ) -> String {
         let id = Uuid::new_v4().to_string();
         let session_key = session_key
             .map(str::trim)
@@ -522,7 +531,10 @@ mod tests {
         let dispatcher = ClarifyDispatcher::new();
         let backend = ChannelClarifyBackend::new(dispatcher.clone());
 
-        let out = backend.ask("choose?", Some(&["x".into()]), None).await.unwrap();
+        let out = backend
+            .ask("choose?", Some(&["x".into()]), None)
+            .await
+            .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["status"], "pending");
         let id = parsed["clarification_id"].as_str().unwrap().to_string();
@@ -557,7 +569,10 @@ mod tests {
         );
 
         let answer = ask.await.unwrap().unwrap();
-        assert!(answer.contains("beta"), "numeric choice 2 should map to beta");
+        assert!(
+            answer.contains("beta"),
+            "numeric choice 2 should map to beta"
+        );
     }
 
     #[test]

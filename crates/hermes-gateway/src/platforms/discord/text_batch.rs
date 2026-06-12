@@ -30,17 +30,17 @@ fn should_batch_inbound(msg: &IncomingMessage, config: &DiscordConfig) -> bool {
 }
 
 pub async fn deliver_inbounds(inner: &Arc<DiscordInner>, inbounds: Vec<IncomingMessage>) {
-        let Some(tx) = inner.inbound_tx.read().await.clone() else {
-            debug!("discord inbound dropped: no inbound_tx configured");
-            return;
-        };
-        for msg in inbounds {
-            if should_batch_inbound(&msg, &inner.config) {
-                inner.enqueue_inbound_text(msg).await;
-            } else {
-                let _ = tx.send(msg).await;
-            }
+    let Some(tx) = inner.inbound_tx.read().await.clone() else {
+        debug!("discord inbound dropped: no inbound_tx configured");
+        return;
+    };
+    for msg in inbounds {
+        if should_batch_inbound(&msg, &inner.config) {
+            inner.enqueue_inbound_text(msg).await;
+        } else {
+            let _ = tx.send(msg).await;
         }
+    }
 }
 
 impl DiscordInner {
@@ -87,10 +87,7 @@ impl DiscordInner {
         let handle = tokio::spawn(async move {
             inner.flush_inbound_text(key_for_task, flush_delay).await;
         });
-        self.inbound_text_tasks
-            .write()
-            .await
-            .insert(key, handle);
+        self.inbound_text_tasks.write().await.insert(key, handle);
     }
 
     async fn flush_inbound_text(self: Arc<Self>, key: String, delay: Duration) {

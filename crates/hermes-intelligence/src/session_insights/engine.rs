@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
 
-use crate::usage_pricing::{calculate_cost, has_known_pricing, CanonicalUsage, CostStatus};
+use crate::usage_pricing::{CanonicalUsage, CostStatus, calculate_cost, has_known_pricing};
 
 use super::source::SessionDataSource;
 use super::types::*;

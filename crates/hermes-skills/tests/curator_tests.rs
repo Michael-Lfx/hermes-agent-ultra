@@ -27,10 +27,10 @@ use std::fs;
 
 use chrono::Utc;
 use hermes_skills::{
-    UsageStore, CuratorConfig, CuratorRunCounts, CuratorRunReport, CuratorState, TransitionResult,
-    apply_automatic_transitions, build_curator_prompt, is_paused, load_curator_state,
-    maybe_run_curator, save_curator_state, set_paused, should_run_now, write_curator_report,
-    SkillUsageRecord, STATE_ACTIVE, STATE_ARCHIVED, STATE_STALE,
+    CuratorConfig, CuratorRunCounts, CuratorRunReport, CuratorState, STATE_ACTIVE, STATE_ARCHIVED,
+    STATE_STALE, SkillUsageRecord, TransitionResult, UsageStore, apply_automatic_transitions,
+    build_curator_prompt, is_paused, load_curator_state, maybe_run_curator, save_curator_state,
+    set_paused, should_run_now, write_curator_report,
 };
 use tempfile::tempdir;
 
@@ -181,7 +181,10 @@ fn should_run_now_first_run_seeds_and_defers() {
     assert!(!should_run_now(&store, &config));
     // State file should now exist with last_run_at seeded
     let state = load_curator_state(&store);
-    assert!(state.last_run_at.is_some(), "first run should seed last_run_at");
+    assert!(
+        state.last_run_at.is_some(),
+        "first run should seed last_run_at"
+    );
 }
 
 #[test]
@@ -199,7 +202,10 @@ fn should_run_now_within_interval_returns_false() {
     state.last_run_at = Some(Utc::now().to_rfc3339());
     save_curator_state(&store, &state).expect("save");
 
-    assert!(!should_run_now(&store, &config), "just ran, should not run again");
+    assert!(
+        !should_run_now(&store, &config),
+        "just ran, should not run again"
+    );
 }
 
 #[test]
@@ -218,7 +224,10 @@ fn should_run_now_after_interval_returns_true() {
     state.last_run_at = Some(past.to_rfc3339());
     save_curator_state(&store, &state).expect("save");
 
-    assert!(should_run_now(&store, &config), "interval elapsed, should run");
+    assert!(
+        should_run_now(&store, &config),
+        "interval elapsed, should run"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -383,11 +392,17 @@ fn auto_transitions_batch_mixed_state() {
     let recent = (now - chrono::Duration::seconds(86400 * 5)).to_rfc3339();
 
     let (_dir, store) = setup_skills_dir(vec![
-        ("pinned_old", make_record(STATE_ACTIVE, Some(&old), true)),      // pinned → skipped
-        ("going_stale", make_record(STATE_ACTIVE, Some(&old), false)),    // 60d → stale
-        ("going_archive", make_record(STATE_ACTIVE, Some(&ancient), false)), // 100d → archive
-        ("reviving", make_record(STATE_STALE, Some(&recent), false)),     // 5d → reactivate
-        ("active_fresh", make_record(STATE_ACTIVE, Some(&recent), false)), // fresh → nothing
+        ("pinned_old", make_record(STATE_ACTIVE, Some(&old), true)), // pinned → skipped
+        ("going_stale", make_record(STATE_ACTIVE, Some(&old), false)), // 60d → stale
+        (
+            "going_archive",
+            make_record(STATE_ACTIVE, Some(&ancient), false),
+        ), // 100d → archive
+        ("reviving", make_record(STATE_STALE, Some(&recent), false)), // 5d → reactivate
+        (
+            "active_fresh",
+            make_record(STATE_ACTIVE, Some(&recent), false),
+        ), // fresh → nothing
     ]);
     let config = CuratorConfig {
         stale_after_days: 30,
@@ -545,7 +560,10 @@ fn curator_config_default_values_match_spec() {
     assert_eq!(config.min_idle_hours, 2);
     assert_eq!(config.stale_after_days, 30);
     assert_eq!(config.archive_after_days, 90);
-    assert!(config.prune_builtins, "default prune_builtins should be true");
+    assert!(
+        config.prune_builtins,
+        "default prune_builtins should be true"
+    );
 }
 
 #[test]

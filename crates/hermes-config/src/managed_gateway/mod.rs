@@ -50,14 +50,14 @@ pub mod test_lock {
     }
 }
 
-pub use auth::{peek_nous_access_token, read_nous_access_token, NousProviderState, TokenReader};
+pub use auth::{NousProviderState, TokenReader, peek_nous_access_token, read_nous_access_token};
 pub use config::{
-    build_vendor_gateway_url, get_tool_gateway_scheme, GatewayBuilder, GatewaySchemeError,
-    ManagedToolGatewayConfig, DEFAULT_TOOL_GATEWAY_DOMAIN,
+    DEFAULT_TOOL_GATEWAY_DOMAIN, GatewayBuilder, GatewaySchemeError, ManagedToolGatewayConfig,
+    build_vendor_gateway_url, get_tool_gateway_scheme,
 };
-pub use resolver::{is_managed_tool_gateway_ready, resolve_managed_tool_gateway, ResolveOptions};
+pub use resolver::{ResolveOptions, is_managed_tool_gateway_ready, resolve_managed_tool_gateway};
 pub use selection::{
-    coerce_modal_mode, env_var_enabled, has_direct_modal_credentials, managed_nous_tools_enabled,
-    resolve_modal_backend_state, resolve_openai_audio_api_key, ModalBackendState, ModalMode,
-    SelectedBackend,
+    ModalBackendState, ModalMode, SelectedBackend, coerce_modal_mode, env_var_enabled,
+    has_direct_modal_credentials, managed_nous_tools_enabled, resolve_modal_backend_state,
+    resolve_openai_audio_api_key,
 };

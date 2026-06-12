@@ -12,11 +12,8 @@ use std::path::PathBuf;
 // Re-exports from hermes-config (already migrated)
 // ---------------------------------------------------------------------------
 pub use hermes_config::{
-    coerce_modal_mode,
-    has_direct_modal_credentials,
-    managed_nous_tools_enabled,
-    resolve_modal_backend_state,
-    resolve_openai_audio_api_key,
+    coerce_modal_mode, has_direct_modal_credentials, managed_nous_tools_enabled,
+    resolve_modal_backend_state, resolve_openai_audio_api_key,
 };
 
 // ---------------------------------------------------------------------------
@@ -92,8 +89,14 @@ mod tests {
 
     #[test]
     fn test_normalize_browser_cloud_provider_lowercases_and_trims() {
-        assert_eq!(normalize_browser_cloud_provider(Some("BROWSERLESS")), "browserless");
-        assert_eq!(normalize_browser_cloud_provider(Some("  Remote  ")), "remote");
+        assert_eq!(
+            normalize_browser_cloud_provider(Some("BROWSERLESS")),
+            "browserless"
+        );
+        assert_eq!(
+            normalize_browser_cloud_provider(Some("  Remote  ")),
+            "remote"
+        );
     }
 
     #[test]

@@ -20,9 +20,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::{coerce_mcp_tool_arguments_for_schema, McpError};
+use crate::{McpError, coerce_mcp_tool_arguments_for_schema};
 
 // ---------------------------------------------------------------------------
 // EventBridge — in-memory event queue with cursor-based polling

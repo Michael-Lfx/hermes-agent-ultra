@@ -590,9 +590,11 @@ mod tests {
             cache.sweep_idle_at_with_active(sweep_at, |key, _| key == "active"),
             1
         );
-        assert!(cache
-            .get_if_signature_at("active", "sig", sweep_at)
-            .is_some());
+        assert!(
+            cache
+                .get_if_signature_at("active", "sig", sweep_at)
+                .is_some()
+        );
         assert!(cache.get_if_signature_at("idle", "sig", sweep_at).is_none());
         assert_eq!(released.lock().unwrap().as_slice(), ["old-idle"]);
 

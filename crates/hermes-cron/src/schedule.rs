@@ -14,35 +14,27 @@ const MIN_GRACE_SECONDS: i64 = 120;
 const MAX_GRACE_SECONDS: i64 = 7200;
 
 static DURATION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$",
-    )
-    .expect("valid regex")
+    Regex::new(r"(?i)^(\d+)\s*(m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$")
+        .expect("valid regex")
 });
 
-static CRON_FIELD_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^[\d\*\-,/]+$").expect("valid regex")
-});
+static CRON_FIELD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\d\*\-,/]+$").expect("valid regex"));
 
-static ZH_ONCE_MINUTES_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d+)\s*分钟(?:后|之内)?$").expect("valid regex")
-});
+static ZH_ONCE_MINUTES_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+)\s*分钟(?:后|之内)?$").expect("valid regex"));
 
-static ZH_ONCE_HOURS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d+)\s*小时(?:后)?$").expect("valid regex")
-});
+static ZH_ONCE_HOURS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+)\s*小时(?:后)?$").expect("valid regex"));
 
-static ZH_ONCE_DAYS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(\d+)\s*天(?:后)?$").expect("valid regex")
-});
+static ZH_ONCE_DAYS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+)\s*天(?:后)?$").expect("valid regex"));
 
-static ZH_EVERY_MINUTES_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^每\s*(\d+)\s*分钟$").expect("valid regex")
-});
+static ZH_EVERY_MINUTES_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^每\s*(\d+)\s*分钟$").expect("valid regex"));
 
-static ZH_EVERY_HOURS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^每\s*(\d+)\s*小时$").expect("valid regex")
-});
+static ZH_EVERY_HOURS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^每\s*(\d+)\s*小时$").expect("valid regex"));
 
 static EN_IN_DURATION_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
@@ -77,12 +69,8 @@ static EN_AFTER_RE: LazyLock<Regex> = LazyLock::new(|| {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ScheduleSpec {
     Once { run_at: DateTime<Utc> },
-    Interval {
-        minutes: u32,
-    },
-    Cron {
-        expr: String,
-    },
+    Interval { minutes: u32 },
+    Cron { expr: String },
 }
 
 impl ScheduleSpec {
@@ -203,9 +191,10 @@ pub fn parse_schedule(schedule: &str) -> Result<ScheduleSpec, ScheduleParseError
         return Ok(ScheduleSpec::Cron { expr });
     }
 
-    if original.contains('T') || Regex::new(r"^\d{4}-\d{2}-\d{2}")
-        .expect("valid")
-        .is_match(original)
+    if original.contains('T')
+        || Regex::new(r"^\d{4}-\d{2}-\d{2}")
+            .expect("valid")
+            .is_match(original)
     {
         let run_at = parse_iso_timestamp(original)?;
         return Ok(ScheduleSpec::Once { run_at });
@@ -241,12 +230,9 @@ pub fn parse_schedule_value(value: &serde_json::Value) -> Result<ScheduleSpec, S
                     })
                 }
                 "interval" => {
-                    let minutes = map
-                        .get("minutes")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            ScheduleParseError("interval schedule missing minutes".into())
-                        })? as u32;
+                    let minutes = map.get("minutes").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        ScheduleParseError("interval schedule missing minutes".into())
+                    })? as u32;
                     Ok(ScheduleSpec::Interval { minutes })
                 }
                 "cron" => {
@@ -256,10 +242,14 @@ pub fn parse_schedule_value(value: &serde_json::Value) -> Result<ScheduleSpec, S
                         .ok_or_else(|| ScheduleParseError("cron schedule missing expr".into()))?;
                     parse_schedule(expr)
                 }
-                other => Err(ScheduleParseError(format!("unknown schedule kind: {other}"))),
+                other => Err(ScheduleParseError(format!(
+                    "unknown schedule kind: {other}"
+                ))),
             }
         }
-        _ => Err(ScheduleParseError("schedule must be string or object".into())),
+        _ => Err(ScheduleParseError(
+            "schedule must be string or object".into(),
+        )),
     }
 }
 

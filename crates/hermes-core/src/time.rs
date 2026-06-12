@@ -5,9 +5,7 @@
 
 use std::sync::{Mutex, OnceLock};
 
-use chrono::{
-    DateTime, FixedOffset, Local, NaiveDateTime, Offset, TimeZone, Utc,
-};
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, Offset, TimeZone, Utc};
 use chrono_tz::Tz;
 use tracing::warn;
 
@@ -284,9 +282,7 @@ fn parse_iana_timezone(name: &str) -> Option<Tz> {
     match name.parse::<Tz>() {
         Ok(tz) => Some(tz),
         Err(err) => {
-            warn!(
-                "Invalid timezone '{name}': {err}. Falling back to server local time.",
-            );
+            warn!("Invalid timezone '{name}': {err}. Falling back to server local time.",);
             None
         }
     }
@@ -296,9 +292,7 @@ fn deprecated_cron_tz_offset() -> Option<FixedOffset> {
     let raw = std::env::var("HERMES_CRON_TZ")
         .ok()
         .filter(|s| !s.trim().is_empty())?;
-    warn!(
-        "HERMES_CRON_TZ is deprecated; set `timezone` in config.yaml or HERMES_TIMEZONE instead"
-    );
+    warn!("HERMES_CRON_TZ is deprecated; set `timezone` in config.yaml or HERMES_TIMEZONE instead");
     parse_fixed_offset(&raw)
 }
 
@@ -377,7 +371,8 @@ mod tests {
     #[test]
     fn ensure_aware_naive_preserves_absolute_instant() {
         let clock = HermesClock::with_fixed_tz("Asia/Kolkata");
-        let naive = NaiveDateTime::parse_from_str("2026-03-11 12:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
+        let naive =
+            NaiveDateTime::parse_from_str("2026-03-11 12:00:00", "%Y-%m-%d %H:%M:%S").unwrap();
         let local_offset = Local::now().offset().fix();
         let expected = local_offset
             .from_local_datetime(&naive)
@@ -438,10 +433,7 @@ mod tests {
             assert_eq!(now().offset().fix().local_minus_utc(), 0);
             crate::test_env::set_var("HERMES_TIMEZONE", "Asia/Kolkata");
             reset_cache();
-            assert_eq!(
-                now().offset().fix().local_minus_utc(),
-                5 * 3600 + 30 * 60
-            );
+            assert_eq!(now().offset().fix().local_minus_utc(), 5 * 3600 + 30 * 60);
         });
     }
 
@@ -452,10 +444,7 @@ mod tests {
             assert_eq!(now().offset().fix().local_minus_utc(), 0);
             crate::test_env::set_var("HERMES_TIMEZONE", "Asia/Kolkata");
             reset_global_clock_cache();
-            assert_eq!(
-                now().offset().fix().local_minus_utc(),
-                5 * 3600 + 30 * 60
-            );
+            assert_eq!(now().offset().fix().local_minus_utc(), 5 * 3600 + 30 * 60);
         });
     }
 }

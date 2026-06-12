@@ -476,14 +476,16 @@ mod quote_tests {
         let args = backend.build_run_args("rust:1.90");
         assert!(args.windows(2).any(|w| w == ["--cpus", "2"]));
         assert!(args.windows(2).any(|w| w == ["--memory", "4096m"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["--storage-opt", "size=51200m"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--storage-opt", "size=51200m"])
+        );
         assert!(args.windows(2).any(|w| w == ["-e", "FOO=bar"]));
         assert!(args.windows(2).any(|w| w == ["-e", "BAZ=qux"]));
-        assert!(args
-            .windows(2)
-            .any(|w| w == ["-e", "HERMES_DOCKER_FORWARD_TEST=forwarded"]));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["-e", "HERMES_DOCKER_FORWARD_TEST=forwarded"])
+        );
         assert!(args.windows(2).any(|w| w == ["-v", "/host/cache:/cache"]));
         assert!(!args.iter().any(|arg| arg == "--rm"));
         #[cfg(unix)]

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hermes_core::{ToolError, ToolHandler};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use hermes_tools::tools::clarify::{ClarifyBackend, ClarifyHandler, MAX_CHOICES};
 use hermes_tools::tools::process_registry::ProcessRegistryHandler;

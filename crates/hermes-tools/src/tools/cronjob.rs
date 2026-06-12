@@ -203,7 +203,10 @@ impl ToolHandler for CronjobHandler {
                 let workdir = param_str(&params, &["workdir"]);
                 let profile = param_str(&params, &["profile"]);
                 let script = param_str(&params, &["script"]);
-                let no_agent = params.get("no_agent").and_then(|v| v.as_bool()).unwrap_or(false);
+                let no_agent = params
+                    .get("no_agent")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 let deliver = param_str(&params, &["deliver"]);
                 let repeat = params
                     .get("repeat")
@@ -248,7 +251,9 @@ impl ToolHandler for CronjobHandler {
                 let enabled_toolsets = params.get("enabled_toolsets");
                 let script = param_str(&params, &["script"]);
                 let no_agent = params.get("no_agent").and_then(|v| v.as_bool());
-                let skills = params.get("skills").or_else(|| params.get("skill").or(params.get("toolset")));
+                let skills = params
+                    .get("skills")
+                    .or_else(|| params.get("skill").or(params.get("toolset")));
                 let model = param_str(&params, &["model"]);
                 let provider = param_str(&params, &["provider"]);
                 let base_url = param_str(&params, &["base_url"]);
@@ -525,10 +530,7 @@ mod tests {
             _deliver: Option<&str>,
             _repeat: Option<u32>,
         ) -> Result<String, ToolError> {
-            Ok(format!(
-                "Created cronjob: {}",
-                name.unwrap_or("unnamed")
-            ))
+            Ok(format!("Created cronjob: {}", name.unwrap_or("unnamed")))
         }
         async fn list(&self, _include_disabled: bool) -> Result<String, ToolError> {
             Ok("[]".to_string())

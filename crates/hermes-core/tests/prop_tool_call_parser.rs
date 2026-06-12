@@ -6,7 +6,7 @@
 
 use proptest::prelude::*;
 
-use hermes_core::{format_tool_calls, parse_tool_calls, FunctionCall, ToolCall};
+use hermes_core::{FunctionCall, ToolCall, format_tool_calls, parse_tool_calls};
 
 // ---------------------------------------------------------------------------
 // Strategies (local, since test_generators is #[cfg(test)] internal)

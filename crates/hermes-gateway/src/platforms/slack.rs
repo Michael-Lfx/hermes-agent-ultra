@@ -20,7 +20,7 @@ use tracing::{debug, info};
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
-use crate::adapter::{describe_secret, AdapterProxyConfig, BasePlatformAdapter};
+use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter, describe_secret};
 
 /// Slack Web API base URL.
 const SLACK_API_BASE: &str = "https://slack.com/api";

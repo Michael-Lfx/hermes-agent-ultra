@@ -7,8 +7,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use hermes_config::PlatformConfig;
 use crate::adapter::AdapterProxyConfig;
+use hermes_config::PlatformConfig;
 
 pub const DEFAULT_BRIDGE_PORT: u16 = 3000;
 pub const MAX_MESSAGE_LENGTH: usize = 4096;
@@ -118,25 +118,26 @@ impl WhatsAppConfig {
         cfg.group_allow_from = extra_string_list(ex, "group_allow_from")
             .or_else(|| env_list("WHATSAPP_GROUP_ALLOW_FROM"))
             .unwrap_or_default();
-        cfg.require_mention = extra_bool(ex, "require_mention")
-            .or_else(|| env_bool("WHATSAPP_REQUIRE_MENTION"));
+        cfg.require_mention =
+            extra_bool(ex, "require_mention").or_else(|| env_bool("WHATSAPP_REQUIRE_MENTION"));
         cfg.mention_patterns = extra_string_list(ex, "mention_patterns")
             .or_else(|| env_list("WHATSAPP_MENTION_PATTERNS"))
             .unwrap_or_default();
         cfg.free_response_chats = extra_string_list(ex, "free_response_chats")
             .or_else(|| env_list("WHATSAPP_FREE_RESPONSE_CHATS"))
             .unwrap_or_default();
-        cfg.text_batch_delay_seconds =
-            extra_f64(ex, "text_batch_delay_seconds", DEFAULT_TEXT_BATCH_DELAY_SECS);
+        cfg.text_batch_delay_seconds = extra_f64(
+            ex,
+            "text_batch_delay_seconds",
+            DEFAULT_TEXT_BATCH_DELAY_SECS,
+        );
         cfg.text_batch_split_delay_seconds = extra_f64(
             ex,
             "text_batch_split_delay_seconds",
             DEFAULT_TEXT_BATCH_SPLIT_DELAY_SECS,
         );
         cfg.mode = extra_string(ex, "mode");
-        if cfg.whatsapp_mode() == "self-chat"
-            && ex.get("text_batch_delay_seconds").is_none()
-        {
+        if cfg.whatsapp_mode() == "self-chat" && ex.get("text_batch_delay_seconds").is_none() {
             cfg.text_batch_delay_seconds = 1.0;
         }
         cfg
@@ -161,7 +162,11 @@ impl WhatsAppConfig {
         self.session_path
             .as_ref()
             .map(PathBuf::from)
-            .unwrap_or_else(|| hermes_config::hermes_home().join("whatsapp").join("session"))
+            .unwrap_or_else(|| {
+                hermes_config::hermes_home()
+                    .join("whatsapp")
+                    .join("session")
+            })
     }
 
     pub fn whatsapp_mode(&self) -> String {
@@ -258,11 +263,7 @@ fn extra_string_list(ex: &HashMap<String, Value>, key: &str) -> Option<Vec<Strin
                 .filter(|s| !s.is_empty())
                 .map(String::from)
                 .collect();
-            if items.is_empty() {
-                None
-            } else {
-                Some(items)
-            }
+            if items.is_empty() { None } else { Some(items) }
         }
         _ => None,
     }
@@ -315,7 +316,8 @@ mod tests {
     #[test]
     fn reply_prefix_empty_disables() {
         let mut p = PlatformConfig::default();
-        p.extra.insert("reply_prefix".into(), Value::String("".into()));
+        p.extra
+            .insert("reply_prefix".into(), Value::String("".into()));
         let cfg = WhatsAppConfig::from_platform_config(&p);
         assert_eq!(cfg.reply_prefix.as_deref(), Some(""));
     }
@@ -323,7 +325,8 @@ mod tests {
     #[test]
     fn self_chat_requests_open_dm_policy() {
         let mut p = PlatformConfig::default();
-        p.extra.insert("mode".into(), Value::String("self-chat".into()));
+        p.extra
+            .insert("mode".into(), Value::String("self-chat".into()));
         let cfg = WhatsAppConfig::from_platform_config(&p);
         assert!(cfg.self_chat_dm_policy_open());
     }

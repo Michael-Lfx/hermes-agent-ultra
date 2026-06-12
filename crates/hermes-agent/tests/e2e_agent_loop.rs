@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use futures::stream::BoxStream;
 use hermes_agent::agent_loop::ToolRegistry;
@@ -41,8 +41,9 @@ impl LlmProvider for MockProvider {
                 usage: None,
                 model: "mock:model".to_string(),
                 finish_reason: Some("tool_calls".to_string()),
-            
-                ..Default::default()})
+
+                ..Default::default()
+            })
         } else {
             let saw_tool = messages
                 .iter()
@@ -56,8 +57,9 @@ impl LlmProvider for MockProvider {
                 usage: None,
                 model: "mock:model".to_string(),
                 finish_reason: Some("stop".to_string()),
-            
-                ..Default::default()})
+
+                ..Default::default()
+            })
         }
     }
 

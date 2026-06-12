@@ -7,8 +7,8 @@
 //! Corresponds to `hermes-agent/tools/binary_extensions.py`.
 //! Ported from free-code src/constants/files.ts.
 
-use std::sync::LazyLock;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 /// Binary file extensions that should be skipped for text-based operations.
 pub static BINARY_EXTENSIONS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {

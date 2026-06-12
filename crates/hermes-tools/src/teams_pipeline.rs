@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -726,7 +726,7 @@ impl TeamsPipelineStore {
                 _ => {
                     return Err(TeamsPipelineError::Store(format!(
                         "unknown store bucket: {bucket}"
-                    )))
+                    )));
                 }
             };
             let now = utc_now_iso();
@@ -2999,12 +2999,13 @@ mod tests {
 
         assert_eq!(job.status, "retry_scheduled");
         assert_eq!(job.error_info.get("retryable"), Some(&Value::Bool(true)));
-        assert!(job
-            .error_info
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap()
-            .contains("Recording unavailable"));
+        assert!(
+            job.error_info
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap()
+                .contains("Recording unavailable")
+        );
     }
 
     #[tokio::test]

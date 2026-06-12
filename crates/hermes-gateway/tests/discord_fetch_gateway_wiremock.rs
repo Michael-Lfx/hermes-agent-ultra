@@ -1,7 +1,7 @@
 //! Wiremock tests for Discord GET /gateway (R-01, R-02).
 
-use hermes_gateway::platforms::discord::fetch_gateway_url_at;
 use hermes_core::errors::GatewayError;
+use hermes_gateway::platforms::discord::fetch_gateway_url_at;
 
 #[tokio::test]
 async fn r01_fetch_gateway_returns_url() {
@@ -18,10 +18,9 @@ async fn r01_fetch_gateway_returns_url() {
 
     let client = reqwest::Client::new();
     let api_base = format!("{}/api/v10", mock_server.uri());
-    let gateway_url =
-        fetch_gateway_url_at(&client, "test-token", &api_base)
-            .await
-            .expect("gateway url");
+    let gateway_url = fetch_gateway_url_at(&client, "test-token", &api_base)
+        .await
+        .expect("gateway url");
     assert!(gateway_url.starts_with("wss://"));
 }
 

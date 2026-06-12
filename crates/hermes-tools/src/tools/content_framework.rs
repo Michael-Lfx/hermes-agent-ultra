@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ContentItem {
@@ -67,7 +67,10 @@ impl ContentItem {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             title,
-            url: value.get("url").and_then(|v| v.as_str()).map(str::to_string),
+            url: value
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             summary: value
                 .get("summary")
                 .and_then(|v| v.as_str())
@@ -95,14 +98,22 @@ impl ContentItem {
             return;
         }
         let title = self.title.trim().to_ascii_lowercase();
-        let url = self.url.as_deref().unwrap_or("").trim().to_ascii_lowercase();
+        let url = self
+            .url
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         let summary = self
             .summary
             .as_deref()
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        let raw = format!("{}|{}|{}|{}|{}", self.source, self.channel, title, url, summary);
+        let raw = format!(
+            "{}|{}|{}|{}|{}",
+            self.source, self.channel, title, url, summary
+        );
         let digest = Sha256::digest(raw.as_bytes());
         let fingerprint = digest
             .iter()

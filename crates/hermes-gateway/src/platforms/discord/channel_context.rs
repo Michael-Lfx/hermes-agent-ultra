@@ -32,9 +32,7 @@ pub fn resolve_channel_skills(
     let skills = bindings
         .iter()
         .find(|b| b.id == channel_id)
-        .or_else(|| {
-            parent_id.and_then(|pid| bindings.iter().find(|b| b.id == pid))
-        })
+        .or_else(|| parent_id.and_then(|pid| bindings.iter().find(|b| b.id == pid)))
         .map(|b| b.skills.clone())?;
     if skills.is_empty() {
         return None;
@@ -81,7 +79,10 @@ pub fn parse_channel_skill_bindings(platform_cfg: &PlatformConfig) -> Vec<Channe
         let id = obj
             .get("id")
             .and_then(|v| v.as_str().map(String::from))
-            .or_else(|| obj.get("id").and_then(|v| v.as_u64().map(|n| n.to_string())));
+            .or_else(|| {
+                obj.get("id")
+                    .and_then(|v| v.as_u64().map(|n| n.to_string()))
+            });
         let Some(id) = id.filter(|s| !s.is_empty()) else {
             continue;
         };

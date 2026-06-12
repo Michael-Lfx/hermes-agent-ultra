@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use hermes_config::{WebResearchConfig, web_research::WebResearchTaskProfile};
 use chrono::Datelike;
+use hermes_config::{WebResearchConfig, web_research::WebResearchTaskProfile};
 use hermes_core::{Message, ToolCall, ToolResult, ToolSchema};
 use hermes_intelligence::auxiliary::{AuxiliaryClient, AuxiliaryRequest, AuxiliaryTask};
 use serde::Deserialize;
@@ -192,7 +192,10 @@ impl WebResearchController {
                 _ => true,
             });
             if !self.tasks.is_empty()
-                && self.tasks.iter().all(|t| t.status == ResearchTaskStatus::Verified)
+                && self
+                    .tasks
+                    .iter()
+                    .all(|t| t.status == ResearchTaskStatus::Verified)
             {
                 out.retain(|s| !matches!(s.name.as_str(), "web_extract" | "browser_navigate"));
             }
@@ -266,12 +269,12 @@ impl WebResearchController {
         self.planner_invoked = true;
         self.tasks = decompose_research_tasks(user_message, &self.config);
         if self.config.llm_decomposer_enabled {
-            if let Some(tasks) = self
-                .fetch_decomposed_tasks(auxiliary, user_message)
-                .await
-            {
+            if let Some(tasks) = self.fetch_decomposed_tasks(auxiliary, user_message).await {
                 if !tasks.is_empty() {
-                    tracing::info!(task_count = tasks.len(), "web_research llm decomposer applied");
+                    tracing::info!(
+                        task_count = tasks.len(),
+                        "web_research llm decomposer applied"
+                    );
                     self.tasks = tasks;
                 }
             }
@@ -359,7 +362,11 @@ impl WebResearchController {
                     tracing::info!(
                         sufficient_answer = decision.sufficient_answer,
                         continue_web = decision.continue_web,
-                        pending_tasks = self.tasks.iter().filter(|t| t.status == ResearchTaskStatus::Pending).count(),
+                        pending_tasks = self
+                            .tasks
+                            .iter()
+                            .filter(|t| t.status == ResearchTaskStatus::Pending)
+                            .count(),
                         "web_research evaluator suggested stop but tasks still pending; continue"
                     );
                 }
@@ -1030,9 +1037,15 @@ fn user_explicitly_requested_browser(user_message: &str) -> bool {
     if lower.contains("browser_navigate") {
         return true;
     }
-    ["用浏览器", "使用浏览器", "浏览器打开", "浏览器访问", "打开浏览器"]
-        .iter()
-        .any(|cue| text.contains(cue))
+    [
+        "用浏览器",
+        "使用浏览器",
+        "浏览器打开",
+        "浏览器访问",
+        "打开浏览器",
+    ]
+    .iter()
+    .any(|cue| text.contains(cue))
         || [
             "use browser",
             "open in browser",
@@ -1075,9 +1088,12 @@ fn task_budget_ceilings(tasks: &[ResearchTask], config: &WebResearchConfig) -> (
 
 fn all_tasks_terminal(tasks: &[ResearchTask]) -> bool {
     tasks.is_empty()
-        || tasks
-            .iter()
-            .all(|t| matches!(t.status, ResearchTaskStatus::Verified | ResearchTaskStatus::Exhausted))
+        || tasks.iter().all(|t| {
+            matches!(
+                t.status,
+                ResearchTaskStatus::Verified | ResearchTaskStatus::Exhausted
+            )
+        })
 }
 
 fn limits_for_config(
@@ -1291,11 +1307,7 @@ fn parse_decomposer_json(
             .unwrap_or_else(|| infer_task_type_from_focus(&focus));
         tasks.push(new_research_task(id, task_type, &focus, config));
     }
-    if tasks.is_empty() {
-        None
-    } else {
-        Some(tasks)
-    }
+    if tasks.is_empty() { None } else { Some(tasks) }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1388,7 +1400,12 @@ fn trim_parallel_web_calls(tool_calls: &mut Vec<ToolCall>, max_parallel: u32) {
     }
     let web_count = tool_calls
         .iter()
-        .filter(|tc| matches!(tc.function.name.as_str(), "web_search" | "web_extract" | "browser_navigate"))
+        .filter(|tc| {
+            matches!(
+                tc.function.name.as_str(),
+                "web_search" | "web_extract" | "browser_navigate"
+            )
+        })
         .count() as u32;
     if web_count <= max_parallel {
         return;
@@ -1760,9 +1777,8 @@ fn matches_required_terms(task: &ResearchTask, text: &str) -> bool {
 }
 
 fn has_numeric_signal(text: &str) -> bool {
-    text.chars().any(|c| {
-        c.is_ascii_digit() || ('０'..='９').contains(&c) || matches!(c, '〇' | '零')
-    })
+    text.chars()
+        .any(|c| c.is_ascii_digit() || ('０'..='９').contains(&c) || matches!(c, '〇' | '零'))
 }
 
 fn looks_like_missing_page(text: &str) -> bool {
@@ -2127,7 +2143,11 @@ mod tests {
     async fn fallback_allows_third_search_after_two_failures() {
         let cfg = test_config();
         let mut ctrl = WebResearchController::new(cfg.clone());
-        ctrl.plan = Some(fallback_plan(&cfg, &ctrl.tasks, ctrl.user_requested_browser));
+        ctrl.plan = Some(fallback_plan(
+            &cfg,
+            &ctrl.tasks,
+            ctrl.user_requested_browser,
+        ));
         ctrl.limits = limits_for_config(
             &cfg,
             ctrl.plan.as_ref(),
@@ -2366,7 +2386,8 @@ mod tests {
         };
         let idx = ctrl.infer_task_for_call(&tc).unwrap();
         assert!(
-            ctrl.tasks[idx].focus_text.contains("高考") || ctrl.tasks[idx].focus_text.contains("人数")
+            ctrl.tasks[idx].focus_text.contains("高考")
+                || ctrl.tasks[idx].focus_text.contains("人数")
         );
     }
 
@@ -2375,7 +2396,11 @@ mod tests {
         let cfg = test_config();
         let mut ctrl = WebResearchController::new(cfg.clone());
         ctrl.tasks = decompose_research_tasks("深圳天气 深圳高考人数", &cfg);
-        ctrl.plan = Some(fallback_plan(&cfg, &ctrl.tasks, ctrl.user_requested_browser));
+        ctrl.plan = Some(fallback_plan(
+            &cfg,
+            &ctrl.tasks,
+            ctrl.user_requested_browser,
+        ));
         ctrl.limits = WebToolBudgetLimits::from_dynamic_pools(2, 5, 2, Some(2), 2);
         ctrl.planner_invoked = true;
 
@@ -2398,7 +2423,10 @@ mod tests {
             },
         ];
         let (blocked, _) = ctrl.gate_web_batch(None, &[], &mut calls, 1).await;
-        assert!(blocked.is_empty(), "dual parallel search should pass task policy");
+        assert!(
+            blocked.is_empty(),
+            "dual parallel search should pass task policy"
+        );
         assert_eq!(calls.len(), 2);
     }
 
@@ -2407,7 +2435,11 @@ mod tests {
         let cfg = test_config();
         let mut ctrl = WebResearchController::new(cfg.clone());
         ctrl.tasks = decompose_research_tasks("深圳天气 深圳高考人数", &cfg);
-        ctrl.plan = Some(fallback_plan(&cfg, &ctrl.tasks, ctrl.user_requested_browser));
+        ctrl.plan = Some(fallback_plan(
+            &cfg,
+            &ctrl.tasks,
+            ctrl.user_requested_browser,
+        ));
         ctrl.limits = WebToolBudgetLimits::from_dynamic_pools(2, 5, 2, Some(2), 2);
         ctrl.planner_invoked = true;
         ctrl.tasks[0].search_attempts = 1;
@@ -2610,7 +2642,9 @@ mod tests {
     #[test]
     fn user_browser_request_detection() {
         assert!(!user_explicitly_requested_browser("深圳今天天气怎么样"));
-        assert!(user_explicitly_requested_browser("请用 browser_navigate 打开这个页面"));
+        assert!(user_explicitly_requested_browser(
+            "请用 browser_navigate 打开这个页面"
+        ));
         assert!(user_explicitly_requested_browser("用浏览器打开官网"));
     }
 
@@ -2624,12 +2658,22 @@ mod tests {
             ToolSchema::new("web_search", "", JsonSchema::new("object")),
             ToolSchema::new("browser_navigate", "", JsonSchema::new("object")),
         ];
-        assert!(!ctrl.filter_tool_schemas(&schemas).iter().any(|s| s.name == "browser_navigate"));
+        assert!(
+            !ctrl
+                .filter_tool_schemas(&schemas)
+                .iter()
+                .any(|s| s.name == "browser_navigate")
+        );
 
-        let ctrl = WebResearchController::with_user_message(test_config(), "请 browser_navigate 打开");
+        let ctrl =
+            WebResearchController::with_user_message(test_config(), "请 browser_navigate 打开");
         assert!(ctrl.user_requested_browser);
         assert!(ctrl.limits.browser_max > 0);
-        assert!(ctrl.filter_tool_schemas(&schemas).iter().any(|s| s.name == "browser_navigate"));
+        assert!(
+            ctrl.filter_tool_schemas(&schemas)
+                .iter()
+                .any(|s| s.name == "browser_navigate")
+        );
     }
 
     #[test]

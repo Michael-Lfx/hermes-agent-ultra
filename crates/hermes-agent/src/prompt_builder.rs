@@ -90,11 +90,10 @@ mod tests {
     #[test]
     fn plan_mode_hint_present_for_planning_and_executing() {
         assert!(super::plan_mode_turn_hint(hermes_tools::PlanPhase::Planning, None).is_some());
-        assert!(super::plan_mode_turn_hint(
-            hermes_tools::PlanPhase::Executing,
-            Some("step 1")
-        )
-        .is_some());
+        assert!(
+            super::plan_mode_turn_hint(hermes_tools::PlanPhase::Executing, Some("step 1"))
+                .is_some()
+        );
         assert!(super::plan_mode_turn_hint(hermes_tools::PlanPhase::Off, None).is_none());
     }
 

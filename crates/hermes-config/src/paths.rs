@@ -327,9 +327,7 @@ pub fn expand_tilde(path: &str) -> Result<PathBuf, String> {
 /// Resolve a local media/file path for outbound delivery; returns canonical path when possible.
 pub fn resolve_outbound_media_path(input: &str) -> Result<PathBuf, String> {
     let path = resolve_agent_path(input);
-    let canonical = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.clone());
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
     if !canonical.is_file() {
         return Err(format!(
             "Media file not found: '{input}' (resolved: {})",
@@ -449,8 +447,7 @@ mod tests {
 
     #[test]
     fn resolve_outbound_media_path_requires_existing_file() {
-        let err = resolve_outbound_media_path("/nonexistent/hermes-test-404.bin")
-            .unwrap_err();
+        let err = resolve_outbound_media_path("/nonexistent/hermes-test-404.bin").unwrap_err();
         assert!(err.contains("Media file not found"));
     }
 }

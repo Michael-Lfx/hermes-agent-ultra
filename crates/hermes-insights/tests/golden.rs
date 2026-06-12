@@ -4,11 +4,11 @@ use std::fs;
 use std::path::Path;
 
 use hermes_insights::sanitize::sanitize_text;
-use hermes_insights::skill::{build_work_package_skill, SkillPatternOptions};
+use hermes_insights::skill::{SkillPatternOptions, build_work_package_skill};
 use hermes_insights::types::{
-    DomainPoiPayload, ResolutionPayload, WorkMetricsPayload, INSIGHTS_CONSENT_VERSION,
+    DomainPoiPayload, INSIGHTS_CONSENT_VERSION, ResolutionPayload, WorkMetricsPayload,
 };
-use hermes_insights::work_package::{build_domain_work_package, WorkPackageBuildInput};
+use hermes_insights::work_package::{WorkPackageBuildInput, build_domain_work_package};
 
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
@@ -71,10 +71,12 @@ fn golden_domain_work_package_shape() {
     let package = build_domain_work_package(&input).expect("package");
     assert_eq!(package.schema_version, 1);
     assert_eq!(package.domain_poi.domain_key, "general.demo.skill");
-    assert!(package
-        .skill
-        .domain_keys
-        .contains(&"general.demo.skill".to_string()));
+    assert!(
+        package
+            .skill
+            .domain_keys
+            .contains(&"general.demo.skill".to_string())
+    );
     assert_eq!(package.work_metrics.duration_band, "0-5m");
     assert_eq!(package.resolution.verdict, "solved_inferred");
 

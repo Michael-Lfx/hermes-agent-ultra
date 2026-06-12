@@ -1,8 +1,8 @@
 //! Shared HTTP client for meta-search HTML fetches.
 
 use rand::RngExt;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, COOKIE, REFERER};
 use reqwest::Client;
+use reqwest::header::{ACCEPT, ACCEPT_LANGUAGE, COOKIE, HeaderMap, HeaderValue, REFERER};
 use std::time::Duration;
 
 pub const BROWSER_ACCEPT_HTML: &str =
@@ -44,10 +44,7 @@ pub fn build_meta_search_client(default_timeout_secs: u64) -> Client {
 /// Per-engine request headers to reduce bot detection (Referer/Cookie patterns from websurfx).
 pub fn cn_request_headers(engine_id: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(
-        ACCEPT,
-        HeaderValue::from_static(BROWSER_ACCEPT_HTML),
-    );
+    headers.insert(ACCEPT, HeaderValue::from_static(BROWSER_ACCEPT_HTML));
     headers.insert(
         ACCEPT_LANGUAGE,
         HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
@@ -55,9 +52,9 @@ pub fn cn_request_headers(engine_id: &str) -> HeaderMap {
     match engine_id {
         "bing_cn" => {
             headers.insert(REFERER, HeaderValue::from_static("https://www.bing.com/"));
-            if let Ok(cookie) = HeaderValue::from_str(
-                "_EDGE_V=1; SRCHHPGUSR=SRCHLANG=zh-Hans; _UR=QS=0&TQS=0",
-            ) {
+            if let Ok(cookie) =
+                HeaderValue::from_str("_EDGE_V=1; SRCHHPGUSR=SRCHLANG=zh-Hans; _UR=QS=0&TQS=0")
+            {
                 headers.insert(COOKIE, cookie);
             }
         }

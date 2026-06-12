@@ -23,11 +23,11 @@ use std::time::Duration;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_config::resolve_outbound_media_path;
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
 use crate::extract_media;
+use hermes_config::resolve_outbound_media_path;
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 // ---------------------------------------------------------------------------
 // Channel resolution
@@ -575,12 +575,7 @@ impl ToolHandler for SendMessageHandler {
 
             let file_result = self
                 .backend
-                .send_file(
-                    &channel.platform,
-                    &channel.chat_id,
-                    &resolved_path,
-                    caption,
-                )
+                .send_file(&channel.platform, &channel.chat_id, &resolved_path, caption)
                 .await;
 
             return match file_result {
@@ -613,9 +608,7 @@ impl ToolHandler for SendMessageHandler {
             .or_else(|| params.get("text"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
-                ToolError::InvalidParams(
-                    "Missing 'message' parameter (alias: 'text')".into(),
-                )
+                ToolError::InvalidParams("Missing 'message' parameter (alias: 'text')".into())
             })?;
 
         let (media_files, cleaned_message) = extract_media(message);
@@ -631,12 +624,7 @@ impl ToolHandler for SendMessageHandler {
                     let path_str = resolved.to_string_lossy().into_owned();
                     match self
                         .backend
-                        .send_file(
-                            &channel.platform,
-                            &channel.chat_id,
-                            &path_str,
-                            None,
-                        )
+                        .send_file(&channel.platform, &channel.chat_id, &path_str, None)
                         .await
                     {
                         Ok(_) => media_sent += 1,

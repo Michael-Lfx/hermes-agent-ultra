@@ -125,9 +125,11 @@ impl WhatsAppCloudAdapter {
     }
 
     async fn send_text(&self, to: &str, text: &str) -> Result<(), GatewayError> {
-        let phone_id = self.config.phone_number_id.as_deref().ok_or_else(|| {
-            GatewayError::SendFailed("phone_number_id not configured".into())
-        })?;
+        let phone_id = self
+            .config
+            .phone_number_id
+            .as_deref()
+            .ok_or_else(|| GatewayError::SendFailed("phone_number_id not configured".into()))?;
         let url = format!("{}/{}/messages", WHATSAPP_API_BASE, phone_id);
         let body = serde_json::json!({
             "messaging_product": "whatsapp",
@@ -145,7 +147,9 @@ impl WhatsAppCloudAdapter {
             .map_err(|e| GatewayError::SendFailed(format!("WhatsApp send failed: {e}")))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(GatewayError::SendFailed(format!("WhatsApp API error: {text}")));
+            return Err(GatewayError::SendFailed(format!(
+                "WhatsApp API error: {text}"
+            )));
         }
         Ok(())
     }
@@ -157,9 +161,11 @@ impl WhatsAppCloudAdapter {
         media_url: &str,
         caption: Option<&str>,
     ) -> Result<(), GatewayError> {
-        let phone_id = self.config.phone_number_id.as_deref().ok_or_else(|| {
-            GatewayError::SendFailed("phone_number_id not configured".into())
-        })?;
+        let phone_id = self
+            .config
+            .phone_number_id
+            .as_deref()
+            .ok_or_else(|| GatewayError::SendFailed("phone_number_id not configured".into()))?;
         let url = format!("{}/{}/messages", WHATSAPP_API_BASE, phone_id);
         let body = build_link_media_body(to, media_type, media_url, caption);
         let resp = self
@@ -172,7 +178,9 @@ impl WhatsAppCloudAdapter {
             .map_err(|e| GatewayError::SendFailed(format!("WhatsApp media send failed: {e}")))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(GatewayError::SendFailed(format!("WhatsApp API error: {text}")));
+            return Err(GatewayError::SendFailed(format!(
+                "WhatsApp API error: {text}"
+            )));
         }
         Ok(())
     }
@@ -265,9 +273,11 @@ impl PlatformAdapter for WhatsAppCloudAdapter {
     ) -> Result<(), GatewayError> {
         use crate::platforms::helpers::{media_category, mime_from_extension};
 
-        let phone_id = self.config.phone_number_id.as_deref().ok_or_else(|| {
-            GatewayError::SendFailed("phone_number_id not configured".into())
-        })?;
+        let phone_id = self
+            .config
+            .phone_number_id
+            .as_deref()
+            .ok_or_else(|| GatewayError::SendFailed("phone_number_id not configured".into()))?;
         let path = std::path::Path::new(file_path);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let mime = mime_from_extension(ext);
@@ -297,9 +307,10 @@ impl PlatformAdapter for WhatsAppCloudAdapter {
                 "WhatsApp media upload error: {text}"
             )));
         }
-        let result: serde_json::Value = resp.json().await.map_err(|e| {
-            GatewayError::SendFailed(format!("WhatsApp upload parse failed: {e}"))
-        })?;
+        let result: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| GatewayError::SendFailed(format!("WhatsApp upload parse failed: {e}")))?;
         let media_id = result.get("id").and_then(|v| v.as_str()).unwrap_or("");
         let media_type = match media_category(ext) {
             "image" => "image",

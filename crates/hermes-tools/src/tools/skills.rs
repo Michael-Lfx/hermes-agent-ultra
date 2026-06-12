@@ -2,9 +2,9 @@
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, SkillProvider, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, SkillProvider, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -137,7 +137,7 @@ impl ToolHandler for SkillViewHandler {
                         "success": false,
                         "error": format!("Failed to read '{}': {}", file_path, e)
                     })
-                    .to_string())
+                    .to_string());
                 }
             };
 
@@ -640,7 +640,10 @@ impl ToolHandler for SkillManageHandler {
                     return Ok(err_json(format!("Failed to write SKILL.md: {e}")));
                 }
 
-                hermes_insights::notify_skill_changed(&skill_dir, hermes_insights::SkillChangeKind::Agent);
+                hermes_insights::notify_skill_changed(
+                    &skill_dir,
+                    hermes_insights::SkillChangeKind::Agent,
+                );
 
                 // Mark as agent-created in usage tracking so curator can find it.
                 let store = hermes_skills::UsageStore::new();
@@ -663,7 +666,8 @@ impl ToolHandler for SkillManageHandler {
                 result["hint"] = json!(format!(
                     "To add reference files, use skill_manage(action='write_file', name='{name}', file_path='references/example.md', file_content='...')"
                 ));
-                Ok(serde_json::to_string(&result).unwrap_or_else(|_| err_json("serialization error")))
+                Ok(serde_json::to_string(&result)
+                    .unwrap_or_else(|_| err_json("serialization error")))
             }
 
             "edit" => {
@@ -687,7 +691,10 @@ impl ToolHandler for SkillManageHandler {
                     return Ok(err_json(format!("Failed to write SKILL.md: {e}")));
                 }
 
-                hermes_insights::notify_skill_changed(&skill_dir, hermes_insights::SkillChangeKind::Agent);
+                hermes_insights::notify_skill_changed(
+                    &skill_dir,
+                    hermes_insights::SkillChangeKind::Agent,
+                );
 
                 Ok(serde_json::to_string(&json!({
                     "success": true,
@@ -704,7 +711,11 @@ impl ToolHandler for SkillManageHandler {
                 };
                 let new_string = match params.get("new_string").and_then(|v| v.as_str()) {
                     Some(s) => s,
-                    None => return Ok(err_json("new_string is required for 'patch'. Use empty string to delete matched text.")),
+                    None => {
+                        return Ok(err_json(
+                            "new_string is required for 'patch'. Use empty string to delete matched text.",
+                        ));
+                    }
                 };
                 let replace_all = params
                     .get("replace_all")
@@ -813,14 +824,20 @@ impl ToolHandler for SkillManageHandler {
                         message.push_str(&format!(" Content absorbed into '{target}'."));
                     }
                 }
-                Ok(serde_json::to_string(&json!({"success": true, "message": message}))
-                    .unwrap_or_else(|_| err_json("serialization error")))
+                Ok(
+                    serde_json::to_string(&json!({"success": true, "message": message}))
+                        .unwrap_or_else(|_| err_json("serialization error")),
+                )
             }
 
             "write_file" => {
                 let file_path = match params.get("file_path").and_then(|v| v.as_str()) {
                     Some(fp) => fp,
-                    None => return Ok(err_json("file_path is required for 'write_file'. Example: 'references/api-guide.md'")),
+                    None => {
+                        return Ok(err_json(
+                            "file_path is required for 'write_file'. Example: 'references/api-guide.md'",
+                        ));
+                    }
                 };
                 let file_content = match params.get("file_content").and_then(|v| v.as_str()) {
                     Some(c) => c,
@@ -1146,7 +1163,9 @@ mod tests {
     async fn test_skill_manage_create_invalid_no_frontmatter() {
         let handler = SkillManageHandler::new(Arc::new(MockSkillProvider));
         let result = handler
-            .execute(json!({"action": "create", "name": "new-skill", "content": "no frontmatter here"}))
+            .execute(
+                json!({"action": "create", "name": "new-skill", "content": "no frontmatter here"}),
+            )
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
@@ -1163,7 +1182,13 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["success"], Value::Bool(false));
-        assert!(v["error"].as_str().unwrap().to_ascii_lowercase().contains("invalid skill name"));
+        assert!(
+            v["error"]
+                .as_str()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("invalid skill name")
+        );
     }
 
     #[tokio::test]
@@ -1257,7 +1282,11 @@ mod tests {
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(v["success"], Value::Bool(true), "write_file failed: {result}");
+        assert_eq!(
+            v["success"],
+            Value::Bool(true),
+            "write_file failed: {result}"
+        );
         assert!(skill_dir.join("references/api.md").exists());
 
         let result = handler
@@ -1269,7 +1298,11 @@ mod tests {
             .await
             .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
-        assert_eq!(v["success"], Value::Bool(true), "remove_file failed: {result}");
+        assert_eq!(
+            v["success"],
+            Value::Bool(true),
+            "remove_file failed: {result}"
+        );
         assert!(!skill_dir.join("references/api.md").exists());
     }
 
@@ -1285,10 +1318,8 @@ mod tests {
         )
         .unwrap();
 
-        let handler = SkillManageHandler::with_skill_roots(
-            Arc::new(MockSkillProvider),
-            vec![skills_root],
-        );
+        let handler =
+            SkillManageHandler::with_skill_roots(Arc::new(MockSkillProvider), vec![skills_root]);
         let result = handler
             .execute(json!({
                 "action": "write_file",
@@ -1300,6 +1331,13 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["success"], Value::Bool(false));
-        assert!(v["error"].as_str().unwrap().to_ascii_lowercase().contains("traversal") || v["error"].as_str().unwrap().contains("allowed"));
+        assert!(
+            v["error"]
+                .as_str()
+                .unwrap()
+                .to_ascii_lowercase()
+                .contains("traversal")
+                || v["error"].as_str().unwrap().contains("allowed")
+        );
     }
 }

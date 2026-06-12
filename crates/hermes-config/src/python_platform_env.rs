@@ -1,8 +1,8 @@
-﻿//! 将 Python Hermes 使用的 **同名** 平台环境变量写入 [`GatewayConfig::platforms`]，
+//! 将 Python Hermes 使用的 **同名** 平台环境变量写入 [`GatewayConfig::platforms`]，
 //! 与 `gateway/platforms/weixin.py`、`dingtalk.py` 中 `os.getenv(...)` 的键一致。
 //!
 //! 在 [`crate::loader::apply_env_overrides`] 末尾调用，优先级高于 YAML（与现有 env 覆盖链一致）。
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::GatewayConfig;
 use crate::platform::PlatformConfig;
@@ -611,7 +611,8 @@ mod tests {
             .or_insert_with(PlatformConfig::default);
         tg.allowed_users = vec!["111".into(), "222".into()];
         tg.extra.insert("group_allow_from".into(), json!(["333"]));
-        tg.extra.insert("group_allowed_chats".into(), json!(["-100"]));
+        tg.extra
+            .insert("group_allowed_chats".into(), json!(["-100"]));
         tg.webhook_url = Some("https://example.com/telegram".into());
         tg.extra.insert("webhook_secret".into(), json!("sec"));
         tg.extra.insert("webhook_port".into(), json!(9443));
@@ -632,11 +633,15 @@ mod tests {
             Some("111,222")
         );
         assert_eq!(
-            std::env::var("TELEGRAM_GROUP_ALLOWED_USERS").ok().as_deref(),
+            std::env::var("TELEGRAM_GROUP_ALLOWED_USERS")
+                .ok()
+                .as_deref(),
             Some("333")
         );
         assert_eq!(
-            std::env::var("TELEGRAM_GROUP_ALLOWED_CHATS").ok().as_deref(),
+            std::env::var("TELEGRAM_GROUP_ALLOWED_CHATS")
+                .ok()
+                .as_deref(),
             Some("-100")
         );
         assert_eq!(

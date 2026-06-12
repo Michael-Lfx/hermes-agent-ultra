@@ -18,7 +18,7 @@ use hermes_tools::ToolRegistry;
 
 use crate::client::ResourceInfo;
 use crate::transport::McpTransport;
-use crate::{coerce_mcp_tool_arguments_for_schema, McpError};
+use crate::{McpError, coerce_mcp_tool_arguments_for_schema};
 
 // ---------------------------------------------------------------------------
 // MCP tool format (for exposing to clients)
@@ -485,9 +485,9 @@ mod tests {
     use crate::client::ResourceInfo;
     use crate::coerce_mcp_tool_arguments_for_schema;
     use async_trait::async_trait;
-    use hermes_core::{tool_schema, ToolError, ToolHandler, ToolSchema};
+    use hermes_core::{ToolError, ToolHandler, ToolSchema, tool_schema};
     use hermes_tools::ToolRegistry;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::sync::Arc;
 
     struct EchoArgsHandler;

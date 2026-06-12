@@ -894,9 +894,11 @@ mod tests {
         entries.insert("zebra".to_string(), "1".to_string());
         entries.insert("alpha".to_string(), "2".to_string());
         write_manifest(&path, &entries).unwrap();
-        assert!(fs::read_to_string(path)
-            .unwrap()
-            .starts_with("alpha:2\nzebra:1"));
+        assert!(
+            fs::read_to_string(path)
+                .unwrap()
+                .starts_with("alpha:2\nzebra:1")
+        );
     }
 
     #[test]
@@ -1126,11 +1128,13 @@ mod tests {
         let restored = reset_bundled_skill(&cfg, "google-workspace", true).unwrap();
         assert!(restored.ok);
         assert_eq!(restored.action, "restored");
-        assert!(restored
-            .synced
-            .unwrap()
-            .copied
-            .contains(&"google-workspace".to_string()));
+        assert!(
+            restored
+                .synced
+                .unwrap()
+                .copied
+                .contains(&"google-workspace".to_string())
+        );
     }
 
     #[test]
@@ -1169,11 +1173,15 @@ mod tests {
         let repair = restore_official_optional_skill(&cfg, "fine-tuning-with-trl", true).unwrap();
         assert!(repair.ok);
         assert_eq!(repair.restored, vec!["trl-fine-tuning"]);
-        assert!(repair
-            .backed_up
-            .contains(&"mlops/trl-fine-tuning".to_string()));
-        assert!(fs::read_to_string(active.join("SKILL.md"))
-            .unwrap()
-            .contains("official"));
+        assert!(
+            repair
+                .backed_up
+                .contains(&"mlops/trl-fine-tuning".to_string())
+        );
+        assert!(
+            fs::read_to_string(active.join("SKILL.md"))
+                .unwrap()
+                .contains("official")
+        );
     }
 }

@@ -66,10 +66,12 @@ async fn local_execute_background() {
         payload.get("output").and_then(|v| v.as_str()),
         Some("Background process started")
     );
-    assert!(payload
-        .get("session_id")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| !s.is_empty()));
+    assert!(
+        payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| !s.is_empty())
+    );
 }
 
 #[tokio::test]
@@ -132,10 +134,12 @@ async fn local_write_read_file() {
 async fn local_file_exists() {
     let backend = LocalBackend::default();
     assert!(backend.file_exists("/tmp").await.unwrap());
-    assert!(!backend
-        .file_exists("/tmp/hermes_nonexistent_xyz_12345")
-        .await
-        .unwrap());
+    assert!(
+        !backend
+            .file_exists("/tmp/hermes_nonexistent_xyz_12345")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

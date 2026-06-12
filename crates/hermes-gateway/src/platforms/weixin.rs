@@ -12,15 +12,15 @@ use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use tokio::sync::{mpsc, Mutex, Notify, RwLock};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, Notify, RwLock, mpsc};
 use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
+use aes::Aes128;
 use aes::cipher::array::Array;
 use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
-use aes::Aes128;
 
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
@@ -305,10 +305,7 @@ fn raise_for_ilink_send(resp: &Value, operation: &str) -> Result<(), GatewayErro
     if ret == 0 && errcode == 0 {
         return Ok(());
     }
-    let errmsg = resp
-        .get("errmsg")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let errmsg = resp.get("errmsg").and_then(|v| v.as_str()).unwrap_or("");
     Err(GatewayError::SendFailed(format!(
         "weixin {operation} failed: ret={ret} errcode={errcode} errmsg={errmsg}"
     )))
@@ -378,11 +375,7 @@ impl WeixinConfig {
         }
         let base_url = {
             let s = gv("base_url");
-            if s.is_empty() {
-                default_base_url()
-            } else {
-                s
-            }
+            if s.is_empty() { default_base_url() } else { s }
         };
         let cdn_base_url = {
             let s = gv("cdn_base_url");
@@ -394,11 +387,7 @@ impl WeixinConfig {
         };
         let dm_policy = {
             let s = gv("dm_policy");
-            if s.is_empty() {
-                default_dm_policy()
-            } else {
-                s
-            }
+            if s.is_empty() { default_dm_policy() } else { s }
         };
         let group_policy = {
             let s = gv("group_policy");
@@ -1268,8 +1257,10 @@ impl WeChatAdapter {
         let formatted = weixin_format::format_message_for_weixin(text);
         let key = format!("{}:{}", self.inner.config.account_id, to_user_id);
         let ctx = self.inner.context_tokens.lock().await.get(&key).cloned();
-        let chunks =
-            weixin_format::split_delivery_units(&formatted, weixin_format::DEFAULT_MAX_DELIVERY_LENGTH);
+        let chunks = weixin_format::split_delivery_units(
+            &formatted,
+            weixin_format::DEFAULT_MAX_DELIVERY_LENGTH,
+        );
         debug!(
             to_user_id,
             input_chars = text.chars().count(),
@@ -1310,12 +1301,12 @@ impl WeChatAdapter {
             // remove context_token and retry once without it.
             let ret = resp.get("ret").and_then(|v| v.as_i64()).unwrap_or(0);
             let errcode = resp.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
-            let errmsg = resp
-                .get("errmsg")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let errmsg = resp.get("errmsg").and_then(|v| v.as_str()).unwrap_or("");
             if is_stale_session(ret, errcode, errmsg) {
-                debug!(to_user_id, "weixin: stale session detected, retrying without context_token");
+                debug!(
+                    to_user_id,
+                    "weixin: stale session detected, retrying without context_token"
+                );
                 self.inner.context_tokens.lock().await.remove(&key);
                 let _ = Self::persist_context(&self.inner).await;
                 let client_id2 = format!("hermes-weixin-{}", Uuid::new_v4().simple());
@@ -1478,10 +1469,7 @@ impl WeChatAdapter {
 
         let ret = resp.get("ret").and_then(|v| v.as_i64()).unwrap_or(0);
         let errcode = resp.get("errcode").and_then(|v| v.as_i64()).unwrap_or(0);
-        let errmsg = resp
-            .get("errmsg")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let errmsg = resp.get("errmsg").and_then(|v| v.as_str()).unwrap_or("");
         if is_stale_session(ret, errcode, errmsg) {
             debug!(
                 to_user_id,
@@ -1554,9 +1542,7 @@ impl WeChatAdapter {
     ) -> Result<(), GatewayError> {
         let ticket = Self::get_typing_ticket(inner, to_user_id)
             .await
-            .ok_or_else(|| {
-                GatewayError::Platform("weixin: no typing ticket available".into())
-            })?;
+            .ok_or_else(|| GatewayError::Platform("weixin: no typing ticket available".into()))?;
         Self::ilink_post(
             inner,
             EP_SEND_TYPING,
@@ -1803,9 +1789,7 @@ pub async fn qr_login(
     }
 
     println!("\n微信登录超时。");
-    Err(GatewayError::Platform(
-        "weixin: QR login timed out".into(),
-    ))
+    Err(GatewayError::Platform("weixin: QR login timed out".into()))
 }
 
 fn normalized_image_content_type(content_type: Option<&str>) -> Option<String> {
@@ -2095,10 +2079,7 @@ mod weixin_inbound_text_tests {
                 "voice_item": { "text": "第二段" }
             }),
         ];
-        assert_eq!(
-            WeChatAdapter::extract_voice_text(&items),
-            "第一段\n第二段"
-        );
+        assert_eq!(WeChatAdapter::extract_voice_text(&items), "第一段\n第二段");
     }
 }
 
@@ -2284,10 +2265,12 @@ mod weixin_send_file_tests {
                 .as_deref(),
             Some("up_param_1")
         );
-        assert!(cdn_req
-            .url
-            .query_pairs()
-            .any(|(k, v)| k == "filekey" && !v.is_empty()));
+        assert!(
+            cdn_req
+                .url
+                .query_pairs()
+                .any(|(k, v)| k == "filekey" && !v.is_empty())
+        );
         assert_eq!(cdn_req.body.len() % 16, 0);
         assert_ne!(cdn_req.body, plain);
 
@@ -2395,7 +2378,12 @@ mod weixin_send_file_tests {
         );
 
         let second: Value = serde_json::from_slice(&send_reqs[1].body).expect("second send json");
-        assert!(second.get("msg").and_then(|m| m.get("context_token")).is_none());
+        assert!(
+            second
+                .get("msg")
+                .and_then(|m| m.get("context_token"))
+                .is_none()
+        );
     }
 }
 

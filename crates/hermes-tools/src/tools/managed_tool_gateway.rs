@@ -18,11 +18,11 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
-use hermes_config::managed_gateway::{resolve_managed_tool_gateway, ResolveOptions};
+use hermes_config::managed_gateway::{ResolveOptions, resolve_managed_tool_gateway};
 
 const GATEWAY_URL_ENV: &str = "HERMES_MANAGED_TOOL_GATEWAY_URL";
 const GATEWAY_TOKEN_ENV: &str = "HERMES_MANAGED_TOOL_GATEWAY_TOKEN";
@@ -178,7 +178,10 @@ mod tests {
             let mut all_keys: Vec<&'static str> = vec!["HERMES_HOME"];
             all_keys.extend_from_slice(keys);
             all_keys.dedup();
-            let original = all_keys.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+            let original = all_keys
+                .iter()
+                .map(|k| (*k, std::env::var(k).ok()))
+                .collect();
             for k in &all_keys {
                 hermes_core::test_env::remove_var(k);
             }

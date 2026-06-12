@@ -3,7 +3,7 @@
 //! WhatsApp message formatting tests.
 
 use hermes_gateway::platforms::whatsapp::{
-    format_message, outgoing_chunks, WhatsAppConfig, DEFAULT_REPLY_PREFIX, MAX_MESSAGE_LENGTH,
+    DEFAULT_REPLY_PREFIX, MAX_MESSAGE_LENGTH, WhatsAppConfig, format_message, outgoing_chunks,
 };
 
 #[test]

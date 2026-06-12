@@ -85,7 +85,9 @@ pub fn register_config_shell_hooks(mgr: &mut PluginManager, hermes_home: &Path) 
         }
 
         let allowlisted = is_allowlisted(hermes_home, &event_name, &spec.command);
-        if !allowlisted && !prompt_and_record(hermes_home, &event_name, &spec.command, effective_accept) {
+        if !allowlisted
+            && !prompt_and_record(hermes_home, &event_name, &spec.command, effective_accept)
+        {
             tracing::warn!(
                 event = %event_name,
                 command = %spec.command,
@@ -292,10 +294,7 @@ fn script_mtime_iso(command: &str) -> Option<String> {
     let metadata = std::fs::metadata(expanded).ok()?;
     let modified = metadata.modified().ok()?;
     let datetime: chrono::DateTime<Utc> = modified.into();
-    Some(
-        datetime
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    )
+    Some(datetime.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
 }
 
 fn command_script_path(command: &str) -> Option<String> {
@@ -356,10 +355,7 @@ fn parse_hooks_block(hooks_cfg: &Value) -> Vec<ShellHookSpec> {
 }
 
 fn hook_type_from_str(name: &str) -> Option<HookType> {
-    HookType::all()
-        .iter()
-        .copied()
-        .find(|h| h.as_str() == name)
+    HookType::all().iter().copied().find(|h| h.as_str() == name)
 }
 
 fn parse_hook_entry(
@@ -403,10 +399,7 @@ fn parse_hook_entry(
 
 fn make_shell_callback(
     spec: ShellHookSpec,
-) -> (
-    HookType,
-    Arc<dyn Fn(&Value) -> HookResult + Send + Sync>,
-) {
+) -> (HookType, Arc<dyn Fn(&Value) -> HookResult + Send + Sync>) {
     let hook = spec.event;
     let command = spec.command.clone();
     let matcher = spec.matcher.clone();
@@ -560,15 +553,14 @@ mod tests {
 
     #[test]
     fn golden_hook_fixtures_match_plugin_schema() {
-        use crate::plugins::{validate_hook_payload, HookType};
+        use crate::plugins::{HookType, validate_hook_payload};
         let root =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_payloads");
         for hook in HookType::all() {
             let path = root.join(format!("{}.json", hook.as_str()));
             let ctx: Value =
                 serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-            validate_hook_payload(*hook, &ctx)
-                .unwrap_or_else(|e| panic!("{}: {e}", hook.as_str()));
+            validate_hook_payload(*hook, &ctx).unwrap_or_else(|e| panic!("{}: {e}", hook.as_str()));
         }
     }
 
@@ -603,7 +595,12 @@ hooks:
             assert!(mgr.has_hooks());
             let allowlist = load_allowlist(tmp.path());
             assert_eq!(
-                allowlist.get("approvals").unwrap().as_array().unwrap().len(),
+                allowlist
+                    .get("approvals")
+                    .unwrap()
+                    .as_array()
+                    .unwrap()
+                    .len(),
                 1
             );
         });

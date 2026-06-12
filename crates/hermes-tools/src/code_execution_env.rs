@@ -15,12 +15,32 @@ pub const SANDBOX_ALLOWED_TOOLS: &[&str] = &[
 ];
 
 const SAFE_ENV_PREFIXES: &[&str] = &[
-    "PATH", "HOME", "USER", "LANG", "LC_", "TERM", "TMPDIR", "TMP", "TEMP", "SHELL", "LOGNAME",
-    "XDG_", "PYTHONPATH", "VIRTUAL_ENV", "CONDA", "HERMES_",
+    "PATH",
+    "HOME",
+    "USER",
+    "LANG",
+    "LC_",
+    "TERM",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "SHELL",
+    "LOGNAME",
+    "XDG_",
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
+    "CONDA",
+    "HERMES_",
 ];
 
 const SECRET_SUBSTRINGS: &[&str] = &[
-    "KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "PASSWD", "AUTH",
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "CREDENTIAL",
+    "PASSWD",
+    "AUTH",
 ];
 
 const WINDOWS_ESSENTIAL_ENV_VARS: &[&str] = &[
@@ -145,7 +165,10 @@ mod tests {
             ("RANDOM_UNKNOWN_VAR", "nope"),
         ]);
         let out = scrub_child_env(&src, |_| false, true);
-        assert_eq!(out.get("SYSTEMROOT").map(String::as_str), Some(r"C:\Windows"));
+        assert_eq!(
+            out.get("SYSTEMROOT").map(String::as_str),
+            Some(r"C:\Windows")
+        );
         assert!(!out.contains_key("RANDOM_UNKNOWN_VAR"));
     }
 

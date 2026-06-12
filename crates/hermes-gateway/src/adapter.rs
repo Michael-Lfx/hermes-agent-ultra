@@ -91,7 +91,15 @@ pub fn redact_identifier(value: &str) -> String {
         return "****".to_string();
     }
     let prefix: String = chars.iter().take(4).copied().collect();
-    let suffix: String = chars.iter().rev().take(4).copied().collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .copied()
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{prefix}...{suffix}")
 }
 

@@ -31,5 +31,5 @@ pub use pipeline::{
     PcmSink, PipelineOutcome, PipelineStats, SentenceSink, TextDelta, TtsStreamingPipeline,
     VecSentenceSink,
 };
-pub use sanitizer::{strip_markdown_for_tts, IncrementalThinkStripper};
+pub use sanitizer::{IncrementalThinkStripper, strip_markdown_for_tts};
 pub use sentence_buffer::{SentenceBuffer, SentenceBufferConfig};

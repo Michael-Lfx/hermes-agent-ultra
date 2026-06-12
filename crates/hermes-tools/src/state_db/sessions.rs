@@ -42,32 +42,16 @@ pub fn insert_session_if_missing(
     let has_platform = table_has_column(conn, "sessions", "platform")?;
 
     let mut fields: Vec<InsertField> = Vec::new();
-    push_bind(
-        &mut fields,
-        "id",
-        Value::Text(session_id.to_string()),
-    );
+    push_bind(&mut fields, "id", Value::Text(session_id.to_string()));
 
     if has_source {
-        push_bind(
-            &mut fields,
-            "source",
-            Value::Text(source.to_string()),
-        );
+        push_bind(&mut fields, "source", Value::Text(source.to_string()));
     } else if has_platform {
-        push_bind(
-            &mut fields,
-            "platform",
-            Value::Text(source.to_string()),
-        );
+        push_bind(&mut fields, "platform", Value::Text(source.to_string()));
     }
 
     if table_has_column(conn, "sessions", "model")? {
-        push_bind(
-            &mut fields,
-            "model",
-            model.map(str::to_string).into(),
-        );
+        push_bind(&mut fields, "model", model.map(str::to_string).into());
     }
     if table_has_column(conn, "sessions", "system_prompt")? {
         push_bind(
@@ -84,11 +68,7 @@ pub fn insert_session_if_missing(
         );
     }
     if table_has_column(conn, "sessions", "cwd")? {
-        push_bind(
-            &mut fields,
-            "cwd",
-            cwd.map(str::to_string).into(),
-        );
+        push_bind(&mut fields, "cwd", cwd.map(str::to_string).into());
     }
     if table_has_column(conn, "sessions", "started_at")? {
         push_bind(&mut fields, "started_at", Value::Real(started_at));
@@ -175,11 +155,9 @@ mod tests {
         insert_session_if_missing(&conn, "s1", "cli", None, None, None, None, 1.0).unwrap();
 
         let created: String = conn
-            .query_row(
-                "SELECT created_at FROM sessions WHERE id = 's1'",
-                [],
-                |r| r.get(0),
-            )
+            .query_row("SELECT created_at FROM sessions WHERE id = 's1'", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert!(!created.is_empty());
     }

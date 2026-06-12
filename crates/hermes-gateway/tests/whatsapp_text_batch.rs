@@ -3,7 +3,7 @@
 //! WhatsApp text batch debounce tests.
 
 use hermes_gateway::gateway::IncomingMessage;
-use hermes_gateway::platforms::whatsapp::{batch_key, TextBatchState, WhatsAppConfig};
+use hermes_gateway::platforms::whatsapp::{TextBatchState, WhatsAppConfig, batch_key};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 

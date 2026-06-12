@@ -3,12 +3,12 @@
 use std::path::Path;
 use std::process::Stdio;
 
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use hermes_config::voice::{SttConfig, TtsConfig};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use hermes_config::resolve_openai_audio_api_key;
+use hermes_config::voice::{SttConfig, TtsConfig};
 use hermes_core::ToolError;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 const DEFAULT_EDGE_VOICE: &str = "en-US-AriaNeural";
@@ -145,7 +145,8 @@ impl SttEngine {
         let base = self.config.openai_base_url();
         let endpoint = format!("{base}/audio/transcriptions");
         let model = self.config.openai_model().to_string();
-        self.post_whisper_compatible(&endpoint, &api_key, path, &model).await
+        self.post_whisper_compatible(&endpoint, &api_key, path, &model)
+            .await
     }
 
     async fn transcribe_groq(&self, path: &str) -> Result<String, ToolError> {
@@ -256,9 +257,8 @@ impl SttEngine {
     }
 
     async fn transcribe_xai(&self, path: &str) -> Result<String, ToolError> {
-        let api_key = env_nonempty("XAI_API_KEY").ok_or_else(|| {
-            ToolError::ExecutionFailed("XAI_API_KEY not set for xAI STT".into())
-        })?;
+        let api_key = env_nonempty("XAI_API_KEY")
+            .ok_or_else(|| ToolError::ExecutionFailed("XAI_API_KEY not set for xAI STT".into()))?;
         let base = self
             .config
             .xai
@@ -499,12 +499,8 @@ pub async fn mistral_tts_synthesize(
         ToolError::ExecutionFailed("MISTRAL_API_KEY not set for Mistral TTS".into())
     })?;
     let mi = cfg.mistral.as_ref();
-    let model = mi
-        .and_then(|c| c.model.as_deref())
-        .unwrap_or("mistral-tts");
-    let voice_id = mi
-        .and_then(|c| c.voice_id.as_deref())
-        .unwrap_or("default");
+    let model = mi.and_then(|c| c.model.as_deref()).unwrap_or("mistral-tts");
+    let voice_id = mi.and_then(|c| c.voice_id.as_deref()).unwrap_or("default");
     let body = json!({
         "model": model,
         "input": text,
@@ -520,17 +516,23 @@ pub async fn mistral_tts_synthesize(
         .map_err(|e| ToolError::ExecutionFailed(format!("Mistral TTS: {e}")))?;
     if !resp.status().is_success() {
         let err = resp.text().await.unwrap_or_default();
-        return Err(ToolError::ExecutionFailed(format!("Mistral TTS error: {err}")));
+        return Err(ToolError::ExecutionFailed(format!(
+            "Mistral TTS error: {err}"
+        )));
     }
     let json: Value = resp
         .json()
         .await
         .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
     if let Some(b64) = json.get("audio").and_then(|v| v.as_str()) {
-        return B64.decode(b64).map_err(|e| ToolError::ExecutionFailed(e.to_string()));
+        return B64
+            .decode(b64)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()));
     }
     if let Some(b64) = json.get("audio_data").and_then(|v| v.as_str()) {
-        return B64.decode(b64).map_err(|e| ToolError::ExecutionFailed(e.to_string()));
+        return B64
+            .decode(b64)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()));
     }
     Err(ToolError::ExecutionFailed(
         "Mistral TTS: response missing audio payload".into(),
@@ -551,9 +553,7 @@ pub async fn gemini_tts_synthesize(
     let model = g
         .and_then(|c| c.model.as_deref())
         .unwrap_or("gemini-2.5-flash-preview-tts");
-    let voice = g
-        .and_then(|c| c.voice.as_deref())
-        .unwrap_or("Kore");
+    let voice = g.and_then(|c| c.voice.as_deref()).unwrap_or("Kore");
     let base = g
         .and_then(|c| c.base_url.as_deref())
         .unwrap_or(GEMINI_TTS_BASE)
@@ -577,7 +577,9 @@ pub async fn gemini_tts_synthesize(
         .map_err(|e| ToolError::ExecutionFailed(format!("Gemini TTS: {e}")))?;
     if !resp.status().is_success() {
         let err = resp.text().await.unwrap_or_default();
-        return Err(ToolError::ExecutionFailed(format!("Gemini TTS error: {err}")));
+        return Err(ToolError::ExecutionFailed(format!(
+            "Gemini TTS error: {err}"
+        )));
     }
     let data: Value = resp
         .json()
@@ -606,13 +608,10 @@ pub async fn xai_tts_synthesize(
     text: &str,
     cfg: &TtsConfig,
 ) -> Result<Vec<u8>, ToolError> {
-    let api_key = env_nonempty("XAI_API_KEY").ok_or_else(|| {
-        ToolError::ExecutionFailed("XAI_API_KEY not set for xAI TTS".into())
-    })?;
+    let api_key = env_nonempty("XAI_API_KEY")
+        .ok_or_else(|| ToolError::ExecutionFailed("XAI_API_KEY not set for xAI TTS".into()))?;
     let x = cfg.xai.as_ref();
-    let voice_id = x
-        .and_then(|c| c.voice_id.as_deref())
-        .unwrap_or("default");
+    let voice_id = x.and_then(|c| c.voice_id.as_deref()).unwrap_or("default");
     let language = x.and_then(|c| c.language.as_deref()).unwrap_or("en");
     let base = x
         .and_then(|c| c.base_url.as_deref())

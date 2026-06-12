@@ -277,7 +277,9 @@ pub fn envelope_from_value(
 }
 
 /// Drop duplicate work packages in one batch (same `work_id`, keep last).
-pub fn dedupe_batch_contributions(contribs: Vec<ContributionEnvelope>) -> Vec<ContributionEnvelope> {
+pub fn dedupe_batch_contributions(
+    contribs: Vec<ContributionEnvelope>,
+) -> Vec<ContributionEnvelope> {
     let mut idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut out = Vec::with_capacity(contribs.len());
     for env in contribs {
@@ -304,7 +306,9 @@ pub fn work_package_id(payload: &serde_json::Value) -> Option<String> {
 }
 
 pub fn validate_signal_codes(codes: &[String]) -> bool {
-    codes.iter().all(|c| ALLOWED_SIGNAL_CODES.contains(&c.as_str()))
+    codes
+        .iter()
+        .all(|c| ALLOWED_SIGNAL_CODES.contains(&c.as_str()))
 }
 
 pub const ALLOWED_SIGNAL_CODES: &[&str] = &[

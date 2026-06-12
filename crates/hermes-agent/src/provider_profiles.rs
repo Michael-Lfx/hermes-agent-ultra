@@ -409,9 +409,11 @@ mod tests {
         assert_eq!(profile_auth_type("nous"), Some("oauth_device_code"));
         assert_eq!(profile_auth_type("qwen-oauth"), Some("oauth_external"));
         assert!(profile_base_url("nvidia").unwrap().contains("nvidia.com"));
-        assert!(profile_base_url("kimi-coding-cn")
-            .unwrap()
-            .contains("moonshot.cn"));
+        assert!(
+            profile_base_url("kimi-coding-cn")
+                .unwrap()
+                .contains("moonshot.cn")
+        );
         assert!(profile_base_url("mimo").unwrap().contains("xiaomimimo.com"));
         assert!(supports_vision("xiaomi"));
         assert!(!supports_vision("kimi"));
@@ -465,11 +467,13 @@ mod tests {
             extra_headers_for_profile(Some("openrouter"), "x-ai/grok-4", Some(&extra)),
             vec![("x-grok-conv-id".to_string(), "sess-abc".to_string())]
         );
-        assert!(extra_headers_for_profile(
-            Some("openrouter"),
-            "anthropic/claude-sonnet-4.6",
-            Some(&extra)
-        )
-        .is_empty());
+        assert!(
+            extra_headers_for_profile(
+                Some("openrouter"),
+                "anthropic/claude-sonnet-4.6",
+                Some(&extra)
+            )
+            .is_empty()
+        );
     }
 }

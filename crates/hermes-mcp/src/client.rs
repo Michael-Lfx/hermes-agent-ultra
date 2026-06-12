@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
@@ -21,9 +21,9 @@ use tracing::{debug, info, warn};
 
 use hermes_tools::ToolRegistry;
 
+use crate::McpError;
 use crate::auth::McpAuthProvider;
 use crate::transport::{HttpSseTransport, McpTransport, StdioTransport};
-use crate::McpError;
 
 // ---------------------------------------------------------------------------
 // ResourceInfo
@@ -2204,11 +2204,11 @@ impl McpManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        cache_mcp_image_block, is_stale_transport_error, LlmCallback, McpClient, McpManager,
-        McpServerConfig, SamplingConfig,
+        LlmCallback, McpClient, McpManager, McpServerConfig, SamplingConfig, cache_mcp_image_block,
+        is_stale_transport_error,
     };
-    use crate::transport::McpTransport;
     use crate::McpError;
+    use crate::transport::McpTransport;
     use async_trait::async_trait;
     use serde_json::json;
     use std::collections::VecDeque;

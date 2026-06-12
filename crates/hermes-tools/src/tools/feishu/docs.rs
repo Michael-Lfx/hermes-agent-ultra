@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use super::FeishuApiClient;
 
@@ -34,9 +34,7 @@ impl ToolHandler for FeishuDocsHandler {
                 let query = params
                     .get("query")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams("search requires 'query'".into())
-                    })?;
+                    .ok_or_else(|| ToolError::InvalidParams("search requires 'query'".into()))?;
 
                 let mut body = serde_json::Map::new();
                 body.insert("query".into(), json!(query));
@@ -65,9 +63,7 @@ impl ToolHandler for FeishuDocsHandler {
                 let title = params
                     .get("title")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams("create requires 'title'".into())
-                    })?;
+                    .ok_or_else(|| ToolError::InvalidParams("create requires 'title'".into()))?;
 
                 let mut body = serde_json::Map::new();
                 body.insert("title".into(), json!(title));
@@ -91,9 +87,7 @@ impl ToolHandler for FeishuDocsHandler {
                 let content = params
                     .get("content")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ToolError::InvalidParams("append requires 'content'".into())
-                    })?;
+                    .ok_or_else(|| ToolError::InvalidParams("append requires 'content'".into()))?;
 
                 // Default block_id to document_id (root block).
                 let block_id = params

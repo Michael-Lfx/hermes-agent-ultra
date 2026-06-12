@@ -30,9 +30,9 @@ use std::time::SystemTime;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 // ---------------------------------------------------------------------------
 // Policy types
@@ -817,9 +817,11 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("blocked by security"));
 
-        assert!(engine
-            .pre_check("terminal", &json!({"command": "safe_cmd"}))
-            .is_ok());
+        assert!(
+            engine
+                .pre_check("terminal", &json!({"command": "safe_cmd"}))
+                .is_ok()
+        );
     }
 
     #[test]

@@ -9,16 +9,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use hermes_core::ToolError;
 use hermes_tools::tools::cronjob::CronjobBackend;
 use hermes_tools::tools::messaging::MessagingSessionContext;
 
 use crate::job::{CronJob, JobStatus, ModelConfig};
-use crate::python_job::{parse_deliver_string, JobOrigin};
+use crate::python_job::{JobOrigin, parse_deliver_string};
 use crate::runner::detect_cron_prompt_injection;
-use crate::schedule::{normalize_schedule_input, ScheduleSpec};
+use crate::schedule::{ScheduleSpec, normalize_schedule_input};
 use crate::scheduler::{CronError, CronScheduler};
 
 /// Reject absolute paths and directory traversal in cron script fields.
@@ -233,7 +233,11 @@ fn apply_skills_update(job: &mut CronJob, raw: Option<&Value>) -> Result<(), Too
                 skills.push(trimmed.to_string());
             }
         }
-        job.skills = if skills.is_empty() { None } else { Some(skills) };
+        job.skills = if skills.is_empty() {
+            None
+        } else {
+            Some(skills)
+        };
         return Ok(());
     }
     Err(ToolError::InvalidParams(
@@ -245,10 +249,7 @@ fn apply_repeat_for_oneshot(job: &mut CronJob) {
     if job.repeat.is_some() {
         return;
     }
-    if matches!(
-        job.schedule_spec.as_ref(),
-        Some(ScheduleSpec::Once { .. })
-    ) {
+    if matches!(job.schedule_spec.as_ref(), Some(ScheduleSpec::Once { .. })) {
         job.repeat = Some(1);
     }
 }
@@ -493,7 +494,11 @@ impl CronjobBackend for ScheduledCronjobBackend {
             job.repeat = Some(repeat);
         }
         if let Some(toolsets) = parse_string_list(enabled_toolsets, "enabled_toolsets")? {
-            job.enabled_toolsets = if toolsets.is_empty() { None } else { Some(toolsets) };
+            job.enabled_toolsets = if toolsets.is_empty() {
+                None
+            } else {
+                Some(toolsets)
+            };
         }
         if let Some(workdir) = workdir {
             let trimmed = workdir.trim();
@@ -652,7 +657,10 @@ mod tests {
             .await
             .expect("create");
         let created_v: serde_json::Value = serde_json::from_str(&created).expect("json");
-        assert_eq!(created_v.get("action").and_then(|v| v.as_str()), Some("created"));
+        assert_eq!(
+            created_v.get("action").and_then(|v| v.as_str()),
+            Some("created")
+        );
         let next_run = created_v
             .get("next_run")
             .and_then(|v| v.as_str())

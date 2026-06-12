@@ -29,9 +29,7 @@ mod tests {
     fn classify_matrix_golden_fixture() {
         let raw = include_str!("../tests/fixtures/retry_failover/classify_matrix.json");
         let doc: Value = serde_json::from_str(raw).expect("classify_matrix.json");
-        let cases = doc["cases"]
-            .as_array()
-            .expect("cases array");
+        let cases = doc["cases"].as_array().expect("cases array");
         for case in cases {
             let id = case["id"].as_str().unwrap_or("?");
             let err = case["error"].as_str().expect("error");

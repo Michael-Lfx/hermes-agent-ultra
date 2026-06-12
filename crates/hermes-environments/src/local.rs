@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 // TODO: re-enable after CI can reliably fetch pdfium (liteparse-pdfium-sys build.rs download)
 // use liteparse::{LiteParse, LiteParseConfig};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::ChildStdin;
 use tokio::process::Command as TokioCommand;
@@ -23,24 +23,32 @@ use hermes_core::{AgentError, CommandOutput, TerminalBackend};
 /// Extensions that must not be read as UTF-8 text (images, archives, binaries).
 const BINARY_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "tif", "tiff", "heic", "heif", "avif",
-    "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "exe", "dll", "so", "dylib", "bin",
-    "wasm", "mp3", "mp4", "wav", "ogg", "webm", "mov", "avi", "mkv", "flac", "aac", "woff",
-    "woff2", "ttf", "otf", "eot", "pyc", "class", "o", "a", "db", "sqlite", "sqlite3",
+    "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "exe", "dll", "so", "dylib", "bin", "wasm",
+    "mp3", "mp4", "wav", "ogg", "webm", "mov", "avi", "mkv", "flac", "aac", "woff", "woff2", "ttf",
+    "otf", "eot", "pyc", "class", "o", "a", "db", "sqlite", "sqlite3",
 ];
 
 fn binary_read_error(path: &str, ext: &str) -> AgentError {
     let hint = if matches!(
         ext,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "heic"
-            | "heif" | "avif"
+        "png"
+            | "jpg"
+            | "jpeg"
+            | "gif"
+            | "webp"
+            | "bmp"
+            | "ico"
+            | "tif"
+            | "tiff"
+            | "heic"
+            | "heif"
+            | "avif"
     ) {
         "Use vision_analyze for images instead of read_file."
     } else {
         "Use appropriate tools for binary files (not read_file)."
     };
-    AgentError::Io(format!(
-        "Cannot read binary file '{path}' (.{ext}). {hint}"
-    ))
+    AgentError::Io(format!("Cannot read binary file '{path}' (.{ext}). {hint}"))
 }
 
 fn extension_lower(path: &std::path::Path) -> Option<String> {
@@ -1327,7 +1335,9 @@ impl TerminalBackend for LocalBackend {
 
             #[cfg(not(unix))]
             {
-                tracing::warn!("PTY mode is not supported on this platform; falling back to standard execution");
+                tracing::warn!(
+                    "PTY mode is not supported on this platform; falling back to standard execution"
+                );
             }
         }
 
@@ -2458,10 +2468,12 @@ mod tests {
         assert!(backend.file_exists("/tmp").await.unwrap());
 
         // A path that should not exist
-        assert!(!backend
-            .file_exists("/tmp/hermes_nonexistent_test_file_xyz")
-            .await
-            .unwrap());
+        assert!(
+            !backend
+                .file_exists("/tmp/hermes_nonexistent_test_file_xyz")
+                .await
+                .unwrap()
+        );
     }
 
     #[test]
@@ -2687,10 +2699,12 @@ mod tests {
             panic!("background process did not exit after closing stdin: wait={wait}, poll={poll}");
         }
         assert_eq!(wait["status"], "exited");
-        assert!(wait["output"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("hello from stdin"));
+        assert!(
+            wait["output"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("hello from stdin")
+        );
     }
 
     #[tokio::test]

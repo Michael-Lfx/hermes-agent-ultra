@@ -211,9 +211,7 @@ impl AgentLoop {
                         let msg = serde_json::from_str::<Value>(&block)
                             .ok()
                             .and_then(|v| {
-                                v.get("error")
-                                    .and_then(|e| e.as_str())
-                                    .map(str::to_string)
+                                v.get("error").and_then(|e| e.as_str()).map(str::to_string)
                             })
                             .unwrap_or(block);
                         return ToolResult::err(&tool_call_id, msg);
@@ -269,9 +267,7 @@ impl AgentLoop {
                                 let msg = serde_json::from_str::<Value>(&block)
                                     .ok()
                                     .and_then(|v| {
-                                        v.get("error")
-                                            .and_then(|e| e.as_str())
-                                            .map(str::to_string)
+                                        v.get("error").and_then(|e| e.as_str()).map(str::to_string)
                                     })
                                     .unwrap_or(block);
                                 return ToolResult::err(&tool_call_id, msg);

@@ -7,15 +7,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use aes::Aes256;
 use aes::cipher::array::Array;
 use aes::cipher::{BlockCipherDecrypt, KeyInit};
-use aes::Aes256;
 use async_trait::async_trait;
 use base64::Engine;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 use hermes_core::errors::GatewayError;
@@ -208,7 +208,11 @@ impl WeComCallbackAdapter {
         parts.sort();
         let mut hasher = Sha1::new();
         hasher.update(parts.join("").as_bytes());
-        hasher.finalize().iter().map(|b| format!("{b:02x}")).collect()
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
     }
 
     fn pkcs7_unpad(data: &[u8]) -> Result<Vec<u8>, GatewayError> {
@@ -444,7 +448,9 @@ impl PlatformAdapter for WeComCallbackAdapter {
         _message_id: &str,
         _text: &str,
     ) -> Result<(), GatewayError> {
-        Err(GatewayError::Platform("WeCom callback does not support message editing".into()))
+        Err(GatewayError::Platform(
+            "WeCom callback does not support message editing".into(),
+        ))
     }
 
     async fn send_file(

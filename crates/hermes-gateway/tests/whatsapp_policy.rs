@@ -33,6 +33,7 @@ fn dm_allowlist() {
 #[test]
 fn drops_status_broadcast() {
     let p = policy_with(|_| {});
-    let data = json!({"chatId": "status@broadcast", "senderId": "x", "isGroup": false, "body": "x"});
+    let data =
+        json!({"chatId": "status@broadcast", "senderId": "x", "isGroup": false, "body": "x"});
     assert!(!p.should_process_message(&data));
 }

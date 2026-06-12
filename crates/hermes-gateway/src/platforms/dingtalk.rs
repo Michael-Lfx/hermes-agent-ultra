@@ -15,7 +15,7 @@ use futures::{SinkExt, StreamExt};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::{mpsc, Notify, RwLock};
+use tokio::sync::{Notify, RwLock, mpsc};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, error, info, warn};
 use url::Url;
@@ -75,11 +75,7 @@ impl DingTalkConfig {
         };
         let openapi = {
             let v = gv("openapi_endpoint");
-            if v.is_empty() {
-                default_openapi()
-            } else {
-                v
-            }
+            if v.is_empty() { default_openapi() } else { v }
         };
         Self {
             client_id: gv("client_id"),

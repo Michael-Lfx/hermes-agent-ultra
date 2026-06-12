@@ -71,7 +71,10 @@ fn extract_mutation_targets(tool_name: &str, args: &serde_json::Value) -> Vec<Pa
             .map(|p| vec![PathBuf::from(p)])
             .unwrap_or_default(),
         "patch" => {
-            let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("replace");
+            let mode = args
+                .get("mode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("replace");
             if mode == "replace" {
                 return args
                     .get("path")
@@ -81,10 +84,8 @@ fn extract_mutation_targets(tool_name: &str, args: &serde_json::Value) -> Vec<Pa
             }
             if mode == "patch" {
                 let body = args.get("patch").and_then(|v| v.as_str()).unwrap_or("");
-                let re = regex::Regex::new(
-                    r"(?m)^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$",
-                )
-                .ok();
+                let re =
+                    regex::Regex::new(r"(?m)^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s*(.+)$").ok();
                 if let Some(re) = re {
                     return re
                         .captures_iter(body)
@@ -114,6 +115,10 @@ fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
-    let end = s.char_indices().nth(max.saturating_sub(1)).map(|(i, _)| i).unwrap_or(s.len());
+    let end = s
+        .char_indices()
+        .nth(max.saturating_sub(1))
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
     format!("{}…", &s[..end])
 }

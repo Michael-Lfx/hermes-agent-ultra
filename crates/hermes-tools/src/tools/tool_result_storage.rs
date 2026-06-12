@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hermes_core::{
-    tool_schema, BudgetConfig, JsonSchema, ToolError, ToolHandler, ToolResult, ToolSchema,
+    BudgetConfig, JsonSchema, ToolError, ToolHandler, ToolResult, ToolSchema, tool_schema,
 };
 use indexmap::IndexMap;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub const PERSISTED_OUTPUT_TAG: &str = "<persisted-output>";

@@ -52,8 +52,9 @@ impl LlmProvider for AlwaysToolCallLlm {
             }),
             model: "mock".to_string(),
             finish_reason: Some("tool_calls".to_string()),
-        
-                ..Default::default()})
+
+            ..Default::default()
+        })
     }
 
     fn chat_completion_stream(

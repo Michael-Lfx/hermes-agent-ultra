@@ -67,11 +67,7 @@ pub fn split_message(text: &str, max_chars: usize) -> Vec<String> {
         chunks.push(rest[..break_at].to_string());
         rest = &rest[break_at..];
         if break_at == 0 {
-            let ch_len = rest
-                .chars()
-                .next()
-                .map(|c| c.len_utf8())
-                .unwrap_or(1);
+            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
             chunks.push(rest[..ch_len.min(rest.len())].to_string());
             rest = &rest[ch_len.min(rest.len())..];
         }
@@ -168,7 +164,9 @@ impl DiscordInner {
             .map_err(|e| GatewayError::SendFailed(format!("Discord send failed: {e}")))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(GatewayError::SendFailed(format!("Discord API error: {text}")));
+            return Err(GatewayError::SendFailed(format!(
+                "Discord API error: {text}"
+            )));
         }
         let msg: DiscordMessage = resp.json().await.map_err(|e| {
             GatewayError::SendFailed(format!("Failed to parse Discord response: {e}"))
@@ -242,7 +240,9 @@ impl DiscordInner {
             .map_err(|e| GatewayError::SendFailed(format!("Discord edit failed: {e}")))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(GatewayError::SendFailed(format!("Discord edit API error: {text}")));
+            return Err(GatewayError::SendFailed(format!(
+                "Discord edit API error: {text}"
+            )));
         }
         Ok(())
     }
@@ -294,7 +294,9 @@ impl DiscordInner {
             .map_err(|e| GatewayError::SendFailed(format!("Discord embed send failed: {e}")))?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(GatewayError::SendFailed(format!("Discord embed API error: {text}")));
+            return Err(GatewayError::SendFailed(format!(
+                "Discord embed API error: {text}"
+            )));
         }
         let msg: DiscordMessage = resp.json().await.map_err(|e| {
             GatewayError::SendFailed(format!("Failed to parse Discord response: {e}"))
@@ -319,7 +321,6 @@ impl DiscordInner {
         })?;
         Ok(body.get("type").and_then(|v| v.as_u64()).map(|v| v as u8))
     }
-
 
     pub async fn create_forum_thread(
         &self,
@@ -390,9 +391,9 @@ impl DiscordInner {
         let (file_name, mime) = outbound_upload_name(file_path);
         let mut part = reqwest::multipart::Part::bytes(file_bytes).file_name(file_name);
         if let Some(mime) = mime {
-            part = part.mime_str(mime).map_err(|e| {
-                GatewayError::SendFailed(format!("invalid mime for upload: {e}"))
-            })?;
+            part = part
+                .mime_str(mime)
+                .map_err(|e| GatewayError::SendFailed(format!("invalid mime for upload: {e}")))?;
         }
         let mut form = reqwest::multipart::Form::new().part("files[0]", part);
         if let Some(cap) = caption {
@@ -483,7 +484,9 @@ impl DiscordInner {
             .header("Authorization", self.auth_header())
             .send()
             .await
-            .map_err(|e| GatewayError::SendFailed(format!("Discord remove_reaction failed: {e}")))?;
+            .map_err(|e| {
+                GatewayError::SendFailed(format!("Discord remove_reaction failed: {e}"))
+            })?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(GatewayError::SendFailed(format!(
@@ -523,12 +526,15 @@ impl DiscordInner {
                 "Discord create_thread API error: {text}"
             )));
         }
-        resp.json().await.map_err(|e| {
-            GatewayError::SendFailed(format!("Failed to parse thread response: {e}"))
-        })
+        resp.json()
+            .await
+            .map_err(|e| GatewayError::SendFailed(format!("Failed to parse thread response: {e}")))
     }
 
-    pub async fn register_slash_commands(&self, commands: &[SlashCommand]) -> Result<(), GatewayError> {
+    pub async fn register_slash_commands(
+        &self,
+        commands: &[SlashCommand],
+    ) -> Result<(), GatewayError> {
         let app_id = self.config.application_id.as_deref().ok_or_else(|| {
             GatewayError::Platform("application_id required for slash commands".into())
         })?;
@@ -541,7 +547,9 @@ impl DiscordInner {
             .json(commands)
             .send()
             .await
-            .map_err(|e| GatewayError::SendFailed(format!("Discord register_commands failed: {e}")))?;
+            .map_err(|e| {
+                GatewayError::SendFailed(format!("Discord register_commands failed: {e}"))
+            })?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(GatewayError::SendFailed(format!(
@@ -673,10 +681,7 @@ impl DiscordInner {
         content: &str,
     ) -> Result<(), GatewayError> {
         let app_id = self.interaction_application_id()?;
-        let url = format!(
-            "{}/webhooks/{app_id}/{interaction_token}",
-            self.rest_api()
-        );
+        let url = format!("{}/webhooks/{app_id}/{interaction_token}", self.rest_api());
         let body = serde_json::json!({
             "content": truncate_to_char_limit(content, MAX_MESSAGE_LENGTH),
         });
@@ -786,7 +791,9 @@ impl DiscordInner {
             .json(&body)
             .send()
             .await
-            .map_err(|e| GatewayError::SendFailed(format!("Discord defer interaction failed: {e}")))?;
+            .map_err(|e| {
+                GatewayError::SendFailed(format!("Discord defer interaction failed: {e}"))
+            })?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
             return Err(GatewayError::SendFailed(format!(
@@ -862,7 +869,11 @@ impl DiscordInner {
         })?;
         let mut rows = Vec::new();
         for msg in body.into_iter().rev() {
-            let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = msg
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let content = msg
                 .get("content")
                 .and_then(|v| v.as_str())
@@ -890,7 +901,8 @@ impl DiscordInner {
         let mut skip_first_embed = false;
         if let Some(channel_type) = self.fetch_channel_type(channel_id).await? {
             if is_forum_channel_type(Some(channel_type)) {
-                let (thread_id, posted) = self.forum_thread_target(channel_id, caption_text).await?;
+                let (thread_id, posted) =
+                    self.forum_thread_target(channel_id, caption_text).await?;
                 target_channel = thread_id;
                 skip_first_embed = posted && !caption_text.trim().is_empty();
             }

@@ -26,11 +26,11 @@ use tokio::time::timeout;
 
 use super::candidate::{ProviderCandidate, ProviderChain};
 use super::config::{
-    resolve_task_settings, AuxiliaryConfig, ExplicitOverrides, ResolvedTaskSettings,
+    AuxiliaryConfig, ExplicitOverrides, ResolvedTaskSettings, resolve_task_settings,
 };
 use super::error::{
-    is_payment_error, is_unsupported_parameter_error, is_unsupported_temperature_error,
-    should_fallback, AuxiliaryError, AuxiliaryResult,
+    AuxiliaryError, AuxiliaryResult, is_payment_error, is_unsupported_parameter_error,
+    is_unsupported_temperature_error, should_fallback,
 };
 use super::task::AuxiliaryTask;
 
@@ -605,11 +605,7 @@ impl AuxiliaryClientBuilder {
         self
     }
 
-    pub fn primary_context(
-        mut self,
-        provider: Option<String>,
-        model: Option<String>,
-    ) -> Self {
+    pub fn primary_context(mut self, provider: Option<String>, model: Option<String>) -> Self {
         self.primary_provider = provider;
         self.primary_model = model;
         self
@@ -653,8 +649,8 @@ mod tests {
         AgentError, LlmProvider, LlmResponse, Message, MessageRole, StreamChunk, ToolSchema,
         UsageStats,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[derive(Debug, Clone)]
     struct RecordedCall {

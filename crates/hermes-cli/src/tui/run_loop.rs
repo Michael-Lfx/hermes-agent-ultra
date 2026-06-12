@@ -793,14 +793,12 @@ pub(crate) fn process_stream_lane_event(state: &mut TuiState, event: Event) -> S
                                                 .collect()
                                         })
                                         .unwrap_or_default();
-                                    let prompt = crate::runtime_tool_wiring::format_clarify_prompt_for_ui(
-                                        question,
-                                        &choices,
-                                    );
-                                    let processing = state
-                                        .phase
-                                        .processing_mut()
-                                        .expect("processing");
+                                    let prompt =
+                                        crate::runtime_tool_wiring::format_clarify_prompt_for_ui(
+                                            question, &choices,
+                                        );
+                                    let processing =
+                                        state.phase.processing_mut().expect("processing");
                                     processing.clarify_awaiting = true;
                                     processing.pending_clarify_prompt = Some(prompt);
                                     state.status_message =

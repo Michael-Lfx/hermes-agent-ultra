@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection, Row};
+use rusqlite::{Connection, Row, params};
 use serde::{Deserialize, Serialize};
 
 use super::error::StateDbError;
@@ -102,14 +102,13 @@ pub fn list_sessions_rich(
               AND p.end_reason = 'branched'
               AND s.started_at >= p.ended_at
         ))"
-            .to_string(),
+        .to_string(),
     ];
     let mut params_vec: Vec<rusqlite::types::Value> = Vec::new();
 
     if let Some(src) = source {
-        where_clauses.push(
-            "COALESCE(NULLIF(s.source, ''), NULLIF(s.platform, ''), 'cli') = ?".into(),
-        );
+        where_clauses
+            .push("COALESCE(NULLIF(s.source, ''), NULLIF(s.platform, ''), 'cli') = ?".into());
         params_vec.push(src.to_string().into());
     }
     if !exclude_sources.is_empty() {

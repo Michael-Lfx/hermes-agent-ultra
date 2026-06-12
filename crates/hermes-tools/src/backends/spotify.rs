@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use reqwest::{Client, Method, StatusCode};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -434,19 +434,18 @@ mod tests {
             friendly_spotify_error_message(StatusCode::UNAUTHORIZED, "bad", "/me/player", None),
             SPOTIFY_AUTH_ERROR
         );
-        assert!(friendly_spotify_error_message(
-            StatusCode::FORBIDDEN,
-            "scope missing",
-            "/search",
-            None
-        )
-        .contains("scope is insufficient"));
-        assert!(friendly_spotify_error_message(
-            StatusCode::TOO_MANY_REQUESTS,
-            "",
-            "/search",
-            Some("12")
-        )
-        .contains("Retry after 12 seconds"));
+        assert!(
+            friendly_spotify_error_message(StatusCode::FORBIDDEN, "scope missing", "/search", None)
+                .contains("scope is insufficient")
+        );
+        assert!(
+            friendly_spotify_error_message(
+                StatusCode::TOO_MANY_REQUESTS,
+                "",
+                "/search",
+                Some("12")
+            )
+            .contains("Retry after 12 seconds")
+        );
     }
 }

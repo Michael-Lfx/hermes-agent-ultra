@@ -26,9 +26,11 @@ pub fn normalize_whatsapp_identifier(value: &str) -> String {
 }
 
 fn session_dir(session_root: Option<&Path>) -> PathBuf {
-    session_root
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| hermes_config::hermes_home().join("whatsapp").join("session"))
+    session_root.map(Path::to_path_buf).unwrap_or_else(|| {
+        hermes_config::hermes_home()
+            .join("whatsapp")
+            .join("session")
+    })
 }
 
 /// Resolve all phone/LID aliases reachable from mapping files.
@@ -101,7 +103,10 @@ mod tests {
             normalize_whatsapp_identifier("60123456789@s.whatsapp.net"),
             "60123456789"
         );
-        assert_eq!(normalize_whatsapp_identifier("60123456789@lid"), "60123456789");
+        assert_eq!(
+            normalize_whatsapp_identifier("60123456789@lid"),
+            "60123456789"
+        );
         assert_eq!(normalize_whatsapp_identifier("+15551234567"), "15551234567");
     }
 

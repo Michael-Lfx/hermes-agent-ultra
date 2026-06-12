@@ -2,13 +2,13 @@
 
 use std::sync::{Mutex, OnceLock};
 
+use hermes_tools::backends::meta_search::SearchHit;
 use hermes_tools::backends::meta_search::config::{CnEngineKind, MetaSearchConfig};
 use hermes_tools::backends::meta_search::ddgs::{
     ddgs_backend_priority, ddgs_http_timeout_secs, ddgs_region_from_env,
 };
 use hermes_tools::backends::meta_search::merge::merge_and_rank;
 use hermes_tools::backends::meta_search::query_locale::query_has_cjk;
-use hermes_tools::backends::meta_search::SearchHit;
 
 fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

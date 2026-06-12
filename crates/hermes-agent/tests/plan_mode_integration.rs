@@ -1,10 +1,10 @@
 //! Plan mode integration: planning pause, registry sync, tool executor gate.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use hermes_agent::agent_loop::ToolRegistry;
 use hermes_agent::{AgentConfig, AgentLoop, RunConversationParams};
 use hermes_core::{
@@ -123,7 +123,12 @@ async fn planning_text_only_pauses_for_approval() {
     let result = conv.into_loop_result();
     assert_eq!(result.turn_exit_reason, "plan_awaiting_approval");
     assert_eq!(agent.plan_phase(), PlanPhase::AwaitingApproval);
-    assert!(result.plan_pending.as_ref().is_some_and(|p| p.contains("Plan")));
+    assert!(
+        result
+            .plan_pending
+            .as_ref()
+            .is_some_and(|p| p.contains("Plan"))
+    );
     assert_eq!(result.plan_phase.as_deref(), Some("awaiting_approval"));
 }
 
@@ -134,7 +139,11 @@ async fn planning_blocks_write_tool_in_executor_fallback_path() {
     let mut tools = ToolRegistry::new();
     tools.register(
         "write_file",
-        ToolSchema::new("write_file", "write", hermes_core::JsonSchema::new("object")),
+        ToolSchema::new(
+            "write_file",
+            "write",
+            hermes_core::JsonSchema::new("object"),
+        ),
         Arc::new(move |_params| {
             handler_ran_clone.store(true, Ordering::SeqCst);
             Ok("written".into())
@@ -174,7 +183,10 @@ async fn planning_blocks_write_tool_in_executor_fallback_path() {
                 .as_deref()
                 .is_some_and(|c| c.contains("plan_block") || c.contains("plan mode"))
     });
-    assert!(saw_plan_block, "tool result should contain plan_block message");
+    assert!(
+        saw_plan_block,
+        "tool result should contain plan_block message"
+    );
 }
 
 #[test]
@@ -197,7 +209,7 @@ fn synced_registry_inherits_plan_phase() {
 #[tokio::test]
 async fn hermes_tools_registry_blocks_write_in_planning() {
     use async_trait::async_trait;
-    use hermes_core::{tool_schema, JsonSchema, ToolError, ToolHandler, ToolSchema};
+    use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
     struct EchoHandler;
 
@@ -226,7 +238,9 @@ async fn hermes_tools_registry_blocks_write_in_planning() {
         None,
     );
     registry.set_plan_phase(PlanPhase::Planning);
-    let out = registry.dispatch_async("patch", json!({"path": "a.rs"})).await;
+    let out = registry
+        .dispatch_async("patch", json!({"path": "a.rs"}))
+        .await;
     let parsed: serde_json::Value = serde_json::from_str(&out).expect("json");
     assert_eq!(parsed["plan"]["decision"], "plan_block");
 }

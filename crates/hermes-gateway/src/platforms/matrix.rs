@@ -18,16 +18,18 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use matrix_sdk_crypto::{
+    DecryptionSettings, EncryptionSyncChanges, OlmMachine, TrustRequirement,
     types::{
         events::room::encrypted::EncryptedEvent,
         requests::{AnyOutgoingRequest, KeysQueryRequest, ToDeviceRequest},
     },
-    DecryptionSettings, EncryptionSyncChanges, OlmMachine, TrustRequirement,
 };
 use regex::Regex;
 use reqwest::Client;
 use ruma::{
+    OneTimeKeyAlgorithm, UInt,
     api::{
+        IncomingResponse, MatrixVersion, OutgoingRequest, SupportedVersions,
         auth_scheme::SendAccessToken,
         client::{
             keys::{claim_keys, get_keys, upload_keys, upload_signatures},
@@ -35,12 +37,10 @@ use ruma::{
             sync::sync_events::DeviceLists,
             to_device::send_event_to_device,
         },
-        IncomingResponse, MatrixVersion, OutgoingRequest, SupportedVersions,
     },
     events::AnyToDeviceEvent,
     exports::http,
     serde::Raw,
-    OneTimeKeyAlgorithm, UInt,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex as AsyncMutex, Notify};

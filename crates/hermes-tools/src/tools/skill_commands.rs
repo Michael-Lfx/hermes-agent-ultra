@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use hermes_core::Skill;
 use hermes_skills::SkillGuard;
 
-use super::skill_utils::{discover_skills, match_platform, SkillInfo};
+use super::skill_utils::{SkillInfo, discover_skills, match_platform};
 
 // ---------------------------------------------------------------------------
 // SkillCommand
@@ -738,9 +738,11 @@ mod tests {
             platform: Some("linux".to_string()),
             ..SkillCommandResolverConfig::default()
         };
-        assert!(resolve_installed_skill_slash_command("/beta", "", &enabled)
-            .unwrap()
-            .is_some());
+        assert!(
+            resolve_installed_skill_slash_command("/beta", "", &enabled)
+                .unwrap()
+                .is_some()
+        );
         assert!(
             resolve_installed_skill_slash_command("/mac-helper", "", &enabled)
                 .unwrap()

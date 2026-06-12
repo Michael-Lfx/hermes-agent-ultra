@@ -88,9 +88,7 @@ async fn cjk_query_merges_sogou_and_bing_cn() {
     EnvGuard::set("HERMES_CN_SEARCH_ENGINES", "sogou,bing_cn");
     EnvGuard::set("HERMES_META_SEARCH_DDGS_DISABLED", "1");
 
-    let raw = meta_search("Rust 编程", 5)
-        .await
-        .expect("meta_search ok");
+    let raw = meta_search("Rust 编程", 5).await.expect("meta_search ok");
     let parsed = parse_json(&raw);
     assert_eq!(parsed["success"], true);
     let web = parsed["data"]["web"].as_array().expect("web array");
@@ -114,7 +112,10 @@ async fn latin_query_does_not_hit_cn_mock_paths() {
     EnvGuard::set("HERMES_CN_SEARCH_ENGINES", "sogou,bing_cn");
 
     let backend = DdgsSearchBackend::new();
-    let raw = backend.search("hello world", 3, None).await.expect("search");
+    let raw = backend
+        .search("hello world", 3, None)
+        .await
+        .expect("search");
     let parsed = parse_json(&raw);
     let attempts = parsed["_trace"]["attempts"].as_array();
     if let Some(arr) = attempts {
@@ -148,11 +149,17 @@ async fn single_engine_error_still_returns_partial_results() {
     let raw = meta_search("人工智能", 5).await.expect("meta_search");
     let parsed = parse_json(&raw);
     assert_eq!(parsed["success"], true);
-    let attempts = parsed["_trace"]["attempts"]
-        .as_array()
-        .expect("attempts");
-    assert!(attempts.iter().any(|a| a["engine"] == "sogou" && a["status"] == "error"));
-    assert!(attempts.iter().any(|a| a["engine"] == "bing_cn" && a["status"] == "ok"));
+    let attempts = parsed["_trace"]["attempts"].as_array().expect("attempts");
+    assert!(
+        attempts
+            .iter()
+            .any(|a| a["engine"] == "sogou" && a["status"] == "error")
+    );
+    assert!(
+        attempts
+            .iter()
+            .any(|a| a["engine"] == "bing_cn" && a["status"] == "ok")
+    );
 }
 
 #[tokio::test]

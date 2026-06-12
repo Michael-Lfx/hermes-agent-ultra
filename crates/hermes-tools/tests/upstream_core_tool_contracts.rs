@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use hermes_core::{
-    tool_schema, AgentError, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler,
-    ToolSchema,
+    AgentError, CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    tool_schema,
 };
 use hermes_tools::{
     ClarifyBackend, ClarifyHandler, CodeExecutionBackend, CronjobBackend, CronjobHandler,
@@ -11,7 +11,7 @@ use hermes_tools::{
     SessionSearchBackend, SessionSearchHandler, TerminalHandler, TextToSpeechHandler, TodoBackend,
     TodoHandler, ToolRegistry, TtsBackend,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 
 fn assert_err_contains<T: std::fmt::Debug>(result: Result<T, ToolError>, expected: &str) {
@@ -693,10 +693,12 @@ async fn registry_contract_lists_dispatches_and_wraps_errors_as_json() {
 
     let missing: Value =
         serde_json::from_str(&registry.dispatch_async("missing", json!({})).await).expect("json");
-    assert!(missing["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("Tool not found"));
+    assert!(
+        missing["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Tool not found")
+    );
 }
 
 struct MinimalTerminalBackend;

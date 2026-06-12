@@ -17,7 +17,7 @@ use hermes_intelligence::auxiliary::{
 };
 
 use crate::provider::{
-    openai_codex_provider, AnthropicProvider, GenericProvider, OpenRouterProvider,
+    AnthropicProvider, GenericProvider, OpenRouterProvider, openai_codex_provider,
 };
 use crate::provider_profiles;
 use crate::providers_extra::{
@@ -179,32 +179,28 @@ pub fn auxiliary_primary_runtime_from_agent_config(
 pub fn build_auxiliary_client(
     params: AuxiliaryBuildParams,
 ) -> (AuxiliaryClient, AuxiliaryWiringSummary) {
-    let provider = params.primary_provider.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let provider = params
+        .primary_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let model = params
         .primary_model
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(|m| {
-            m.split_once(':')
-                .map(|(_, rest)| rest.trim())
-                .unwrap_or(m)
-        })
+        .map(|m| m.split_once(':').map(|(_, rest)| rest.trim()).unwrap_or(m))
         .filter(|s| !s.is_empty());
     let main_runtime = match (provider, model) {
         (Some(provider), Some(model)) => {
             let mut runtime = AuxiliaryMainRuntime::new(provider, model);
-            if let Some(cfg) = params
-                .llm_providers
-                .get(provider)
-                .or_else(|| {
-                    params
-                        .llm_providers
-                        .iter()
-                        .find(|(k, _)| k.eq_ignore_ascii_case(provider))
-                        .map(|(_, v)| v)
-                })
-            {
+            if let Some(cfg) = params.llm_providers.get(provider).or_else(|| {
+                params
+                    .llm_providers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(provider))
+                    .map(|(_, v)| v)
+            }) {
                 if let Some(key) = resolve_provider_api_key(cfg, provider) {
                     runtime = runtime.with_api_key(key);
                 }
@@ -497,7 +493,8 @@ fn build_fallback_chain_candidate(
         other => AuxiliarySource::DirectKey(other.to_string()),
     };
 
-    let llm: Arc<dyn LlmProvider> = Arc::new(GenericProvider::new(base_url, api_key, model.clone()));
+    let llm: Arc<dyn LlmProvider> =
+        Arc::new(GenericProvider::new(base_url, api_key, model.clone()));
     Some(ProviderCandidate::new(source, model, llm))
 }
 
@@ -510,7 +507,9 @@ fn resolve_provider_api_key(cfg: &LlmProviderConfig, provider_name: &str) -> Opt
     {
         if key.starts_with("${") && key.ends_with('}') {
             let env_name = key.trim_start_matches("${").trim_end_matches('}');
-            return std::env::var(env_name).ok().filter(|v| !v.trim().is_empty());
+            return std::env::var(env_name)
+                .ok()
+                .filter(|v| !v.trim().is_empty());
         }
         return Some(key.to_string());
     }
@@ -957,17 +956,23 @@ mod tests {
         }
 
         // Scenario 2: only OpenRouter.
-        unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-test"); }
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "sk-test");
+        }
         {
             let (client, summary) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(client.chain_len(), 1);
             assert_eq!(client.chain_labels(), vec!["openrouter"]);
             assert_eq!(summary.registered, vec!["openrouter"]);
         }
-        unsafe { std::env::remove_var("OPENROUTER_API_KEY"); }
+        unsafe {
+            std::env::remove_var("OPENROUTER_API_KEY");
+        }
 
         // Scenario 3: main OpenRouter runtime wins over the cheap OpenRouter default.
-        unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-main-or"); }
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "sk-main-or");
+        }
         {
             let (client, summary) = build_auxiliary_client_with_main_runtime(
                 AuxiliaryConfig::default(),
@@ -987,29 +992,43 @@ mod tests {
                 )]
             );
             assert_eq!(summary.registered, vec!["main:openrouter"]);
-            assert!(summary
-                .skipped
-                .contains(&"openrouter (covered by main runtime)".to_string()));
+            assert!(
+                summary
+                    .skipped
+                    .contains(&"openrouter (covered by main runtime)".to_string())
+            );
         }
-        unsafe { std::env::remove_var("OPENROUTER_API_KEY"); }
+        unsafe {
+            std::env::remove_var("OPENROUTER_API_KEY");
+        }
 
         // Scenario 4: if main cannot build a client, the cheap chain is used.
-        unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-fallback-or"); }
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "sk-fallback-or");
+        }
         {
             let (client, summary) = build_auxiliary_client_with_main_runtime(
                 AuxiliaryConfig::default(),
                 Some(AuxiliaryMainRuntime::new("anthropic", "claude-opus-4-6")),
             );
             assert_eq!(client.chain_labels(), vec!["openrouter"]);
-            assert!(summary
-                .skipped
-                .contains(&"main:anthropic (no working client)".to_string()));
+            assert!(
+                summary
+                    .skipped
+                    .contains(&"main:anthropic (no working client)".to_string())
+            );
         }
-        unsafe { std::env::remove_var("OPENROUTER_API_KEY"); }
+        unsafe {
+            std::env::remove_var("OPENROUTER_API_KEY");
+        }
 
         // Scenario 5: non-aggregator main providers also use the main model first.
-        unsafe { std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek"); }
-        unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-or-fallback"); }
+        unsafe {
+            std::env::set_var("DEEPSEEK_API_KEY", "sk-deepseek");
+        }
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "sk-or-fallback");
+        }
         {
             let (client, summary) = build_auxiliary_client_with_main_runtime(
                 AuxiliaryConfig::default(),
@@ -1025,11 +1044,17 @@ mod tests {
             );
             assert_eq!(summary.registered[0], "main:deepseek");
         }
-        unsafe { std::env::remove_var("DEEPSEEK_API_KEY"); }
-        unsafe { std::env::remove_var("OPENROUTER_API_KEY"); }
+        unsafe {
+            std::env::remove_var("DEEPSEEK_API_KEY");
+        }
+        unsafe {
+            std::env::remove_var("OPENROUTER_API_KEY");
+        }
 
         // Scenario 6: Gemini direct-key auxiliary default uses the renamed model.
-        unsafe { std::env::set_var("GEMINI_API_KEY", "sk-gemini"); }
+        unsafe {
+            std::env::set_var("GEMINI_API_KEY", "sk-gemini");
+        }
         {
             let (client, summary) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(client.chain_labels(), vec!["gemini"]);
@@ -1039,10 +1064,14 @@ mod tests {
             );
             assert_eq!(summary.registered, vec!["gemini"]);
         }
-        unsafe { std::env::remove_var("GEMINI_API_KEY"); }
+        unsafe {
+            std::env::remove_var("GEMINI_API_KEY");
+        }
 
         // Scenario 7: MiniMax direct API defaults to M3 and avoids highspeed.
-        unsafe { std::env::set_var("MINIMAX_API_KEY", "sk-minimax"); }
+        unsafe {
+            std::env::set_var("MINIMAX_API_KEY", "sk-minimax");
+        }
         {
             let (client, summary) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(client.chain_labels(), vec!["minimax"]);
@@ -1051,15 +1080,21 @@ mod tests {
                 vec![("minimax".to_string(), "MiniMax-M3".to_string(), true,)]
             );
             assert_eq!(summary.registered, vec!["minimax"]);
-            assert!(!client.chain_entries()[0]
-                .1
-                .to_ascii_lowercase()
-                .contains("highspeed"));
+            assert!(
+                !client.chain_entries()[0]
+                    .1
+                    .to_ascii_lowercase()
+                    .contains("highspeed")
+            );
         }
-        unsafe { std::env::remove_var("MINIMAX_API_KEY"); }
+        unsafe {
+            std::env::remove_var("MINIMAX_API_KEY");
+        }
 
         // Scenario 8: MiniMax CN is a first-class direct-key auxiliary provider.
-        unsafe { std::env::set_var("MINIMAX_CN_API_KEY", "sk-minimax-cn"); }
+        unsafe {
+            std::env::set_var("MINIMAX_CN_API_KEY", "sk-minimax-cn");
+        }
         {
             let (client, summary) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(client.chain_labels(), vec!["minimax-cn"]);
@@ -1068,15 +1103,21 @@ mod tests {
                 vec![("minimax-cn".to_string(), "MiniMax-M3".to_string(), true,)]
             );
             assert_eq!(summary.registered, vec!["minimax-cn"]);
-            assert!(!client.chain_entries()[0]
-                .1
-                .to_ascii_lowercase()
-                .contains("highspeed"));
+            assert!(
+                !client.chain_entries()[0]
+                    .1
+                    .to_ascii_lowercase()
+                    .contains("highspeed")
+            );
         }
-        unsafe { std::env::remove_var("MINIMAX_CN_API_KEY"); }
+        unsafe {
+            std::env::remove_var("MINIMAX_CN_API_KEY");
+        }
 
         // Scenario 9: Kimi Code direct API keys register the Kimi auxiliary source.
-        unsafe { std::env::set_var("KIMI_CODING_API_KEY", "sk-kimi-aux"); }
+        unsafe {
+            std::env::set_var("KIMI_CODING_API_KEY", "sk-kimi-aux");
+        }
         {
             let (client, summary) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(client.chain_labels(), vec!["kimi"]);
@@ -1090,16 +1131,32 @@ mod tests {
             );
             assert_eq!(summary.registered, vec!["kimi"]);
         }
-        unsafe { std::env::remove_var("KIMI_CODING_API_KEY"); }
+        unsafe {
+            std::env::remove_var("KIMI_CODING_API_KEY");
+        }
 
         // Scenario 10: full chain, deterministic order.
-        unsafe { std::env::set_var("OPENROUTER_API_KEY", "sk-or"); }
-        unsafe { std::env::set_var("HERMES_OPENAI_API_KEY", "sk-hermes-oa"); }
-        unsafe { std::env::set_var("OPENAI_API_KEY", "sk-oa-legacy"); }
-        unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-an"); }
-        unsafe { std::env::set_var("ZAI_API_KEY", "z"); }
-        unsafe { std::env::set_var("GMI_API_KEY", "sk-gmi"); }
-        unsafe { std::env::set_var("TOKENHUB_API_KEY", "sk-tokenhub"); }
+        unsafe {
+            std::env::set_var("OPENROUTER_API_KEY", "sk-or");
+        }
+        unsafe {
+            std::env::set_var("HERMES_OPENAI_API_KEY", "sk-hermes-oa");
+        }
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-oa-legacy");
+        }
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-an");
+        }
+        unsafe {
+            std::env::set_var("ZAI_API_KEY", "z");
+        }
+        unsafe {
+            std::env::set_var("GMI_API_KEY", "sk-gmi");
+        }
+        unsafe {
+            std::env::set_var("TOKENHUB_API_KEY", "sk-tokenhub");
+        }
         {
             let (client, _) = build_default_auxiliary_client(AuxiliaryConfig::default());
             assert_eq!(
@@ -1134,7 +1191,10 @@ mod tests {
             primary_model: Some("custom:flowy/DeepSeek-V4-Flash".to_string()),
             llm_providers,
         });
-        assert!(client.chain_len() >= 1, "expected main runtime from config api_key");
+        assert!(
+            client.chain_len() >= 1,
+            "expected main runtime from config api_key"
+        );
         assert!(
             summary.registered.iter().any(|l| l.starts_with("main:")),
             "summary: {:?}",

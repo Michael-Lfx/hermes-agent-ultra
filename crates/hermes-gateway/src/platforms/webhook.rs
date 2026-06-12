@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hmac::{Hmac, Mac, KeyInit};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use tokio::sync::{Notify, RwLock};
@@ -336,7 +336,8 @@ async fn handle_webhook_request(
                 let body = format!("{{\"error\":\"invalid payload: {e}\"}}");
                 let resp = format!(
                     "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 );
                 writer.write_all(resp.as_bytes()).await?;
             }

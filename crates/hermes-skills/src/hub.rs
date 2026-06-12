@@ -366,7 +366,7 @@ impl SkillsHubClient {
 
     /// Generate a JWT token for authenticated requests.
     fn generate_token(&self) -> Result<String, SkillError> {
-        use jsonwebtoken::{encode, EncodingKey, Header};
+        use jsonwebtoken::{EncodingKey, Header, encode};
         use std::time::SystemTime;
 
         let now = SystemTime::now()
@@ -652,7 +652,7 @@ fn parse_ed25519_signature(signature: &str) -> Result<ParsedSignature, SkillErro
             return Err(SkillError::HubError(
                 "Invalid signature format; expected ed25519:<sig> or ed25519:<key_id>:<sig>"
                     .to_string(),
-            ))
+            ));
         }
     };
     let sig_bytes = base64::engine::general_purpose::STANDARD

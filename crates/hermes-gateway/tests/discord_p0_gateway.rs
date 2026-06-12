@@ -86,10 +86,8 @@ async fn i01_guild_allowlist_user_gets_reply() {
     policies.insert("discord".to_string(), policy);
     gw.set_platform_access_policies(policies).await;
 
-    gw.set_message_handler(Arc::new(|_| {
-        Box::pin(async { Ok("pong".to_string()) })
-    }))
-    .await;
+    gw.set_message_handler(Arc::new(|_| Box::pin(async { Ok("pong".to_string()) })))
+        .await;
 
     let incoming = IncomingMessage {
         platform: "discord".into(),
@@ -102,7 +100,7 @@ async fn i01_guild_allowlist_user_gets_reply() {
         is_dm: false,
         interaction_id: None,
         interaction_token: None,
-    role_ids: vec![],
+        role_ids: vec![],
         ..Default::default()
     };
     assert!(gw.route_message(&incoming).await.is_ok());
@@ -142,7 +140,7 @@ async fn i02_guild_denied_user_no_transcript() {
         is_dm: false,
         interaction_id: None,
         interaction_token: None,
-    role_ids: vec![],
+        role_ids: vec![],
         ..Default::default()
     };
     assert!(gw.route_message(&incoming).await.is_ok());
@@ -160,16 +158,10 @@ async fn i03_dm_authorized_user_gets_reply() {
     let session_manager = Arc::new(SessionManager::new(SessionConfig::default()));
     let mut dm = DmManager::with_ignore_behavior();
     dm.authorize_user("dm_user");
-    let gw = Arc::new(Gateway::new(
-        session_manager,
-        dm,
-        GatewayConfig::default(),
-    ));
+    let gw = Arc::new(Gateway::new(session_manager, dm, GatewayConfig::default()));
     gw.register_adapter("discord", adapter.clone()).await;
-    gw.set_message_handler(Arc::new(|_| {
-        Box::pin(async { Ok("dm-reply".to_string()) })
-    }))
-    .await;
+    gw.set_message_handler(Arc::new(|_| Box::pin(async { Ok("dm-reply".to_string()) })))
+        .await;
 
     let incoming = IncomingMessage {
         platform: "discord".into(),
@@ -182,7 +174,7 @@ async fn i03_dm_authorized_user_gets_reply() {
         is_dm: true,
         interaction_id: None,
         interaction_token: None,
-    role_ids: vec![],
+        role_ids: vec![],
         ..Default::default()
     };
     assert!(gw.route_message(&incoming).await.is_ok());
@@ -212,7 +204,7 @@ async fn i04_dm_unauthorized_silent() {
         is_dm: true,
         interaction_id: None,
         interaction_token: None,
-    role_ids: vec![],
+        role_ids: vec![],
         ..Default::default()
     };
     assert!(gw.route_message(&incoming).await.is_ok());
@@ -226,18 +218,10 @@ async fn i05_session_key_per_user_in_shared_channel() {
         true,
     ));
     // Discord channel ids are numeric snowflakes; group isolation uses Group session type.
-    let key_a = session_manager.compose_session_key_with_dm(
-        "discord",
-        "1234567890",
-        "alice",
-        Some(false),
-    );
-    let key_b = session_manager.compose_session_key_with_dm(
-        "discord",
-        "1234567890",
-        "bob",
-        Some(false),
-    );
+    let key_a =
+        session_manager.compose_session_key_with_dm("discord", "1234567890", "alice", Some(false));
+    let key_b =
+        session_manager.compose_session_key_with_dm("discord", "1234567890", "bob", Some(false));
     assert_ne!(key_a, key_b);
     assert_eq!(key_a, "discord:1234567890:alice");
     assert_eq!(key_b, "discord:1234567890:bob");

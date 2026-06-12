@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hermes_gateway::gateway::IncomingMessage;
-use hermes_gateway::platforms::discord::{deliver_inbounds, DiscordAdapter, DiscordConfig};
+use hermes_gateway::platforms::discord::{DiscordAdapter, DiscordConfig, deliver_inbounds};
 use tokio::sync::mpsc;
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};

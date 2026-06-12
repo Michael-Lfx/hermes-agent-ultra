@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::tools::video::{VideoGenerateBackend, VideoGenerateRequest};
 use hermes_config::managed_gateway::{
-    resolve_managed_tool_gateway, ManagedToolGatewayConfig, ResolveOptions,
+    ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
 };
 use hermes_core::ToolError;
 
@@ -1480,19 +1480,23 @@ mod tests {
         let mut req = request(None);
         req.image_url = Some("https://example.com/start.png".into());
         req.reference_image_urls = vec!["https://example.com/a.png".into()];
-        assert!(build_xai_payload(&req)
-            .unwrap_err()
-            .to_string()
-            .contains("cannot be combined"));
+        assert!(
+            build_xai_payload(&req)
+                .unwrap_err()
+                .to_string()
+                .contains("cannot be combined")
+        );
 
         let mut req = request(None);
         req.reference_image_urls = (0..=XAI_MAX_REFERENCE_IMAGES)
             .map(|idx| format!("https://example.com/{idx}.png"))
             .collect();
-        assert!(build_xai_payload(&req)
-            .unwrap_err()
-            .to_string()
-            .contains("at most"));
+        assert!(
+            build_xai_payload(&req)
+                .unwrap_err()
+                .to_string()
+                .contains("at most")
+        );
     }
 
     #[test]

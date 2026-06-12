@@ -49,10 +49,8 @@ pub fn parse_ddgs_text_backend(name: &str) -> Option<ddgs::TextBackend> {
 
 pub fn ddgs_backend_priority() -> Vec<ddgs::TextBackend> {
     if let Ok(raw) = std::env::var("HERMES_DDGS_BACKENDS") {
-        let parsed: Vec<ddgs::TextBackend> = raw
-            .split(',')
-            .filter_map(parse_ddgs_text_backend)
-            .collect();
+        let parsed: Vec<ddgs::TextBackend> =
+            raw.split(',').filter_map(parse_ddgs_text_backend).collect();
         if !parsed.is_empty() {
             return parsed;
         }
@@ -97,9 +95,7 @@ pub async fn ddgs_search_with_fallback(
                 );
                 return Ok(hits
                     .into_iter()
-                    .map(|h| {
-                        SearchHit::new(h.title, h.href, h.body, source.clone())
-                    })
+                    .map(|h| SearchHit::new(h.title, h.href, h.body, source.clone()))
                     .collect());
             }
             Ok(Ok(_)) => {

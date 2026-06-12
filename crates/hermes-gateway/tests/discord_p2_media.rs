@@ -3,7 +3,7 @@
 #![cfg(feature = "discord")]
 
 use hermes_gateway::platforms::discord::{
-    is_forum_channel_type, outbound_upload_name, DiscordAdapter, DiscordConfig,
+    DiscordAdapter, DiscordConfig, is_forum_channel_type, outbound_upload_name,
 };
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};

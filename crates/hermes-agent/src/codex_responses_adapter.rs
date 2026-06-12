@@ -1,11 +1,11 @@
 //! Python `agent.codex_responses_adapter` — Responses API format conversion.
 
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use regex::Regex;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};
 use uuid::Uuid;
@@ -123,7 +123,10 @@ pub fn chat_content_to_responses_parts(content: &Value, role: &str) -> Vec<Value
             continue;
         }
         if matches!(ptype.as_str(), "image_url" | "input_image") {
-            let mut detail = obj.get("detail").and_then(|v| v.as_str()).map(str::to_string);
+            let mut detail = obj
+                .get("detail")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             let url = match obj.get("image_url") {
                 Some(Value::Object(ir)) => {
                     detail = ir
@@ -258,10 +261,7 @@ pub fn split_responses_tool_id(raw_id: Option<&str>) -> (Option<String>, Option<
     (Some(value.to_string()), None)
 }
 
-pub fn derive_responses_function_call_id(
-    call_id: &str,
-    response_item_id: Option<&str>,
-) -> String {
+pub fn derive_responses_function_call_id(call_id: &str, response_item_id: Option<&str>) -> String {
     if let Some(candidate) = response_item_id.map(str::trim).filter(|s| !s.is_empty()) {
         if candidate.starts_with("fc_") {
             return candidate.to_string();
@@ -626,9 +626,7 @@ fn append_function_call_item(tc: &Value, items: &mut Vec<Value>) {
 }
 
 fn append_tool_responses_item(msg: &Map<String, Value>, items: &mut Vec<Value>) {
-    let raw_tool_call_id = msg
-        .get("tool_call_id")
-        .and_then(|v| v.as_str());
+    let raw_tool_call_id = msg.get("tool_call_id").and_then(|v| v.as_str());
     let (mut call_id, _) = split_responses_tool_id(raw_tool_call_id);
     if call_id.is_none() {
         if let Some(raw) = raw_tool_call_id.map(str::trim).filter(|s| !s.is_empty()) {
@@ -778,7 +776,10 @@ fn normalize_function_call_output_item(
             "Codex Responses input[{idx}] function_call_output is missing call_id."
         ))
     })?;
-    let output = obj.get("output").cloned().unwrap_or(Value::String(String::new()));
+    let output = obj
+        .get("output")
+        .cloned()
+        .unwrap_or(Value::String(String::new()));
     let output = if output.is_null() {
         Value::String(String::new())
     } else {
@@ -926,7 +927,10 @@ fn normalize_role_content_item(
     idx: usize,
     role: &str,
 ) -> Result<Value, CodexAdapterError> {
-    let content = obj.get("content").cloned().unwrap_or(Value::String(String::new()));
+    let content = obj
+        .get("content")
+        .cloned()
+        .unwrap_or(Value::String(String::new()));
     let content = if content.is_null() {
         Value::String(String::new())
     } else {
@@ -965,7 +969,10 @@ fn normalize_role_content_item(
                     .unwrap_or_default();
                 validated.push(json!({"type": text_type, "text": text}));
             } else if matches!(ptype.as_str(), "input_image" | "image_url") {
-                let mut detail = part_obj.get("detail").and_then(|v| v.as_str()).map(str::to_string);
+                let mut detail = part_obj
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 let url = match part_obj.get("image_url") {
                     Some(Value::Object(ir)) => {
                         detail = ir
@@ -1048,8 +1055,7 @@ pub fn preflight_codex_api_kwargs(
         instructions.to_string()
     };
 
-    let normalized_input =
-        preflight_codex_input_items(obj.get("input").unwrap_or(&Value::Null))?;
+    let normalized_input = preflight_codex_input_items(obj.get("input").unwrap_or(&Value::Null))?;
 
     let mut normalized_tools: Option<Vec<Value>> = None;
     if let Some(tools) = obj.get("tools").filter(|v| !v.is_null()) {
@@ -1301,10 +1307,7 @@ pub fn extract_responses_reasoning_text(item: &Value) -> String {
 
 pub fn format_responses_error(error_obj: Option<&Value>, response_status: &str) -> String {
     let (code, message) = match error_obj {
-        Some(Value::Object(obj)) => (
-            obj.get("code").cloned(),
-            obj.get("message").cloned(),
-        ),
+        Some(Value::Object(obj)) => (obj.get("code").cloned(), obj.get("message").cloned()),
         Some(other) => (other.get("code").cloned(), other.get("message").cloned()),
         None => (None, None),
     };
@@ -1376,12 +1379,14 @@ pub fn normalize_codex_response(
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_ascii_lowercase());
 
-    if matches!(response_status.as_deref(), Some("failed") | Some("cancelled")) {
+    if matches!(
+        response_status.as_deref(),
+        Some("failed") | Some("cancelled")
+    ) {
         let status = response_status.as_deref().unwrap_or("failed");
         let error_obj = response.get("error");
         return Err(CodexAdapterError::runtime_error(format_responses_error(
-            error_obj,
-            status,
+            error_obj, status,
         )));
     }
 
@@ -1569,11 +1574,7 @@ pub fn normalize_codex_response(
     Ok((assistant_message, finish_reason))
 }
 
-fn append_normalized_tool_call(
-    item: &Value,
-    tool_calls: &mut Vec<CodexToolCall>,
-    is_custom: bool,
-) {
+fn append_normalized_tool_call(item: &Value, tool_calls: &mut Vec<CodexToolCall>, is_custom: bool) {
     let fn_name = item
         .get("name")
         .and_then(|v| v.as_str())
@@ -1593,8 +1594,7 @@ fn append_normalized_tool_call(
         None => "{}".to_string(),
     };
 
-    let (embedded_call_id, _) =
-        split_responses_tool_id(item.get("id").and_then(|v| v.as_str()));
+    let (embedded_call_id, _) = split_responses_tool_id(item.get("id").and_then(|v| v.as_str()));
     let mut call_id = item
         .get("call_id")
         .and_then(|v| v.as_str())
@@ -1603,7 +1603,11 @@ fn append_normalized_tool_call(
         .map(str::to_string)
         .or(embedded_call_id);
     if call_id.is_none() {
-        call_id = Some(deterministic_call_id(&fn_name, &arguments, tool_calls.len()));
+        call_id = Some(deterministic_call_id(
+            &fn_name,
+            &arguments,
+            tool_calls.len(),
+        ));
     }
     let call_id = call_id.unwrap();
     let raw_item_id = item.get("id").and_then(|v| v.as_str());

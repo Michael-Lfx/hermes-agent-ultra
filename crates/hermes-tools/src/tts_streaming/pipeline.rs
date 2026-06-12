@@ -29,7 +29,7 @@ use futures::StreamExt;
 use hermes_core::ToolError;
 
 use super::elevenlabs_stream::{ElevenLabsStreamConfig, PcmChunkStream, StreamingTtsBackend};
-use super::sanitizer::{strip_markdown_for_tts, IncrementalThinkStripper};
+use super::sanitizer::{IncrementalThinkStripper, strip_markdown_for_tts};
 use super::sentence_buffer::{SentenceBuffer, SentenceBufferConfig};
 
 // ---------------------------------------------------------------------------

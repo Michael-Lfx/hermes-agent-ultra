@@ -5,18 +5,18 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
-use hmac::{Hmac, Mac};
-use reqwest::Client;
-use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
-use hmac::KeyInit;
+use futures::{StreamExt, stream::BoxStream};
 use hermes_core::{
     AgentError, FunctionCall, FunctionCallDelta, LlmProvider, LlmResponse, Message, MessageRole,
     StreamChunk, StreamDelta, ToolCall, ToolCallDelta, ToolSchema, UsageStats,
 };
+use hmac::KeyInit;
+use hmac::{Hmac, Mac};
+use reqwest::Client;
+use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -2481,9 +2481,11 @@ mod tests {
         ];
         let mut buffer = Vec::new();
         buffer.extend_from_slice(&frames[0][..frames[0].len() / 2]);
-        assert!(take_aws_event_stream_message(&mut buffer)
-            .expect("partial frame")
-            .is_none());
+        assert!(
+            take_aws_event_stream_message(&mut buffer)
+                .expect("partial frame")
+                .is_none()
+        );
         buffer.extend_from_slice(&frames[0][frames[0].len() / 2..]);
         for frame in frames.iter().skip(1) {
             buffer.extend_from_slice(frame);

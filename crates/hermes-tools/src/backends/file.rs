@@ -799,10 +799,12 @@ mod tests {
         let matches = parsed["matches"].as_array().expect("matches array");
         assert_eq!(parsed["total"], 1);
         assert_eq!(matches.len(), 1);
-        assert!(matches[0]["file"]
-            .as_str()
-            .expect("match file")
-            .ends_with("good.txt"));
+        assert!(
+            matches[0]["file"]
+                .as_str()
+                .expect("match file")
+                .ends_with("good.txt")
+        );
         assert!(!content.contains("bad.txt"));
 
         let files_only = backend

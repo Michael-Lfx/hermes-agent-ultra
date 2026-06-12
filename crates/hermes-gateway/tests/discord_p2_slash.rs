@@ -3,12 +3,12 @@
 #![cfg(feature = "discord")]
 
 use hermes_core::types::SkillMeta;
-use hermes_gateway::platforms::discord::{
-    format_slash_command_text, parse_autocomplete_interaction, InteractionOption,
-    INTERACTION_TYPE_AUTOCOMPLETE,
-};
 use hermes_gateway::platforms::discord::slash::{
     format_slash_command_text as slash_format, skill_choices_from_metas,
+};
+use hermes_gateway::platforms::discord::{
+    INTERACTION_TYPE_AUTOCOMPLETE, InteractionOption, format_slash_command_text,
+    parse_autocomplete_interaction,
 };
 
 #[test]

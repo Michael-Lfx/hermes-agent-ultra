@@ -2,8 +2,8 @@
 
 //! WhatsApp connect lifecycle tests.
 
-use hermes_gateway::platforms::whatsapp::{is_paired, WhatsAppAdapter, WhatsAppConfig};
 use hermes_gateway::PlatformAdapter;
+use hermes_gateway::platforms::whatsapp::{WhatsAppAdapter, WhatsAppConfig, is_paired};
 use tempfile::TempDir;
 
 #[tokio::test]

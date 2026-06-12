@@ -20,8 +20,5 @@ pub fn clear_runtime_main() {
 
 /// Snapshot of the last `set_runtime_main` values.
 pub fn runtime_main_provider_model() -> (String, String) {
-    RUNTIME_MAIN
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_default()
+    RUNTIME_MAIN.read().map(|g| g.clone()).unwrap_or_default()
 }

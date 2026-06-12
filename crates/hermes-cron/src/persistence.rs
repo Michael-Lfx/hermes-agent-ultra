@@ -190,7 +190,8 @@ impl JobPersistence for FileJobPersistence {
 
     async fn load_jobs(&self) -> Result<Vec<CronJob>, CronPersistenceError> {
         self.ensure_dir().await?;
-        let mut by_id: std::collections::HashMap<String, CronJob> = std::collections::HashMap::new();
+        let mut by_id: std::collections::HashMap<String, CronJob> =
+            std::collections::HashMap::new();
 
         // 1) Python jobs.json (lower precedence than per-id files)
         let jobs_json_path = self.data_dir.join(JOBS_JSON);

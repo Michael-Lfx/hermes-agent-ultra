@@ -7,7 +7,7 @@ use hermes_core::types::SkillMeta;
 use hermes_skills::{FileSkillStore, SkillStore};
 use tracing::warn;
 
-use super::types::{extended_slash_commands, SlashCommand, SlashCommandChoice, SlashCommandOption};
+use super::types::{SlashCommand, SlashCommandChoice, SlashCommandOption, extended_slash_commands};
 
 const DISCORD_MAX_APPLICATION_COMMANDS: usize = 100;
 const OPTION_TYPE_STRING: u8 = 3;
@@ -57,7 +57,10 @@ fn cap_commands(commands: &mut Vec<SlashCommand>) {
 }
 
 /// Format native slash interaction as gateway text (``/model gpt-4``).
-pub fn format_slash_command_text(command_name: &str, options: &[super::parse::InteractionOption]) -> String {
+pub fn format_slash_command_text(
+    command_name: &str,
+    options: &[super::parse::InteractionOption],
+) -> String {
     let mut parts = vec![format!("/{command_name}")];
     for opt in options {
         let value = format_option_value(&opt.value);

@@ -372,11 +372,13 @@ mod tests {
         let busiest_day = report.activity.busiest_day.unwrap();
         assert_eq!(busiest_day.day, "Mon");
         assert_eq!(busiest_day.count, 3);
-        assert!(report
-            .activity
-            .by_day
-            .iter()
-            .any(|d| d.day == "Wed" && d.count == 2));
+        assert!(
+            report
+                .activity
+                .by_day
+                .iter()
+                .any(|d| d.day == "Wed" && d.count == 2)
+        );
         assert!(report.activity.active_days >= 2);
     }
 

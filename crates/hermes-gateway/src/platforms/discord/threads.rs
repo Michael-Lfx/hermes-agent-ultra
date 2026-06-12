@@ -62,17 +62,16 @@ impl ThreadParticipationTracker {
     async fn persist(&self) -> Result<(), GatewayError> {
         let ids: Vec<String> = self.ids.read().await.iter().cloned().collect();
         let state = ThreadState { thread_ids: ids };
-        let json = serde_json::to_string_pretty(&state).map_err(|e| {
-            GatewayError::Platform(format!("discord_threads serialize: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(&state)
+            .map_err(|e| GatewayError::Platform(format!("discord_threads serialize: {e}")))?;
         if let Some(parent) = self.path.parent() {
-            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                GatewayError::Platform(format!("discord_threads mkdir: {e}"))
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| GatewayError::Platform(format!("discord_threads mkdir: {e}")))?;
         }
-        tokio::fs::write(&self.path, json).await.map_err(|e| {
-            GatewayError::Platform(format!("discord_threads write: {e}"))
-        })?;
+        tokio::fs::write(&self.path, json)
+            .await
+            .map_err(|e| GatewayError::Platform(format!("discord_threads write: {e}")))?;
         Ok(())
     }
 }

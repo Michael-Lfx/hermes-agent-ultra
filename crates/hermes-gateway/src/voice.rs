@@ -96,14 +96,17 @@ impl VoiceManager {
     /// Transcribe an audio file to text (STT).
     pub async fn transcribe(&self, audio_data: &[u8], format: &str) -> Result<String, AgentError> {
         if !self.stt_config.is_enabled() {
-            return Err(AgentError::Config("STT is disabled (stt.enabled=false)".into()));
+            return Err(AgentError::Config(
+                "STT is disabled (stt.enabled=false)".into(),
+            ));
         }
         match &self.config.stt_provider {
             SttProvider::Whisper => self.transcribe_whisper(audio_data, format).await,
             SttProvider::DeepgramNova => self.transcribe_deepgram(audio_data, format).await,
-            SttProvider::Groq | SttProvider::Mistral | SttProvider::Xai | SttProvider::LocalCommand => {
-                self.transcribe_via_tools(audio_data, format).await
-            }
+            SttProvider::Groq
+            | SttProvider::Mistral
+            | SttProvider::Xai
+            | SttProvider::LocalCommand => self.transcribe_via_tools(audio_data, format).await,
             SttProvider::Custom(url) => self.transcribe_custom(url, audio_data, format).await,
         }
     }
@@ -111,7 +114,9 @@ impl VoiceManager {
     /// Transcribe audio at a local file path (gateway inbound voice messages).
     pub async fn transcribe_path(&self, path: &str) -> Result<String, AgentError> {
         if !self.stt_config.is_enabled() {
-            return Err(AgentError::Config("STT is disabled (stt.enabled=false)".into()));
+            return Err(AgentError::Config(
+                "STT is disabled (stt.enabled=false)".into(),
+            ));
         }
         hermes_tools::transcribe_audio_file(Some(self.stt_config.clone()), path)
             .await
@@ -123,11 +128,8 @@ impl VoiceManager {
         audio_data: &[u8],
         format: &str,
     ) -> Result<String, AgentError> {
-        let path = std::env::temp_dir().join(format!(
-            "hermes_voice_{}.{}",
-            uuid::Uuid::new_v4(),
-            format
-        ));
+        let path =
+            std::env::temp_dir().join(format!("hermes_voice_{}.{}", uuid::Uuid::new_v4(), format));
         tokio::fs::write(&path, audio_data)
             .await
             .map_err(|e| AgentError::Io(e.to_string()))?;
@@ -414,8 +416,8 @@ impl VoiceManager {
             "flac" => "audio/flac",
             other => {
                 return Err(AgentError::Config(format!(
-                "Unsupported audio format for Deepgram: '{other}' (try wav, mp3, webm, flac, ogg)"
-            )))
+                    "Unsupported audio format for Deepgram: '{other}' (try wav, mp3, webm, flac, ogg)"
+                )));
             }
         };
 

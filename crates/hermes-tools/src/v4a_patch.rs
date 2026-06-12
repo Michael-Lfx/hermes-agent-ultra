@@ -240,8 +240,7 @@ pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<Stri
         if op.operation == OperationType::Update && op.hunks.is_empty() {
             parse_errors.push(format!("UPDATE {:?}: no hunks found", op.file_path));
         }
-        if op.operation == OperationType::Move && op.new_path.as_deref().unwrap_or("").is_empty()
-        {
+        if op.operation == OperationType::Move && op.new_path.as_deref().unwrap_or("").is_empty() {
             parse_errors.push(format!(
                 "MOVE {:?}: missing destination path (expected 'src -> dst')",
                 op.file_path
@@ -252,7 +251,10 @@ pub fn parse_v4a_patch(patch_content: &str) -> (Vec<PatchOperation>, Option<Stri
     if parse_errors.is_empty() {
         (operations, None)
     } else {
-        (Vec::new(), Some(format!("Parse error: {}", parse_errors.join("; "))))
+        (
+            Vec::new(),
+            Some(format!("Parse error: {}", parse_errors.join("; "))),
+        )
     }
 }
 
@@ -399,7 +401,8 @@ mod tests {
 
     #[test]
     fn test_update_without_hunks_is_parse_error() {
-        let (ops, err) = parse_v4a_patch("*** Begin Patch\n*** Update File: test.rs\n*** End Patch");
+        let (ops, err) =
+            parse_v4a_patch("*** Begin Patch\n*** Update File: test.rs\n*** End Patch");
         assert!(ops.is_empty());
         assert!(err.expect("parse error").contains("no hunks found"));
     }

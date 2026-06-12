@@ -81,7 +81,11 @@ impl SkillsHubLock {
 }
 
 /// Source string for [`crate::skills_guard::resolve_trust_level`] / install policy.
-pub fn resolve_scan_source(skills_dir: &Path, skill_name: &str, skill_dir: Option<&Path>) -> String {
+pub fn resolve_scan_source(
+    skills_dir: &Path,
+    skill_name: &str,
+    skill_dir: Option<&Path>,
+) -> String {
     let lock = read_hub_lock(skills_dir);
     if let Some(entry) = lock.find_entry(skill_name, skill_dir) {
         return entry.identifier.clone();
@@ -131,6 +135,9 @@ mod tests {
     fn unknown_skill_defaults_to_skill_name() {
         let tmp = TempDir::new().unwrap();
         let skills = tmp.path();
-        assert_eq!(resolve_scan_source(skills, "local-draft", None), "local-draft");
+        assert_eq!(
+            resolve_scan_source(skills, "local-draft", None),
+            "local-draft"
+        );
     }
 }

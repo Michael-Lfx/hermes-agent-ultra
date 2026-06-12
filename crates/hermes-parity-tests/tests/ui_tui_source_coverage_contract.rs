@@ -52,13 +52,13 @@ fn ui_tui_manifest_covers_source_cluster_and_references_real_tests() {
         "manifest paths must be unique"
     );
 
-    let required_prefixes: BTreeSet<String> = manifest["summary"]
-        ["required_backlog_classification_paths"]
-        .as_array()
-        .expect("required_backlog_classification_paths should be array")
-        .iter()
-        .map(|value| value.as_str().expect("classification path").to_string())
-        .collect();
+    let required_prefixes: BTreeSet<String> =
+        manifest["summary"]["required_backlog_classification_paths"]
+            .as_array()
+            .expect("required_backlog_classification_paths should be array")
+            .iter()
+            .map(|value| value.as_str().expect("classification path").to_string())
+            .collect();
 
     let backlog_paths: BTreeSet<String> = backlog["entries"]
         .as_array()

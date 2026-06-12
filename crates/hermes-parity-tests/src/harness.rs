@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use hermes_config::resolve_agent_path;
 use hermes_core::tool_call_parser::{format_tool_calls, parse_tool_calls, separate_text_and_calls};
 use hermes_core::types::ToolCall;
 use hermes_intelligence::anthropic_adapter::{
@@ -11,23 +12,22 @@ use hermes_intelligence::anthropic_adapter::{
 };
 use hermes_intelligence::usage_pricing::resolve_billing_route;
 use hermes_intelligence::{
-    estimate_tokens_rough, get_model_context_length, infer_provider_from_url, supports_tools,
-    supports_vision, ErrorCategory, ErrorClassifier, RetryStrategy,
+    ErrorCategory, ErrorClassifier, RetryStrategy, estimate_tokens_rough, get_model_context_length,
+    infer_provider_from_url, supports_tools, supports_vision,
 };
 use hermes_skills::{
-    determine_verdict, resolve_trust_level, scan_content, should_allow_install, Finding,
-    InstallDecision, ScanResult,
+    Finding, InstallDecision, ScanResult, determine_verdict, resolve_trust_level, scan_content,
+    should_allow_install,
 };
-use hermes_config::resolve_agent_path;
-use hermes_tools::approval::{check_approval, ApprovalDecision};
+use hermes_tools::approval::{ApprovalDecision, check_approval};
 use hermes_tools::code_execution_env::scrub_child_env;
-use hermes_tools::code_execution_stubs::{generate_hermes_tools_module, RpcTransport};
+use hermes_tools::code_execution_stubs::{RpcTransport, generate_hermes_tools_module};
 use hermes_tools::extract_media;
-use hermes_tools::v4a_patch::{parse_v4a_patch, OperationType};
-use std::collections::BTreeMap;
+use hermes_tools::v4a_patch::{OperationType, parse_v4a_patch};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 /// Top-level fixture file (one file may contain multiple cases).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,9 +223,6 @@ fn extract_shortstat_count(stat_line: &str, marker: &str) -> u64 {
     prefix[digits_start..].parse().unwrap_or(0)
 }
 
-
-
-
 /// Execute one logical op and return JSON [`Value`] for comparison.
 pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
     match op {
@@ -255,10 +252,9 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
             Ok(Value::Bool(is_oauth_token(key)))
         }
         "common_betas_for_base_url" => {
-            let base_url =
-                input
-                    .get("base_url")
-                    .and_then(|v| if v.is_null() { None } else { v.as_str() });
+            let base_url = input
+                .get("base_url")
+                .and_then(|v| if v.is_null() { None } else { v.as_str() });
             let v: Vec<Value> = common_betas_for_base_url(base_url)
                 .into_iter()
                 .map(|s| json!(s))
@@ -266,10 +262,9 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
             Ok(Value::Array(v))
         }
         "default_anthropic_beta_list" => {
-            let base_url =
-                input
-                    .get("base_url")
-                    .and_then(|v| if v.is_null() { None } else { v.as_str() });
+            let base_url = input
+                .get("base_url")
+                .and_then(|v| if v.is_null() { None } else { v.as_str() });
             let is_oauth = input
                 .get("is_oauth")
                 .and_then(|v| v.as_bool())
@@ -281,10 +276,9 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
             Ok(Value::Array(v))
         }
         "fast_mode_request_beta_list" => {
-            let base_url =
-                input
-                    .get("base_url")
-                    .and_then(|v| if v.is_null() { None } else { v.as_str() });
+            let base_url = input
+                .get("base_url")
+                .and_then(|v| if v.is_null() { None } else { v.as_str() });
             let is_oauth = input
                 .get("is_oauth")
                 .and_then(|v| v.as_bool())
@@ -596,9 +590,7 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
                 }
             }
             let resolved = resolve_agent_path(path);
-            let normalized = resolved
-                .to_string_lossy()
-                .replace('\\', "/");
+            let normalized = resolved.to_string_lossy().replace('\\', "/");
             Ok(Value::String(normalized))
         }
 
@@ -617,7 +609,6 @@ pub fn dispatch_case(op: &str, input: &Value) -> Result<Value, String> {
                 "cleaned": cleaned,
             }))
         }
-
 
         "checkpoint_validate_commit_hash" => {
             let commit_hash = input
@@ -715,7 +706,6 @@ mod tests {
     }
 
     #[test]
-
     #[test]
     fn checkpoint_commit_hash_validation_matches_python_samples() {
         assert_eq!(

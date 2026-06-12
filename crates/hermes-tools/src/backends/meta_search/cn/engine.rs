@@ -5,8 +5,8 @@ use std::time::Instant;
 use reqwest::Client;
 use tracing::debug;
 
-use crate::backends::meta_search::{ParseError, SearchHit};
 use crate::backends::meta_search::http_client::{cn_request_headers, max_cn_html_bytes};
+use crate::backends::meta_search::{ParseError, SearchHit};
 use hermes_core::ToolError;
 
 /// HTML search engine with separated fetch and parse for testability.
@@ -61,9 +61,8 @@ pub async fn fetch_cn_html(
     } else {
         &bytes
     };
-    String::from_utf8(slice.to_vec()).map_err(|e| ToolError::ExecutionFailed(format!(
-        "CN search response not UTF-8: {e}"
-    )))
+    String::from_utf8(slice.to_vec())
+        .map_err(|e| ToolError::ExecutionFailed(format!("CN search response not UTF-8: {e}")))
 }
 
 pub async fn run_cn_engine(

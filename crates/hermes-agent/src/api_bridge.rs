@@ -4,8 +4,8 @@
 //! models. It differs from chat completions in request/response format.
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use reqwest::Client;
 use serde_json::Value;
 use std::sync::Arc;
@@ -256,9 +256,9 @@ impl CodexProvider {
             }
         }
 
-        let usage = json.get("usage").and_then(|u| {
-            usage_stats_from_raw(u, Some("openai"), Some("codex_responses"))
-        });
+        let usage = json
+            .get("usage")
+            .and_then(|u| usage_stats_from_raw(u, Some("openai"), Some("codex_responses")));
 
         let model = json
             .get("model")

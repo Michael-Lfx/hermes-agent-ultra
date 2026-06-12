@@ -27,13 +27,13 @@ use async_trait::async_trait;
 use chrono::Utc;
 use hermes_config::voice::MeetingTranscriptionMode;
 use hermes_config::{DiarizationProvider, MeetingConfig, SttConfig};
-use hermes_core::{tool_schema, ToolError, ToolHandler, ToolSchema};
 use hermes_core::JsonSchema;
+use hermes_core::{ToolError, ToolHandler, ToolSchema, tool_schema};
 use indexmap::IndexMap;
 use reqwest::Client;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, info, warn};
 
 use crate::voice_providers::SttEngine;
@@ -178,7 +178,10 @@ pub fn clean_filler_words(text: &str, enabled: bool) -> String {
 ///
 /// `corrections` maps misspelled / ASR-confusable terms to their correct form.
 /// Only whole-word matches are replaced (space or punctuation boundaries).
-pub fn apply_hotword_corrections(text: &str, corrections: &std::collections::HashMap<String, String>) -> String {
+pub fn apply_hotword_corrections(
+    text: &str,
+    corrections: &std::collections::HashMap<String, String>,
+) -> String {
     if corrections.is_empty() {
         return text.to_string();
     }
@@ -309,7 +312,9 @@ async fn llm_summarize_chunk(
 
     // 3. Parse and validate structure.
     let parsed = serde_json::from_str::<Value>(&cleaned).map_err(|e| {
-        ToolError::ExecutionFailed(format!("LLM returned invalid JSON: {e}\nContent: {cleaned}"))
+        ToolError::ExecutionFailed(format!(
+            "LLM returned invalid JSON: {e}\nContent: {cleaned}"
+        ))
     })?;
 
     // 4. Enforce required keys (JSON Schema validation).
@@ -377,9 +382,9 @@ async fn diarize_with_pyannote(
     audio_path: &str,
     transcript_text: &str,
 ) -> Result<Vec<TranscriptTurn>, ToolError> {
-    let bytes = tokio::fs::read(audio_path)
-        .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Cannot read audio for diarization: {e}")))?;
+    let bytes = tokio::fs::read(audio_path).await.map_err(|e| {
+        ToolError::ExecutionFailed(format!("Cannot read audio for diarization: {e}"))
+    })?;
 
     let part = reqwest::multipart::Part::bytes(bytes)
         .file_name("audio.wav")
@@ -489,11 +494,7 @@ impl MeetingMemorySink {
         )
         .map_err(|e| e.to_string())?;
 
-        let tags = format!(
-            "{},meeting,{}",
-            notes.date,
-            slugify(&notes.title)
-        );
+        let tags = format!("{},meeting,{}", notes.date, slugify(&notes.title));
 
         let insert_fact = |content: &str, prefix: &str| {
             let full = format!("[{}] {}: {}", notes.date, prefix, content);
@@ -538,8 +539,7 @@ impl MeetingMemorySink {
 
         // Check if file exists; create if not.
         if !self.memory_md_path.exists() {
-            std::fs::write(&self.memory_md_path, entry.as_bytes())
-                .map_err(|e| e.to_string())?;
+            std::fs::write(&self.memory_md_path, entry.as_bytes()).map_err(|e| e.to_string())?;
         } else {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new()
@@ -607,7 +607,8 @@ pub async fn run_offline_pipeline(
 
     // 1b. Apply hotword corrections and optional filler word removal.
     let transcript_text = {
-        let corrected = apply_hotword_corrections(&raw_transcript, &meeting_config.hotword_corrections);
+        let corrected =
+            apply_hotword_corrections(&raw_transcript, &meeting_config.hotword_corrections);
         clean_filler_words(&corrected, meeting_config.clean_fillers())
     };
 
@@ -651,7 +652,16 @@ pub async fn run_offline_pipeline(
         on_state(SummarizeState::SummarizingChunk(i + 1, total));
         debug!("meeting_notes: summarizing chunk {}/{}", i + 1, total);
         let prompt = chunk_summary_prompt(chunk, custom_sys_ref);
-        match llm_summarize_chunk(&client, llm_base_url, llm_api_key, llm_model, &prompt, custom_sys_ref).await {
+        match llm_summarize_chunk(
+            &client,
+            llm_base_url,
+            llm_api_key,
+            llm_model,
+            &prompt,
+            custom_sys_ref,
+        )
+        .await
+        {
             Ok(v) => chunk_summaries.push(v),
             Err(e) => {
                 let msg = format!("Chunk {} summary failed: {e} — skipping", i + 1);
@@ -673,7 +683,15 @@ pub async fn run_offline_pipeline(
         chunk_summaries.remove(0)
     } else {
         let merge_prompt = merge_summary_prompt(&chunk_summaries);
-        llm_summarize_chunk(&client, llm_base_url, llm_api_key, llm_model, &merge_prompt, custom_sys_ref).await?
+        llm_summarize_chunk(
+            &client,
+            llm_base_url,
+            llm_api_key,
+            llm_model,
+            &merge_prompt,
+            custom_sys_ref,
+        )
+        .await?
     };
 
     let extract_strings = |key: &str| -> Vec<String> {
@@ -777,8 +795,7 @@ impl MeetingNotesHandler {
         let llm_api_key = std::env::var("MEETING_LLM_API_KEY")
             .or_else(|_| std::env::var("OPENAI_API_KEY"))
             .unwrap_or_default();
-        let llm_model = std::env::var("MEETING_LLM_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini".into());
+        let llm_model = std::env::var("MEETING_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into());
         Self::new(
             MeetingConfig::default(),
             SttConfig::default(),
@@ -824,10 +841,7 @@ impl ToolHandler for MeetingNotesHandler {
     }
 
     async fn execute(&self, params: Value) -> Result<String, ToolError> {
-        let title = params["title"]
-            .as_str()
-            .unwrap_or("会议")
-            .to_string();
+        let title = params["title"].as_str().unwrap_or("会议").to_string();
 
         // Resolve transcription mode override
         let mut meeting_cfg = self.meeting_config.clone();
@@ -838,8 +852,7 @@ impl ToolHandler for MeetingNotesHandler {
             });
         }
         if params["diarization"].as_bool() == Some(true) {
-            meeting_cfg.diarization_provider =
-                Some(hermes_config::DiarizationProvider::Pyannote);
+            meeting_cfg.diarization_provider = Some(hermes_config::DiarizationProvider::Pyannote);
         }
 
         // Determine source: audio file or pre-supplied transcript
@@ -871,16 +884,16 @@ impl ToolHandler for MeetingNotesHandler {
             &self.llm_api_key,
             &self.llm_model,
             &self.hermes_home,
-            |state| {
-                match &state {
-                    SummarizeState::Transcribing => info!("Meeting pipeline: transcribing…"),
-                    SummarizeState::Diarizing => info!("Meeting pipeline: diarizing…"),
-                    SummarizeState::SummarizingChunk(i, n) => info!("Meeting pipeline: summarizing chunk {i}/{n}…"),
-                    SummarizeState::MergingSummaries => info!("Meeting pipeline: merging summaries…"),
-                    SummarizeState::WritingMemory => info!("Meeting pipeline: writing to memory…"),
-                    SummarizeState::Done => info!("Meeting pipeline: done"),
-                    SummarizeState::Warning(w) => warn!("Meeting pipeline: {w}"),
+            |state| match &state {
+                SummarizeState::Transcribing => info!("Meeting pipeline: transcribing…"),
+                SummarizeState::Diarizing => info!("Meeting pipeline: diarizing…"),
+                SummarizeState::SummarizingChunk(i, n) => {
+                    info!("Meeting pipeline: summarizing chunk {i}/{n}…")
                 }
+                SummarizeState::MergingSummaries => info!("Meeting pipeline: merging summaries…"),
+                SummarizeState::WritingMemory => info!("Meeting pipeline: writing to memory…"),
+                SummarizeState::Done => info!("Meeting pipeline: done"),
+                SummarizeState::Warning(w) => warn!("Meeting pipeline: {w}"),
             },
         )
         .await?;
@@ -903,10 +916,7 @@ impl MeetingNotesHandler {
 
         let chunk_minutes = meeting_config.summary_chunk_minutes() as usize;
         let lines_per_chunk = chunk_minutes * 10;
-        let all_lines: Vec<&str> = text
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-            .collect();
+        let all_lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
 
         let chunks: Vec<String> = all_lines
             .chunks(lines_per_chunk.max(1))
@@ -1004,7 +1014,11 @@ mod tests {
             transcript_file: None,
         };
         let entry = notes.memory_entry();
-        assert!(entry.chars().count() <= 200, "entry too long: {} chars", entry.chars().count());
+        assert!(
+            entry.chars().count() <= 200,
+            "entry too long: {} chars",
+            entry.chars().count()
+        );
     }
 
     #[test]

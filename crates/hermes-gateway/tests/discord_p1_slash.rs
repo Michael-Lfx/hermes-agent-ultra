@@ -182,7 +182,9 @@ async fn slash_stop_replies_via_interaction() {
     assert!(channel_sent.lock().unwrap().is_empty());
     let replies = interaction_replies.lock().unwrap();
     assert!(
-        replies.iter().any(|r| r.contains("stopped") || r.contains("⏹")),
+        replies
+            .iter()
+            .any(|r| r.contains("stopped") || r.contains("⏹")),
         "expected stop confirmation, got: {replies:?}"
     );
 }

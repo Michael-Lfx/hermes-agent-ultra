@@ -129,11 +129,13 @@ mod tests {
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[0].role, MessageRole::System);
         assert_eq!(req.messages[1].role, MessageRole::User);
-        assert!(req.messages[1]
-            .content
-            .as_deref()
-            .unwrap()
-            .contains("Alice"));
+        assert!(
+            req.messages[1]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("Alice")
+        );
     }
 
     #[test]

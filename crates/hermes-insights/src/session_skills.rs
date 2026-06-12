@@ -85,8 +85,8 @@ pub fn drain_session_skills(hermes_home: &Path, session_id: &str) -> SessionSkil
     }
     let path = session_skills_path(hermes_home);
     let file = read_file(&path);
-    let session_matches = file.session_id == session_id
-        || (file.session_id.is_empty() && !file.slugs.is_empty());
+    let session_matches =
+        file.session_id == session_id || (file.session_id.is_empty() && !file.slugs.is_empty());
     if !session_matches {
         warn!(
             expected_session_id = session_id,

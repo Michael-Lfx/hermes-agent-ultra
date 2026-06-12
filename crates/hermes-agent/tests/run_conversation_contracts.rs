@@ -3,11 +3,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use hermes_agent::{
-    agent_loop::ToolRegistry,
-    conversation_loop::extract_last_reasoning_current_turn,
-    split_messages_for_run_conversation, AgentConfig, AgentLoop, RunConversationParams,
+    AgentConfig, AgentLoop, RunConversationParams, agent_loop::ToolRegistry,
+    conversation_loop::extract_last_reasoning_current_turn, split_messages_for_run_conversation,
 };
 use hermes_core::{
     AgentError, LlmProvider, Message, MessageRole, StreamChunk, StreamDelta, ToolSchema,
@@ -31,7 +30,7 @@ impl LlmProvider for StopAssistantProvider {
             usage: None,
             model: "test".into(),
             finish_reason: Some("stop".into()),
-        ..Default::default()
+            ..Default::default()
         })
     }
 
@@ -66,7 +65,7 @@ impl LlmProvider for StreamingHelloProvider {
             usage: None,
             model: "test".into(),
             finish_reason: Some("stop".into()),
-        ..Default::default()
+            ..Default::default()
         })
     }
 
@@ -135,7 +134,12 @@ fn split_and_reasoning_helpers_match_turn_boundary() {
     stale.reasoning_content = Some("stale".into());
     let mut fresh = Message::assistant("ok");
     fresh.reasoning_content = Some("fresh".into());
-    let msgs = vec![Message::user("prior"), stale, Message::user("current"), fresh];
+    let msgs = vec![
+        Message::user("prior"),
+        stale,
+        Message::user("current"),
+        fresh,
+    ];
     assert_eq!(
         extract_last_reasoning_current_turn(&msgs).as_deref(),
         Some("fresh")

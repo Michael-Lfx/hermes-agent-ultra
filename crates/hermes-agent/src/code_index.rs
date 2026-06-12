@@ -181,19 +181,18 @@ impl CodeIndex {
             let abs = absolutize(&self.workspace_root, &path);
             present.insert(abs.clone());
             match file_fingerprint(&abs) {
-                Some(fp) if self
-                    .files
-                    .get(&abs)
-                    .is_some_and(|existing| existing.fingerprint == fp) =>
+                Some(fp)
+                    if self
+                        .files
+                        .get(&abs)
+                        .is_some_and(|existing| existing.fingerprint == fp) =>
                 {
                     stats.files_unchanged += 1;
                 }
                 Some(fp) => {
-                    if let Some(indexed) = index_file_with_fingerprint(
-                        &abs,
-                        fp,
-                        self.config.max_file_bytes,
-                    ) {
+                    if let Some(indexed) =
+                        index_file_with_fingerprint(&abs, fp, self.config.max_file_bytes)
+                    {
                         stats.files_indexed += 1;
                         stats.symbols_indexed += indexed.symbols.len();
                         self.files.insert(abs, indexed);
@@ -642,18 +641,20 @@ const VERSION: &str = "1";
         fs::write(&path, "fn old_name() {}\n").unwrap();
         let mut idx = CodeIndex::new(tmp.path(), CodeIndexConfig::default());
         idx.refresh_full();
-        assert!(idx
-            .list_file_symbols(&path, 10)
-            .iter()
-            .any(|s| s.name == "old_name"));
+        assert!(
+            idx.list_file_symbols(&path, 10)
+                .iter()
+                .any(|s| s.name == "old_name")
+        );
 
         fs::write(&path, "fn new_name() {}\n").unwrap();
         let stats = idx.refresh_incremental();
         assert_eq!(stats.files_indexed, 1);
-        assert!(idx
-            .list_file_symbols(&path, 10)
-            .iter()
-            .any(|s| s.name == "new_name"));
+        assert!(
+            idx.list_file_symbols(&path, 10)
+                .iter()
+                .any(|s| s.name == "new_name")
+        );
     }
 
     #[test]

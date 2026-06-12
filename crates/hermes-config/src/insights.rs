@@ -102,10 +102,7 @@ fn default_min_evidence_tier() -> String {
 }
 
 fn default_exclude_verdicts() -> Vec<String> {
-    vec![
-        "abandoned".to_string(),
-        "indeterminate".to_string(),
-    ]
+    vec!["abandoned".to_string(), "indeterminate".to_string()]
 }
 
 fn default_require_skill_binding() -> bool {
@@ -166,9 +163,7 @@ impl InsightsContributionConfig {
     }
 
     pub fn upload_ready(&self) -> bool {
-        self.enabled
-            && !self.endpoint.trim().is_empty()
-            && self.effective_token().is_some()
+        self.enabled && !self.endpoint.trim().is_empty() && self.effective_token().is_some()
     }
 
     fn tier_rank(tier: &str) -> u8 {
@@ -194,10 +189,7 @@ impl InsightsContributionConfig {
     }
 
     pub fn resolution_uses_llm(&self) -> bool {
-        matches!(
-            self.resolution_mode_normalized().as_str(),
-            "llm" | "hybrid"
-        )
+        matches!(self.resolution_mode_normalized().as_str(), "llm" | "hybrid")
     }
 
     pub fn resolution_uses_rules(&self) -> bool {
@@ -274,9 +266,6 @@ endpoint: "https://ops.example.com/v1/insights/batch"
 auth_token: "flowy-sk-test"
 "#;
         let cfg: InsightsContributionConfig = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(
-            cfg.effective_token().as_deref(),
-            Some("flowy-sk-test")
-        );
+        assert_eq!(cfg.effective_token().as_deref(), Some("flowy-sk-test"));
     }
 }

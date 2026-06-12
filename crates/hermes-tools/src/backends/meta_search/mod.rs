@@ -20,7 +20,12 @@ pub struct SearchHit {
 }
 
 impl SearchHit {
-    pub fn new(title: impl Into<String>, url: impl Into<String>, description: impl Into<String>, source: impl Into<String>) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        url: impl Into<String>,
+        description: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
         Self {
             title: title.into(),
             url: url.into(),

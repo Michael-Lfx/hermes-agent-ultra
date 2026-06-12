@@ -1,4 +1,4 @@
-﻿//! Contribution pipeline: domain work packages only (v3).
+//! Contribution pipeline: domain work packages only (v3).
 
 use std::path::{Path, PathBuf};
 
@@ -9,12 +9,12 @@ use crate::client::{ContributionClient, FlushResult};
 use crate::outbox::ContributionOutbox;
 use crate::paths::{append_audit_event, ensure_state_dir, outbox_path};
 use crate::session_skills::record_skill_touch;
-use crate::skill::{find_skill_dir_by_slug, SkillChangeKind};
+use crate::skill::{SkillChangeKind, find_skill_dir_by_slug};
 use crate::types::{
-    dedupe_batch_contributions, envelope_from_value, ContributionBatch, ContributionEnvelope,
-    ContributionType, INSIGHTS_CONSENT_VERSION,
+    ContributionBatch, ContributionEnvelope, ContributionType, INSIGHTS_CONSENT_VERSION,
+    dedupe_batch_contributions, envelope_from_value,
 };
-use crate::work_package::{build_domain_work_package, WorkPackageBuildInput};
+use crate::work_package::{WorkPackageBuildInput, build_domain_work_package};
 
 pub struct ContributionService {
     hermes_home: PathBuf,
@@ -97,17 +97,15 @@ impl ContributionService {
             return false;
         }
         let collected_at = chrono::Utc::now().to_rfc3339();
-        let envelope = match envelope_from_value(
-            ContributionType::DomainWorkPackage,
-            &collected_at,
-            &package,
-        ) {
-            Ok(e) => e,
-            Err(e) => {
-                self.audit_drop("serialize_error", &e);
-                return false;
-            }
-        };
+        let envelope =
+            match envelope_from_value(ContributionType::DomainWorkPackage, &collected_at, &package)
+            {
+                Ok(e) => e,
+                Err(e) => {
+                    self.audit_drop("serialize_error", &e);
+                    return false;
+                }
+            };
         info!(
             work_id = %input.work_id,
             verdict = %package.resolution.verdict,
@@ -119,7 +117,10 @@ impl ContributionService {
         self.try_enqueue(&envelope)
     }
 
-    pub fn preview_work_package(&self, input: &WorkPackageBuildInput) -> Option<ContributionEnvelope> {
+    pub fn preview_work_package(
+        &self,
+        input: &WorkPackageBuildInput,
+    ) -> Option<ContributionEnvelope> {
         let package = build_domain_work_package(input)?;
         envelope_from_value(
             ContributionType::DomainWorkPackage,
@@ -129,10 +130,7 @@ impl ContributionService {
         .ok()
     }
 
-    pub fn preview_batch_from_inputs(
-        &self,
-        inputs: &[WorkPackageBuildInput],
-    ) -> ContributionBatch {
+    pub fn preview_batch_from_inputs(&self, inputs: &[WorkPackageBuildInput]) -> ContributionBatch {
         let mut contributions = Vec::new();
         for input in inputs {
             if let Some(env) = self.preview_work_package(input) {
@@ -231,7 +229,10 @@ impl ContributionService {
 
     pub async fn revoke_installation(&self) -> Result<(), String> {
         let client = ContributionClient::new(self.config.clone(), self.hermes_home.clone());
-        client.revoke_installation().await.map_err(|e| e.to_string())
+        client
+            .revoke_installation()
+            .await
+            .map_err(|e| e.to_string())
     }
 
     pub fn spawn_work_packages(
@@ -253,8 +254,7 @@ impl ContributionService {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             info!(
                 package_count,
-                upload_ready,
-                "insights: processing session-end work packages"
+                upload_ready, "insights: processing session-end work packages"
             );
             let Ok(svc) = ContributionService::open(hermes_home.clone(), config.clone()) else {
                 warn!(
@@ -269,7 +269,10 @@ impl ContributionService {
                     enqueued += 1;
                 }
             }
-            info!(enqueued, package_count, "insights: session-end enqueue complete");
+            info!(
+                enqueued,
+                package_count, "insights: session-end enqueue complete"
+            );
             if config.upload_ready() {
                 match svc.flush().await {
                     Ok(result) => info!(

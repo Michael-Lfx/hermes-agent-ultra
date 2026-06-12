@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 
 use crate::gateway::IncomingMessage;
 
-use super::config::{WhatsAppConfig, TEXT_BATCH_SPLIT_THRESHOLD};
+use super::config::{TEXT_BATCH_SPLIT_THRESHOLD, WhatsAppConfig};
 
 #[derive(Clone)]
 struct PendingBatch {
@@ -34,12 +34,8 @@ impl TextBatchState {
         }
     }
 
-    pub async fn enqueue<F, Fut>(
-        &self,
-        key: String,
-        incoming: IncomingMessage,
-        dispatch: F,
-    ) where
+    pub async fn enqueue<F, Fut>(&self, key: String, incoming: IncomingMessage, dispatch: F)
+    where
         F: Fn(IncomingMessage) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = ()> + Send + 'static,
     {
@@ -81,10 +77,7 @@ impl TextBatchState {
 
         let delay = {
             let pending = self.pending.lock().await;
-            let last_len = pending
-                .get(&key)
-                .map(|p| p.last_chunk_len)
-                .unwrap_or(0);
+            let last_len = pending.get(&key).map(|p| p.last_chunk_len).unwrap_or(0);
             if last_len >= TEXT_BATCH_SPLIT_THRESHOLD {
                 self.split_delay_seconds
             } else {
@@ -114,7 +107,13 @@ impl TextBatchState {
         for handle in self.tasks.lock().await.drain() {
             handle.1.abort();
         }
-        let pending: Vec<_> = self.pending.lock().await.drain().map(|(_, v)| v.incoming).collect();
+        let pending: Vec<_> = self
+            .pending
+            .lock()
+            .await
+            .drain()
+            .map(|(_, v)| v.incoming)
+            .collect();
         for incoming in pending {
             dispatch(incoming).await;
         }
@@ -122,7 +121,10 @@ impl TextBatchState {
 }
 
 pub fn batch_key(incoming: &IncomingMessage) -> String {
-    format!("{}:{}:{}", incoming.platform, incoming.chat_id, incoming.user_id)
+    format!(
+        "{}:{}:{}",
+        incoming.platform, incoming.chat_id, incoming.user_id
+    )
 }
 
 #[cfg(test)]

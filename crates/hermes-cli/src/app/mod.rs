@@ -22,9 +22,9 @@ use hermes_tools::tools::messaging::MessagingSessionContext;
 use crate::cli::Cli;
 use crate::commands::recover_queued_background_jobs;
 use crate::runtime_tool_wiring::{wire_cron_scheduler_backend, wire_dispatcher_clarify_backend};
-use hermes_gateway::tool_backends::ClarifyDispatcher;
 use crate::terminal_backend::build_terminal_backend;
 use crate::tui::StreamHandle;
+use hermes_gateway::tool_backends::ClarifyDispatcher;
 
 pub mod actors;
 mod agent_run;

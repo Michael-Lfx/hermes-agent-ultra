@@ -28,11 +28,7 @@ impl AuxiliaryVisionAdapter {
         }
     }
 
-    pub fn with_primary_context(
-        mut self,
-        provider: Option<String>,
-        model: Option<String>,
-    ) -> Self {
+    pub fn with_primary_context(mut self, provider: Option<String>, model: Option<String>) -> Self {
         self.primary_provider = provider;
         self.primary_model = model;
         self
@@ -49,10 +45,7 @@ impl VisionBackend for AuxiliaryVisionAdapter {
         let image_part = vision_media::encode_image_url_part(image_url)
             .await
             .map_err(ToolError::ExecutionFailed)?;
-        let parts = vec![
-            json!({"type": "text", "text": question}),
-            image_part,
-        ];
+        let parts = vec![json!({"type": "text", "text": question}), image_part];
         let serialized =
             serde_json::to_string(&parts).map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
         const PREFIX: &str = "__hermes_acp_parts_json__:";

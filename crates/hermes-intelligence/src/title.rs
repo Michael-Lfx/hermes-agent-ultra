@@ -344,7 +344,8 @@ mod tests {
 
         let title = rt
             .block_on(
-                generator.generate_title(&[Message::user("question"), Message::assistant("answer")]),
+                generator
+                    .generate_title(&[Message::user("question"), Message::assistant("answer")]),
             )
             .unwrap();
 
@@ -383,7 +384,8 @@ mod tests {
     #[test]
     fn test_generate_title_request_uses_small_title_budget_and_truncated_prompt() {
         let provider = ScriptedProvider::with_response("Short Title");
-        let generator = TitleGenerator::new(provider.clone(), "title-model").with_max_message_chars(20);
+        let generator =
+            TitleGenerator::new(provider.clone(), "title-model").with_max_message_chars(20);
         let rt = tokio::runtime::Runtime::new().unwrap();
 
         let title = rt

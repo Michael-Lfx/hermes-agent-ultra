@@ -38,17 +38,17 @@ pub struct CheckpointManager {
 }
 
 impl CheckpointManager {
-    pub fn new(
-        enabled: bool,
-        hermes_home: Option<&Path>,
-        workdir: impl AsRef<Path>,
-    ) -> Self {
+    pub fn new(enabled: bool, hermes_home: Option<&Path>, workdir: impl AsRef<Path>) -> Self {
         let home = hermes_home
             .map(Path::to_path_buf)
             .or_else(|| Some(hermes_config::paths::hermes_home()));
         let store_root = home
             .map(|h| h.join("checkpoints").join("store"))
-            .unwrap_or_else(|| hermes_config::hermes_home().join("checkpoints").join("store"));
+            .unwrap_or_else(|| {
+                hermes_config::hermes_home()
+                    .join("checkpoints")
+                    .join("store")
+            });
         let default_workdir = normalize_path(workdir.as_ref());
         Self {
             enabled,
@@ -162,11 +162,8 @@ impl CheckpointManager {
         if !self.enabled {
             return Ok(());
         }
-        let project_id = checkpoint_shadow_dir_id(
-            self.default_workdir
-                .to_str()
-                .ok_or("invalid workdir")?,
-        );
+        let project_id =
+            checkpoint_shadow_dir_id(self.default_workdir.to_str().ok_or("invalid workdir")?);
         let git_dir = &self.store_root;
         if !git_dir.join("HEAD").exists() {
             return Err("checkpoint: no snapshots yet".into());
@@ -334,7 +331,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("crates").join("demo");
         fs::create_dir_all(&nested).unwrap();
-        fs::write(tmp.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
         let file = nested.join("src").join("lib.rs");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "pub fn demo() {}").unwrap();

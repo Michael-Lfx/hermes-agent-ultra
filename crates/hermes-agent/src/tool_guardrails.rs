@@ -26,7 +26,9 @@ impl ToolGuardrailController {
     pub fn before_call(&mut self, tool_name: &str, _args: &Value) -> GuardrailDecision {
         if self.halt_reason.is_some() {
             return GuardrailDecision::Halt(
-                self.halt_reason.clone().unwrap_or_else(|| "guardrail halt".into()),
+                self.halt_reason
+                    .clone()
+                    .unwrap_or_else(|| "guardrail halt".into()),
             );
         }
         if tool_name.is_empty() {
@@ -37,7 +39,10 @@ impl ToolGuardrailController {
 
     pub fn after_call(&mut self, tool_name: &str, is_error: bool, preview: &str) {
         if is_error {
-            let count = self.repeated_errors.entry(tool_name.to_string()).or_insert(0);
+            let count = self
+                .repeated_errors
+                .entry(tool_name.to_string())
+                .or_insert(0);
             *count += 1;
             self.observations.push(format!(
                 "Tool '{}' failed ({}x this turn): {}",

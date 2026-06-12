@@ -21,11 +21,8 @@ const METADATA_HOSTNAMES: [&str; 3] = [
 const TRUSTED_CDN_EXACT_HOSTS: [&str; 1] = ["multimedia.nt.qq.com.cn"];
 
 /// HTTPS hostname suffixes for platform media CDNs (`host == suffix` or `host.ends_with(suffix)`).
-const TRUSTED_CDN_SUFFIX_HOSTS: [&str; 3] = [
-    ".cdn.weixin.qq.com",
-    ".discordapp.com",
-    ".discordapp.net",
-];
+const TRUSTED_CDN_SUFFIX_HOSTS: [&str; 3] =
+    [".cdn.weixin.qq.com", ".discordapp.com", ".discordapp.net"];
 
 /// Tencent COS buckets: `*.cos.<region>.myqcloud.com`.
 const TRUSTED_CDN_COS_SUFFIX: &str = ".myqcloud.com";
@@ -578,44 +575,62 @@ mod tests {
             "bucket.myqcloud.com",
             "https"
         ));
-        assert!(is_trusted_platform_cdn_host("novac2c.cdn.weixin.qq.com", "https"));
-        assert!(!is_trusted_platform_cdn_host("evil.cdn.weixin.qq.com.evil.com", "https"));
+        assert!(is_trusted_platform_cdn_host(
+            "novac2c.cdn.weixin.qq.com",
+            "https"
+        ));
+        assert!(!is_trusted_platform_cdn_host(
+            "evil.cdn.weixin.qq.com.evil.com",
+            "https"
+        ));
     }
 
     #[test]
     fn test_validate_resolved_ips_trusted_cdn_allows_fake_ip() {
         let fake_ip: IpAddr = "198.18.1.90".parse().expect("parse fake-ip");
         let host = "ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com";
-        assert!(validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "https", false).is_ok());
+        assert!(
+            validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "https", false).is_ok()
+        );
 
         let qq_host = "multimedia.nt.qq.com.cn";
         let fake_ip2: IpAddr = "198.18.0.23".parse().expect("parse fake-ip");
-        assert!(validate_resolved_ips(qq_host, std::slice::from_ref(&fake_ip2), "https", false).is_ok());
+        assert!(
+            validate_resolved_ips(qq_host, std::slice::from_ref(&fake_ip2), "https", false).is_ok()
+        );
 
-        assert!(validate_resolved_ips(
-            "sub.multimedia.nt.qq.com.cn",
-            std::slice::from_ref(&fake_ip2),
-            "https",
-            false
-        )
-        .is_err());
+        assert!(
+            validate_resolved_ips(
+                "sub.multimedia.nt.qq.com.cn",
+                std::slice::from_ref(&fake_ip2),
+                "https",
+                false
+            )
+            .is_err()
+        );
 
-        assert!(validate_resolved_ips(
-            "example.com",
-            std::slice::from_ref(&fake_ip),
-            "https",
-            false
-        )
-        .is_err());
+        assert!(
+            validate_resolved_ips(
+                "example.com",
+                std::slice::from_ref(&fake_ip),
+                "https",
+                false
+            )
+            .is_err()
+        );
 
         let metadata: IpAddr = "169.254.169.254".parse().expect("parse metadata");
-        assert!(validate_resolved_ips(host, std::slice::from_ref(&metadata), "https", false).is_err());
+        assert!(
+            validate_resolved_ips(host, std::slice::from_ref(&metadata), "https", false).is_err()
+        );
     }
 
     #[test]
     fn test_trusted_cdn_http_scheme_blocked() {
         let host = "ww-aibot-img-1258476243.cos.ap-guangzhou.myqcloud.com";
         let fake_ip: IpAddr = "198.18.1.90".parse().expect("parse fake-ip");
-        assert!(validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "http", false).is_err());
+        assert!(
+            validate_resolved_ips(host, std::slice::from_ref(&fake_ip), "http", false).is_err()
+        );
     }
 }

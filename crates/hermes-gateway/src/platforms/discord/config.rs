@@ -7,7 +7,10 @@ use hermes_config::PlatformConfig;
 use crate::adapter::AdapterProxyConfig;
 
 use super::allowed_mentions::DiscordAllowedMentions;
-use super::channel_context::{parse_channel_prompts, parse_channel_skill_bindings, parse_history_backfill_limit, ChannelSkillBinding};
+use super::channel_context::{
+    ChannelSkillBinding, parse_channel_prompts, parse_channel_skill_bindings,
+    parse_history_backfill_limit,
+};
 
 /// How outbound messages reference the triggering user message (P2-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -311,8 +314,7 @@ impl DiscordConfig {
             ),
             reactions_enabled,
             slash_commands_enabled: parse_slash_commands_enabled(platform_cfg),
-            slash_guild_id: extra_string(platform_cfg, "guild_id")
-                .or_else(|| env_guild_id()),
+            slash_guild_id: extra_string(platform_cfg, "guild_id").or_else(|| env_guild_id()),
             max_attachment_bytes: parse_max_attachment_bytes(platform_cfg),
             allowed_roles: Self::channel_set_from_sources(
                 &platform_cfg.extra,
@@ -405,22 +407,14 @@ fn parse_allow_bots(platform_cfg: &PlatformConfig) -> AllowBotsMode {
     if let Some(text) = extra_string(platform_cfg, "allow_bots") {
         return AllowBotsMode::parse(Some(&text));
     }
-    AllowBotsMode::parse(
-        std::env::var("DISCORD_ALLOW_BOTS")
-            .ok()
-            .as_deref(),
-    )
+    AllowBotsMode::parse(std::env::var("DISCORD_ALLOW_BOTS").ok().as_deref())
 }
 
 fn parse_command_sync_policy(platform_cfg: &PlatformConfig) -> CommandSyncPolicy {
     if let Some(text) = extra_string(platform_cfg, "command_sync_policy") {
         return CommandSyncPolicy::parse(Some(&text));
     }
-    CommandSyncPolicy::parse(
-        std::env::var("DISCORD_COMMAND_SYNC_POLICY")
-            .ok()
-            .as_deref(),
-    )
+    CommandSyncPolicy::parse(std::env::var("DISCORD_COMMAND_SYNC_POLICY").ok().as_deref())
 }
 
 fn parse_reply_to_mode(platform_cfg: &PlatformConfig) -> ReplyToMode {
@@ -549,7 +543,10 @@ fn parse_auto_thread(platform_cfg: &PlatformConfig) -> bool {
             return b;
         }
         if let Some(s) = v.as_str() {
-            return !matches!(s.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off");
+            return !matches!(
+                s.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            );
         }
     }
     std::env::var("DISCORD_AUTO_THREAD")
@@ -580,7 +577,10 @@ fn parse_slash_commands_enabled(platform_cfg: &PlatformConfig) -> bool {
             return b;
         }
         if let Some(s) = v.as_str() {
-            return !matches!(s.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off");
+            return !matches!(
+                s.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            );
         }
     }
     std::env::var("DISCORD_SLASH_COMMANDS")
@@ -623,7 +623,11 @@ fn env_channel_list(name: &str) -> Option<String> {
 }
 
 fn parse_reactions_enabled(platform_cfg: &PlatformConfig) -> bool {
-    if let Some(v) = platform_cfg.extra.get("reactions").and_then(|v| v.as_bool()) {
+    if let Some(v) = platform_cfg
+        .extra
+        .get("reactions")
+        .and_then(|v| v.as_bool())
+    {
         return v;
     }
     if let Some(text) = extra_string(platform_cfg, "reactions") {
@@ -695,7 +699,10 @@ mod tests {
 
         let socks = proxy_from_url("socks5://127.0.0.1:7897").unwrap();
         assert!(socks.http_proxy.is_none());
-        assert_eq!(socks.socks_proxy.as_deref(), Some("socks5://127.0.0.1:7897"));
+        assert_eq!(
+            socks.socks_proxy.as_deref(),
+            Some("socks5://127.0.0.1:7897")
+        );
     }
 
     #[test]
@@ -754,10 +761,7 @@ mod tests {
             ReplyToMode::First.reference_for_index(0, Some("m1")),
             Some("m1")
         );
-        assert_eq!(
-            ReplyToMode::First.reference_for_index(1, Some("m1")),
-            None
-        );
+        assert_eq!(ReplyToMode::First.reference_for_index(1, Some("m1")), None);
         assert_eq!(
             ReplyToMode::All.reference_for_index(2, Some("m1")),
             Some("m1")

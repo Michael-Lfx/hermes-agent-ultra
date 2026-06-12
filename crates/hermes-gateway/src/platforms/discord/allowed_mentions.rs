@@ -1,7 +1,7 @@
 //! Discord `allowed_mentions` safe defaults (P2-2).
 
 use hermes_config::PlatformConfig;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// What mention types the bot may generate in outbound messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,7 +44,10 @@ impl DiscordAllowedMentions {
 
     pub fn from_platform(platform_cfg: &PlatformConfig) -> Self {
         let mut cfg = Self::default();
-        if let Some(obj) = platform_cfg.extra.get("allow_mentions").and_then(|v| v.as_object())
+        if let Some(obj) = platform_cfg
+            .extra
+            .get("allow_mentions")
+            .and_then(|v| v.as_object())
         {
             if let Some(v) = obj.get("everyone").and_then(|v| v.as_bool()) {
                 cfg.everyone = v;
@@ -69,9 +72,7 @@ impl DiscordAllowedMentions {
 }
 
 fn env_bool_override(name: &str) -> Option<bool> {
-    std::env::var(name)
-        .ok()
-        .map(|v| parse_bool_like(&v))
+    std::env::var(name).ok().map(|v| parse_bool_like(&v))
 }
 
 pub fn parse_bool_like(raw: &str) -> bool {

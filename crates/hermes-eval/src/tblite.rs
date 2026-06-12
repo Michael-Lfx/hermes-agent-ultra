@@ -137,9 +137,11 @@ mod tests {
         assert_eq!(record.metrics.total, 2);
         assert_eq!(record.metrics.passed, 2);
         assert_eq!(record.metrics.pass_at_1, 1.0);
-        assert!(record
-            .tasks
-            .iter()
-            .all(|t| t.status == crate::TaskStatus::Passed));
+        assert!(
+            record
+                .tasks
+                .iter()
+                .all(|t| t.status == crate::TaskStatus::Passed)
+        );
     }
 }

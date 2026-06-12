@@ -13,7 +13,12 @@ use std::time::{Duration, Instant};
 
 // Remote backends — keep in sync with Python's _REMOTE_BACKENDS.
 const REMOTE_BACKENDS: &[&str] = &[
-    "docker", "singularity", "modal", "daytona", "ssh", "managed_modal",
+    "docker",
+    "singularity",
+    "modal",
+    "daytona",
+    "ssh",
+    "managed_modal",
 ];
 
 // None = not probed yet; Some("") = probed, nothing to say; Some(s) = probed result.
@@ -122,10 +127,7 @@ fn has_pip_module(binary: &str) -> bool {
     if which_binary(binary).is_none() {
         return false;
     }
-    let (rc, _, _) = run(
-        &[binary, "-m", "pip", "--version"],
-        Duration::from_secs(3),
-    );
+    let (rc, _, _) = run(&[binary, "-m", "pip", "--version"], Duration::from_secs(3));
     rc == 0
 }
 
@@ -179,9 +181,7 @@ fn which_binary(binary: &str) -> Option<String> {
     }
 
     // If the binary already carries an extension, skip PATHEXT probing.
-    let has_ext = std::path::Path::new(binary)
-        .extension()
-        .is_some();
+    let has_ext = std::path::Path::new(binary).extension().is_some();
 
     let path_var = std::env::var_os("PATH")?;
 
@@ -242,10 +242,7 @@ pub fn build_probe_line() -> String {
         (Some(pip), Some(py3)) => !py3.starts_with(pip.as_str()),
         _ => false,
     };
-    let silent = py3_ver.is_some()
-        && py3_has_pip
-        && !mismatch
-        && (!py3_pep668 || has_uv);
+    let silent = py3_ver.is_some() && py3_has_pip && !mismatch && (!py3_pep668 || has_uv);
     if silent {
         return String::new();
     }
@@ -345,11 +342,17 @@ mod tests {
         let _lock = env_lock();
         reset_cache_for_tests();
         let prev = std::env::var(key).ok();
-        unsafe { std::env::set_var(key, value); }
+        unsafe {
+            std::env::set_var(key, value);
+        }
         f();
         match prev {
-            Some(v) => unsafe { std::env::set_var(key, v); },
-            None => unsafe { std::env::remove_var(key); },
+            Some(v) => unsafe {
+                std::env::set_var(key, v);
+            },
+            None => unsafe {
+                std::env::remove_var(key);
+            },
         }
         reset_cache_for_tests();
     }
@@ -358,10 +361,14 @@ mod tests {
         let _lock = env_lock();
         reset_cache_for_tests();
         let prev = std::env::var(key).ok();
-        unsafe { std::env::remove_var(key); }
+        unsafe {
+            std::env::remove_var(key);
+        }
         f();
         if let Some(v) = prev {
-            unsafe { std::env::set_var(key, v); }
+            unsafe {
+                std::env::set_var(key, v);
+            }
         }
         reset_cache_for_tests();
     }
@@ -445,7 +452,10 @@ mod tests {
     fn test_run_returns_not_found_for_nonexistent_binary() {
         let (rc, _out, err) = run(&["nonexistent_binary_12345", "arg"], Duration::from_secs(1));
         assert_eq!(rc, -1);
-        assert!(err.contains("not found"), "expected 'not found', got: {err}");
+        assert!(
+            err.contains("not found"),
+            "expected 'not found', got: {err}"
+        );
     }
 
     #[test]

@@ -352,9 +352,6 @@ mod tests {
         let job = CronJob::new("every 2h", "Summarize overnight email");
         let nr = job.next_run.expect("next_run");
         let fire = execution_fire_at(&job).expect("fire");
-        assert_eq!(
-            (nr - fire).num_seconds(),
-            cron_delivery_lead_seconds()
-        );
+        assert_eq!((nr - fire).num_seconds(), cron_delivery_lead_seconds());
     }
 }

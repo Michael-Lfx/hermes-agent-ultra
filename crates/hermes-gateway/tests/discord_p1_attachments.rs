@@ -3,8 +3,8 @@
 #![cfg(feature = "discord")]
 
 use hermes_gateway::platforms::discord::{
-    parse_attachments, parse_message_create_raw, should_accept_message, AllowBotsMode,
-    ChannelIdSet, DiscordInboundConfig,
+    AllowBotsMode, ChannelIdSet, DiscordInboundConfig, parse_attachments, parse_message_create_raw,
+    should_accept_message,
 };
 
 #[test]
@@ -26,7 +26,10 @@ fn a01_parse_message_attachments() {
     let raw = parse_message_create_raw(&data).expect("parse");
     assert_eq!(raw.attachments.len(), 1);
     assert_eq!(raw.attachments[0].filename, "photo.png");
-    assert_eq!(raw.attachments[0].content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        raw.attachments[0].content_type.as_deref(),
+        Some("image/png")
+    );
 }
 
 #[test]

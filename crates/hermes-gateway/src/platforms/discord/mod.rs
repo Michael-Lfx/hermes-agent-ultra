@@ -21,50 +21,51 @@ mod types;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, info, warn};
 
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
-use crate::adapter::{describe_secret, BasePlatformAdapter};
+use crate::adapter::{BasePlatformAdapter, describe_secret};
 use crate::gateway::IncomingMessage;
 
-pub use channel_context::{resolve_channel_prompt, resolve_channel_skills, ChannelSkillBinding};
+pub use allowed_mentions::{DiscordAllowedMentions, parse_bool_like};
+pub use channel_context::{ChannelSkillBinding, resolve_channel_prompt, resolve_channel_skills};
 pub use config::{
-    default_intents, AllowBotsMode, ChannelIdSet, CommandSyncPolicy, DiscordConfig, ReplyToMode,
-    DISCORD_API_BASE, MAX_MESSAGE_LENGTH,
+    AllowBotsMode, ChannelIdSet, CommandSyncPolicy, DISCORD_API_BASE, DiscordConfig,
+    MAX_MESSAGE_LENGTH, ReplyToMode, default_intents,
 };
-pub use allowed_mentions::{parse_bool_like, DiscordAllowedMentions};
 pub use dedup::MessageDedup;
-pub use filter::{should_accept_message, DiscordInboundConfig};
+pub use filter::{DiscordInboundConfig, should_accept_message};
+pub use gateway_loop::DiscordInner;
 pub use parse::{
-    format_slash_command_text, interaction_to_incoming, parse_attachments, parse_autocomplete_interaction,
-    parse_dispatch, parse_interaction_create, parse_message_create, parse_message_create_raw,
-    parse_message_update, parse_reaction_event, parse_voice_state_update, raw_to_incoming,
-    AutocompleteInteraction, DispatchEvent, DiscordAttachment, IncomingDiscordMessage,
+    AutocompleteInteraction, DiscordAttachment, DispatchEvent,
+    INTERACTION_TYPE_APPLICATION_COMMAND, INTERACTION_TYPE_AUTOCOMPLETE, IncomingDiscordMessage,
     InteractionData, InteractionOption, MessageUpdateEvent, RawDiscordMessage, ReactionEvent,
-    VoiceState, INTERACTION_TYPE_APPLICATION_COMMAND, INTERACTION_TYPE_AUTOCOMPLETE,
+    VoiceState, format_slash_command_text, interaction_to_incoming, parse_attachments,
+    parse_autocomplete_interaction, parse_dispatch, parse_interaction_create, parse_message_create,
+    parse_message_create_raw, parse_message_update, parse_reaction_event, parse_voice_state_update,
+    raw_to_incoming,
 };
 pub use rest::{encode_emoji, is_forum_channel_type, outbound_upload_name, split_message};
-pub use types::basic_slash_commands;
-pub use gateway_loop::DiscordInner;
 pub use session::{
-    opcodes, GatewayAction, GatewayPayload, GatewaySession, IdentifyData, IdentifyProperties,
-    ResumeData,
+    GatewayAction, GatewayPayload, GatewaySession, IdentifyData, IdentifyProperties, ResumeData,
+    opcodes,
 };
 pub use text_batch::deliver_inbounds;
+pub use types::basic_slash_commands;
 pub use types::{
-    DiscordEmbed, DiscordMessage, DiscordThread, DiscordUser, EmbedAuthor, EmbedField,
-    EmbedFooter, EmbedMedia, SlashCommand, SlashCommandChoice, SlashCommandOption,
+    DiscordEmbed, DiscordMessage, DiscordThread, DiscordUser, EmbedAuthor, EmbedField, EmbedFooter,
+    EmbedMedia, SlashCommand, SlashCommandChoice, SlashCommandOption,
 };
 
-pub use gateway_loop::{fetch_gateway_url, fetch_gateway_url_at};
-pub use media::download_attachment_bytes;
+use gateway_loop::DiscordInner as Inner;
 use gateway_loop::{
     build_heartbeat_payload, build_identify_payload, build_resume_payload, gateway_loop,
 };
-use gateway_loop::DiscordInner as Inner;
+pub use gateway_loop::{fetch_gateway_url, fetch_gateway_url_at};
+pub use media::download_attachment_bytes;
 
 /// Discord Bot API platform adapter.
 pub struct DiscordAdapter {
@@ -123,10 +124,7 @@ impl DiscordAdapter {
         if !existing.is_empty() {
             return Ok(());
         }
-        let rows = self
-            .inner
-            .fetch_channel_messages(channel_id, limit)
-            .await?;
+        let rows = self.inner.fetch_channel_messages(channel_id, limit).await?;
         for (_id, content) in rows {
             session_manager
                 .add_message(session_key, hermes_core::types::Message::user(&content))
@@ -248,7 +246,10 @@ impl DiscordAdapter {
             .await
     }
 
-    pub async fn register_slash_commands(&self, commands: &[SlashCommand]) -> Result<(), GatewayError> {
+    pub async fn register_slash_commands(
+        &self,
+        commands: &[SlashCommand],
+    ) -> Result<(), GatewayError> {
         self.inner.register_slash_commands(commands).await
     }
 
@@ -403,11 +404,7 @@ impl PlatformAdapter for DiscordAdapter {
         self.edit_text(chat_id, message_id, &formatted).await
     }
 
-    async fn delete_message(
-        &self,
-        chat_id: &str,
-        message_id: &str,
-    ) -> Result<bool, GatewayError> {
+    async fn delete_message(&self, chat_id: &str, message_id: &str) -> Result<bool, GatewayError> {
         self.inner.delete_message(chat_id, message_id).await
     }
 

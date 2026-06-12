@@ -3,7 +3,7 @@
 #![cfg(feature = "discord")]
 
 use hermes_gateway::platforms::discord::command_sync::CommandSyncSummary;
-use hermes_gateway::platforms::discord::{SlashCommand, DiscordAdapter, DiscordConfig};
+use hermes_gateway::platforms::discord::{DiscordAdapter, DiscordConfig, SlashCommand};
 use wiremock::matchers::{method, path_regex};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

@@ -6,7 +6,7 @@
 
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::tools::tts::TtsBackend;
 use hermes_core::ToolError;

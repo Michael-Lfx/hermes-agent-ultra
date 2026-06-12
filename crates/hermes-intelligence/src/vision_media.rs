@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::warn;
 
 /// Build an OpenAI-style `image_url` content part for a local path or HTTP URL.
@@ -28,9 +28,9 @@ pub async fn encode_image_url_part(image_ref: &str) -> Result<Value, String> {
 
 /// Encode a local image file as a `data:` URL at native size.
 pub async fn file_to_data_url(path: &Path) -> Result<String, String> {
-    let raw = tokio::fs::read(path).await.map_err(|e| {
-        format!("failed to read image '{}': {e}", path.display())
-    })?;
+    let raw = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("failed to read image '{}': {e}", path.display()))?;
     let mime = guess_mime(path, Some(&raw));
     let encoded = base64::engine::general_purpose::STANDARD.encode(&raw);
     Ok(format!("data:{mime};base64,{encoded}"))

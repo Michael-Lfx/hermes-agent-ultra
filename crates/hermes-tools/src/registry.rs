@@ -14,7 +14,7 @@ use hermes_core::{ToolHandler, ToolSchema};
 use serde_json::Value;
 use tracing::warn;
 
-use crate::plan_mode::{plan_allows_tool, plan_block_payload, PlanPhase};
+use crate::plan_mode::{PlanPhase, plan_allows_tool, plan_block_payload};
 use crate::rtk_filter::{RawModeState, RtkFilterEngine};
 use crate::tool_dispatch_helpers::{ParallelMode, infer_parallel_mode};
 use crate::tool_policy::{
@@ -972,7 +972,10 @@ mod tests {
                 .await
         });
         let parsed: Value = serde_json::from_str(&result).expect("json output");
-        assert!(!parsed.get("plan").is_some(), "read should not plan_block: {result}");
+        assert!(
+            !parsed.get("plan").is_some(),
+            "read should not plan_block: {result}"
+        );
         assert!(result.contains("a.rs") || result.contains("path"));
     }
 

@@ -374,8 +374,7 @@ pub fn separate_text_and_calls(content: &str) -> (String, Vec<ToolCall>) {
     result = bare_tool_call_re.replace_all(&result, "").to_string();
 
     // Remove namespace-prefixed tool_call wrappers (e.g. <minimax:tool_call>...</minimax:tool_call>)
-    let ns_tool_call_re =
-        Regex::new(r#"(?s)<\w+:tool_call[^>]*>.*?</\w+:tool_call>"#).unwrap();
+    let ns_tool_call_re = Regex::new(r#"(?s)<\w+:tool_call[^>]*>.*?</\w+:tool_call>"#).unwrap();
     result = ns_tool_call_re.replace_all(&result, "").to_string();
 
     // Remove standalone <invoke name="...">...</invoke> blocks (without <function_calls>)

@@ -166,7 +166,10 @@ impl ProviderSerializeCache {
     }
 }
 
-pub(crate) fn anthropic_messages_cache_key(messages: &[Message], base_url: &str) -> AnthropicMessagesCacheKey {
+pub(crate) fn anthropic_messages_cache_key(
+    messages: &[Message],
+    base_url: &str,
+) -> AnthropicMessagesCacheKey {
     let content = messages_cache_key(messages, false, "", None);
     AnthropicMessagesCacheKey {
         count: content.count,
@@ -306,10 +309,7 @@ mod tests {
     #[test]
     fn anthropic_cache_returns_identical_converted_messages() {
         let cache = ProviderSerializeCache::new();
-        let messages = vec![
-            Message::system("sys"),
-            Message::user("hello"),
-        ];
+        let messages = vec![Message::system("sys"), Message::user("hello")];
         let a = cache.converted_anthropic_messages(&messages, "https://api.anthropic.com");
         let b = cache.converted_anthropic_messages(&messages, "https://api.anthropic.com");
         assert_eq!(a, b);

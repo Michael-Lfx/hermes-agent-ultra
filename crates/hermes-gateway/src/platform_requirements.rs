@@ -128,14 +128,8 @@ pub fn evaluate_gateway_requirements(
                     "discord.enabled=true 但缺少 token",
                 );
             }
-            let has_allowed = p
-                .allowed_users
-                .iter()
-                .any(|u| !u.trim().is_empty())
-                || p
-                    .admin_users
-                    .iter()
-                    .any(|u| !u.trim().is_empty());
+            let has_allowed = p.allowed_users.iter().any(|u| !u.trim().is_empty())
+                || p.admin_users.iter().any(|u| !u.trim().is_empty());
             if check(true, has_allowed) {
                 push_fatal(
                     &mut issues,
@@ -218,7 +212,7 @@ pub fn evaluate_gateway_requirements(
     #[cfg(feature = "whatsapp")]
     if let Some(p) = config.platforms.get("whatsapp") {
         if p.enabled {
-            use crate::platforms::whatsapp::{is_paired, WhatsAppConfig};
+            use crate::platforms::whatsapp::{WhatsAppConfig, is_paired};
             let wa = WhatsAppConfig::from_platform_config(p);
             if check(p.enabled, is_paired(&wa.session_path())) {
                 push_fatal(
@@ -544,9 +538,11 @@ mod tests {
         );
 
         let live = evaluate_gateway_requirements(&config, RequirementScope::LiveMessaging);
-        assert!(!live
-            .iter()
-            .any(|i| i.code == "adapter_partial_implementation"));
+        assert!(
+            !live
+                .iter()
+                .any(|i| i.code == "adapter_partial_implementation")
+        );
     }
 
     #[test]

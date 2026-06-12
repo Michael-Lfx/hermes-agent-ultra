@@ -7,8 +7,8 @@ use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use tracing::{debug, warn};
 
 use crate::paths::{last_batch_path, load_or_create_installation_id};
-use crate::types::ContributionEnvelope;
 use crate::response::parse_batch_upload_response;
+use crate::types::ContributionEnvelope;
 use crate::types::{BatchUploadResponse, ContributionBatch, dedupe_batch_contributions};
 
 #[derive(Debug, Clone, Default)]
@@ -38,10 +38,7 @@ pub struct ContributionClient {
 impl ContributionClient {
     pub fn new(config: InsightsContributionConfig, hermes_home: std::path::PathBuf) -> Self {
         let http = reqwest::Client::builder()
-            .user_agent(format!(
-                "hermes-agent-ultra/{}",
-                env!("CARGO_PKG_VERSION")
-            ))
+            .user_agent(format!("hermes-agent-ultra/{}", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(45))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -58,19 +55,13 @@ impl ContributionClient {
 
     fn build_headers(&self) -> Result<HeaderMap, ContributionClientError> {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json"),
-        );
-        let installation_id =
-            load_or_create_installation_id(&self.hermes_home).map_err(|e| {
-                ContributionClientError::Http(format!("installation id: {e}"))
-            })?;
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let installation_id = load_or_create_installation_id(&self.hermes_home)
+            .map_err(|e| ContributionClientError::Http(format!("installation id: {e}")))?;
         headers.insert(
             "X-Installation-Id",
-            HeaderValue::from_str(&installation_id).map_err(|e| {
-                ContributionClientError::Http(format!("installation header: {e}"))
-            })?,
+            HeaderValue::from_str(&installation_id)
+                .map_err(|e| ContributionClientError::Http(format!("installation header: {e}")))?,
         );
         headers.insert(
             "X-Client-Version",
@@ -80,9 +71,8 @@ impl ContributionClient {
         if let Some(token) = self.config.effective_token() {
             headers.insert(
                 AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
-                    ContributionClientError::Http(format!("auth header: {e}"))
-                })?,
+                HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|e| ContributionClientError::Http(format!("auth header: {e}")))?,
             );
         }
         Ok(headers)
@@ -140,10 +130,8 @@ impl ContributionClient {
         let base = endpoint
             .trim_end_matches("/v1/insights/batch")
             .trim_end_matches('/');
-        let installation_id =
-            load_or_create_installation_id(&self.hermes_home).map_err(|e| {
-                ContributionClientError::Http(format!("installation id: {e}"))
-            })?;
+        let installation_id = load_or_create_installation_id(&self.hermes_home)
+            .map_err(|e| ContributionClientError::Http(format!("installation id: {e}")))?;
         let url = format!("{base}/v1/installations/{installation_id}");
         let headers = self.build_headers()?;
         let resp = self

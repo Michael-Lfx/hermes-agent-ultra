@@ -76,10 +76,7 @@ impl InterruptController {
         if !self.is_interrupted() {
             return None;
         }
-        self.redirect_message
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
+        self.redirect_message.lock().ok().and_then(|g| g.clone())
     }
 
     /// If an interrupt is pending, consume it (clear flag + redirect) and return `Some(redirect)`.

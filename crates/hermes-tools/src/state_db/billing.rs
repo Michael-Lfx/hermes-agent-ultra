@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use super::error::StateDbError;
 
@@ -52,21 +52,12 @@ pub fn ensure_session_row(
     source: &str,
     model: Option<&str>,
 ) -> Result<(), StateDbError> {
-    super::sessions::insert_session_if_missing(
-        conn,
-        session_id,
-        source,
-        model,
-        None,
-        None,
-        None,
-        {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0)
-        },
-    )
+    super::sessions::insert_session_if_missing(conn, session_id, source, model, None, None, None, {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0)
+    })
 }
 
 pub fn update_token_counts(
@@ -79,12 +70,7 @@ pub fn update_token_counts(
     let guard = conn
         .lock()
         .map_err(|_| StateDbError("state db lock poisoned".into()))?;
-    ensure_session_row(
-        &guard,
-        &sid,
-        "unknown",
-        update.model.as_deref(),
-    )?;
+    ensure_session_row(&guard, &sid, "unknown", update.model.as_deref())?;
     drop(guard);
 
     let guard = conn

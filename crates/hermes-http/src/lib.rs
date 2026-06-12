@@ -401,7 +401,10 @@ fn gateway_session_manager_with_persistence(config: &GatewayConfig) -> SessionMa
         .unwrap_or_else(hermes_config::hermes_home);
     let sp = Arc::new(SessionPersistence::new(home));
     if let Err(err) = sp.ensure_db() {
-        tracing::debug!("sessions db init skipped for gateway history hydration: {}", err);
+        tracing::debug!(
+            "sessions db init skipped for gateway history hydration: {}",
+            err
+        );
     }
     let sp_rotator = sp.clone();
     SessionManager::new(config.session.clone())

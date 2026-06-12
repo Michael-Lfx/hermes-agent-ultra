@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use hermes_config::{InsightsContributionConfig, InterestConfig};
 use hermes_insights::{
-    append_audit_event, drain_session_skills, find_skill_dir_by_slug, set_active_session,
-    ContributionService, WorkPackageBuildInput,
+    ContributionService, WorkPackageBuildInput, append_audit_event, drain_session_skills,
+    find_skill_dir_by_slug, set_active_session,
 };
 use hermes_intelligence::auxiliary::AuxiliaryClient;
 use tracing::{info, warn};
@@ -206,14 +206,12 @@ async fn build_work_packages(
         return Vec::new();
     }
 
-    let Some((candidate, domain_source)) =
-        extract_domain_candidate_for_work_package_with_source(
-            hermes_home,
-            interest_enabled,
-            messages,
-            &skill_summary.slugs,
-        )
-    else {
+    let Some((candidate, domain_source)) = extract_domain_candidate_for_work_package_with_source(
+        hermes_home,
+        interest_enabled,
+        messages,
+        &skill_summary.slugs,
+    ) else {
         skip_work_package(
             hermes_home,
             "domain_poi_missing",
@@ -247,10 +245,7 @@ async fn build_work_packages(
         skip_work_package(
             hermes_home,
             "skill_dir_not_found",
-            &format!(
-                "session_id={session_id} slugs={:?}",
-                skill_summary.slugs
-            ),
+            &format!("session_id={session_id} slugs={:?}", skill_summary.slugs),
         );
         return Vec::new();
     };

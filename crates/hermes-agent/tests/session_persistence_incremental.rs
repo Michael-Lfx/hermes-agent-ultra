@@ -1,6 +1,6 @@
 //! Integration tests for incremental session DB append (Python `_last_flushed_db_idx` parity).
 
-use hermes_agent::{leading_system_prompt_for_persist, SessionFlushCursor, SessionPersistence};
+use hermes_agent::{SessionFlushCursor, SessionPersistence, leading_system_prompt_for_persist};
 use hermes_core::Message;
 
 fn persist(
@@ -68,20 +68,26 @@ fn compression_lock_acquire_and_release() {
     let tmp = tempfile::tempdir().unwrap();
     let sp = SessionPersistence::new(tmp.path());
     sp.ensure_db().unwrap();
-    assert!(sp
-        .try_acquire_compression_lock("sess-lock", "holder-a", 300.0)
-        .unwrap());
+    assert!(
+        sp.try_acquire_compression_lock("sess-lock", "holder-a", 300.0)
+            .unwrap()
+    );
     assert_eq!(
-        sp.get_compression_lock_holder("sess-lock").unwrap().as_deref(),
+        sp.get_compression_lock_holder("sess-lock")
+            .unwrap()
+            .as_deref(),
         Some("holder-a")
     );
-    assert!(!sp
-        .try_acquire_compression_lock("sess-lock", "holder-b", 300.0)
-        .unwrap());
-    sp.release_compression_lock("sess-lock", "holder-a").unwrap();
-    assert!(sp
-        .try_acquire_compression_lock("sess-lock", "holder-b", 300.0)
-        .unwrap());
+    assert!(
+        !sp.try_acquire_compression_lock("sess-lock", "holder-b", 300.0)
+            .unwrap()
+    );
+    sp.release_compression_lock("sess-lock", "holder-a")
+        .unwrap();
+    assert!(
+        sp.try_acquire_compression_lock("sess-lock", "holder-b", 300.0)
+            .unwrap()
+    );
 }
 
 #[test]

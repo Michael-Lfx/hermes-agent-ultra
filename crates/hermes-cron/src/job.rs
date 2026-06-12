@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::python_job::JobOrigin;
 use crate::schedule::{
-    compute_next_run, fast_forward_if_stale, normalize_schedule_input, parse_schedule, ScheduleSpec,
+    ScheduleSpec, compute_next_run, fast_forward_if_stale, normalize_schedule_input, parse_schedule,
 };
 use crate::timing::execution_fire_at;
 
@@ -218,7 +218,8 @@ fn deserialize_deliver_opt<'de, D: Deserializer<'de>>(
             Ok(Some(DeliverConfig::new(target)))
         }
         serde_json::Value::Object(_) => {
-            let cfg: DeliverConfig = serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+            let cfg: DeliverConfig =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             Ok(Some(cfg))
         }
         _ => Err(serde::de::Error::custom(
@@ -269,9 +270,17 @@ pub struct CronJob {
     #[serde(default = "default_job_status")]
     pub status: JobStatus,
     pub created_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "last_run_at")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "last_run_at"
+    )]
     pub last_run: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "next_run_at")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "next_run_at"
+    )]
     pub next_run: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeat: Option<u32>,

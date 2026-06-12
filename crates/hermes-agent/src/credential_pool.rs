@@ -141,10 +141,7 @@ impl CredentialPool {
     }
 
     /// Mark the last issued key rate-limited and return true if another key is available.
-    pub fn mark_last_issued_rate_limited_and_has_alternate(
-        &self,
-        duration: Duration,
-    ) -> bool {
+    pub fn mark_last_issued_rate_limited_and_has_alternate(&self, duration: Duration) -> bool {
         let mut inner = match self.inner.lock() {
             Ok(i) => i,
             Err(_) => return false,
@@ -160,10 +157,10 @@ impl CredentialPool {
             }
         }
         let now = Instant::now();
-        inner.keys.iter().any(|entry| {
-            entry.key != failed
-                && entry.rate_limited_until.map_or(true, |u| u <= now)
-        })
+        inner
+            .keys
+            .iter()
+            .any(|entry| entry.key != failed && entry.rate_limited_until.map_or(true, |u| u <= now))
     }
 
     /// Mark a key as rate-limited for the given duration.

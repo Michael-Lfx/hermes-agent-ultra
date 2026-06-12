@@ -143,11 +143,7 @@ pub fn parse_message_create_raw(data: &serde_json::Value) -> Option<RawDiscordMe
         .get("member")
         .and_then(|m| m.get("roles"))
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(json_snowflake)
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(json_snowflake).collect::<Vec<_>>())
         .unwrap_or_default();
 
     let attachments = parse_attachments(data.get("attachments"));
@@ -167,10 +163,7 @@ pub fn parse_message_create_raw(data: &serde_json::Value) -> Option<RawDiscordMe
         })
         .unwrap_or_default();
 
-    let message_type = data
-        .get("type")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u8;
+    let message_type = data.get("type").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
 
     Some(RawDiscordMessage {
         channel_id,
@@ -233,10 +226,7 @@ pub fn raw_to_incoming(
     IncomingMessage {
         platform: "discord".into(),
         chat_id: raw.channel_id.clone(),
-        user_id: raw
-            .user_id
-            .clone()
-            .unwrap_or_else(|| "unknown".into()),
+        user_id: raw.user_id.clone().unwrap_or_else(|| "unknown".into()),
         text: raw.content.clone(),
         media_urls,
         media_types,
@@ -369,16 +359,16 @@ pub fn parse_interaction_create(data: &serde_json::Value) -> Option<InteractionD
         .and_then(|m| m.get("user"))
         .and_then(|u| u.get("id"))
         .and_then(json_snowflake)
-        .or_else(|| data.get("user").and_then(|u| u.get("id")).and_then(json_snowflake));
+        .or_else(|| {
+            data.get("user")
+                .and_then(|u| u.get("id"))
+                .and_then(json_snowflake)
+        });
     let interaction_roles = data
         .get("member")
         .and_then(|m| m.get("roles"))
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(json_snowflake)
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(json_snowflake).collect::<Vec<_>>())
         .unwrap_or_default();
     let cmd_data = data.get("data");
     let command_name = cmd_data
@@ -425,16 +415,16 @@ pub fn parse_autocomplete_interaction(data: &serde_json::Value) -> Option<Autoco
         .and_then(|m| m.get("user"))
         .and_then(|u| u.get("id"))
         .and_then(json_snowflake)
-        .or_else(|| data.get("user").and_then(|u| u.get("id")).and_then(json_snowflake));
+        .or_else(|| {
+            data.get("user")
+                .and_then(|u| u.get("id"))
+                .and_then(json_snowflake)
+        });
     let role_ids = data
         .get("member")
         .and_then(|m| m.get("roles"))
         .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(json_snowflake)
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(json_snowflake).collect::<Vec<_>>())
         .unwrap_or_default();
     let cmd_data = data.get("data")?;
     let command_name = cmd_data.get("name")?.as_str()?.to_string();
@@ -536,7 +526,9 @@ pub fn parse_dispatch(event_name: &str, data: &serde_json::Value) -> Option<Disp
     match event_name {
         "MESSAGE_CREATE" => parse_message_create(data).map(DispatchEvent::MessageCreate),
         "MESSAGE_UPDATE" => parse_message_update(data).map(DispatchEvent::MessageUpdate),
-        "INTERACTION_CREATE" => parse_interaction_create(data).map(DispatchEvent::InteractionCreate),
+        "INTERACTION_CREATE" => {
+            parse_interaction_create(data).map(DispatchEvent::InteractionCreate)
+        }
         "MESSAGE_REACTION_ADD" => parse_reaction_event(data).map(DispatchEvent::ReactionAdd),
         "MESSAGE_REACTION_REMOVE" => parse_reaction_event(data).map(DispatchEvent::ReactionRemove),
         "VOICE_STATE_UPDATE" => parse_voice_state_update(data).map(DispatchEvent::VoiceStateUpdate),

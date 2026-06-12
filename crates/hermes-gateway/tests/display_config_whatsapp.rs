@@ -14,5 +14,8 @@ fn whatsapp_tool_progress_is_new() {
 
 #[test]
 fn whatsapp_streaming_follows_global() {
-    assert_eq!(resolve_display_setting(None, "whatsapp", "streaming", None), None);
+    assert_eq!(
+        resolve_display_setting(None, "whatsapp", "streaming", None),
+        None
+    );
 }

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::{SinkExt, StreamExt};
 use reqwest::Client;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tracing::{debug, info, warn};
 
@@ -14,21 +14,20 @@ use hermes_core::errors::GatewayError;
 
 use super::auth::{DiscordAuthConfig, is_discord_user_authorized};
 use super::channel_context::{resolve_channel_prompt, resolve_channel_skills};
-use super::config::{ChannelIdSet, DiscordConfig, DISCORD_API_BASE};
+use super::config::{ChannelIdSet, DISCORD_API_BASE, DiscordConfig};
 use super::dedup::MessageDedup;
 use super::filter::{DiscordInboundConfig, should_accept_message};
 use super::media::cache_message_attachments;
 use super::parse::{
-    interaction_to_incoming, parse_autocomplete_interaction, parse_interaction_create,
-    parse_message_create_raw, raw_to_incoming, ready_bot_user_id, AutocompleteInteraction,
-
+    AutocompleteInteraction, interaction_to_incoming, parse_autocomplete_interaction,
+    parse_interaction_create, parse_message_create_raw, raw_to_incoming, ready_bot_user_id,
 };
-use super::slash::{model_autocomplete_choices, skill_autocomplete_choices};
-use super::threads::{auto_thread_name, should_auto_thread, ThreadParticipationTracker};
 use super::session::{
     GatewayAction, GatewayPayload, GatewaySession, IdentifyData, IdentifyProperties, ResumeData,
     opcodes,
 };
+use super::slash::{model_autocomplete_choices, skill_autocomplete_choices};
+use super::threads::{ThreadParticipationTracker, auto_thread_name, should_auto_thread};
 use crate::adapter::BasePlatformAdapter;
 use crate::commands::is_known_gateway_command;
 use crate::gateway::IncomingMessage;
@@ -103,9 +102,10 @@ pub async fn fetch_gateway_url_at(
             "Discord GET /gateway HTTP {status}: {text}"
         )));
     }
-    let body: serde_json::Value = resp.json().await.map_err(|e| {
-        GatewayError::ConnectionFailed(format!("Discord GET /gateway json: {e}"))
-    })?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| GatewayError::ConnectionFailed(format!("Discord GET /gateway json: {e}")))?;
     body.get("url")
         .and_then(|v| v.as_str())
         .map(String::from)
@@ -166,10 +166,7 @@ pub async fn process_gateway_payload(
     (actions, inbounds)
 }
 
-async fn try_autocomplete_interaction(
-    inner: &DiscordInner,
-    data: &serde_json::Value,
-) -> bool {
+async fn try_autocomplete_interaction(inner: &DiscordInner, data: &serde_json::Value) -> bool {
     let Some(ac) = parse_autocomplete_interaction(data) else {
         return false;
     };
@@ -184,13 +181,13 @@ async fn try_autocomplete_interaction(
             &auth,
         )
     {
-        let _ = inner
-            .respond_autocomplete(&ac.id, &ac.token, &[])
-            .await;
+        let _ = inner.respond_autocomplete(&ac.id, &ac.token, &[]).await;
         return true;
     }
     let choices = autocomplete_choices_for(&ac).await;
-    let _ = inner.respond_autocomplete(&ac.id, &ac.token, &choices).await;
+    let _ = inner
+        .respond_autocomplete(&ac.id, &ac.token, &choices)
+        .await;
     true
 }
 
@@ -211,10 +208,7 @@ async fn try_interaction_create_inbound(
     data: &serde_json::Value,
 ) -> Option<Vec<IncomingMessage>> {
     let interaction = parse_interaction_create(data)?;
-    let user_id = interaction
-        .user_id
-        .as_deref()
-        .unwrap_or("unknown");
+    let user_id = interaction.user_id.as_deref().unwrap_or("unknown");
     let auth = discord_auth_config(&inner.config);
     if auth.has_restrictions()
         && !is_discord_user_authorized(
@@ -319,8 +313,7 @@ async fn try_message_create_inbound(
     }
     drop(dedup);
 
-    let (media_urls, media_types) =
-        cache_message_attachments(inner, &raw.attachments).await;
+    let (media_urls, media_types) = cache_message_attachments(inner, &raw.attachments).await;
     let has_voice = raw
         .attachments
         .iter()
@@ -456,7 +449,9 @@ fn payload_to_ws_text(payload: &GatewayPayload) -> Result<String, GatewayError> 
 
 async fn send_gateway_payload(
     ws: &mut futures::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         WsMessage,
     >,
     session: &mut GatewaySession,
@@ -474,7 +469,9 @@ async fn send_gateway_payload(
 
 async fn apply_gateway_actions(
     ws: &mut futures::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
         WsMessage,
     >,
     session: &mut GatewaySession,
@@ -491,12 +488,8 @@ async fn apply_gateway_actions(
                 send_gateway_payload(ws, session, &build_identify_payload(&inner.config)).await?;
             }
             GatewayAction::SendHeartbeat => {
-                send_gateway_payload(
-                    ws,
-                    session,
-                    &build_heartbeat_payload(session.sequence),
-                )
-                .await?;
+                send_gateway_payload(ws, session, &build_heartbeat_payload(session.sequence))
+                    .await?;
             }
             GatewayAction::SendResume => {
                 if let (Some(sid), Some(seq)) = (session.session_id.clone(), session.sequence) {

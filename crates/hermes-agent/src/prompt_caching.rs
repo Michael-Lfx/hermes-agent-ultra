@@ -34,10 +34,7 @@ fn base_url_hostname(base_url: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let without_scheme = trimmed
-        .split("://")
-        .nth(1)
-        .unwrap_or(trimmed);
+    let without_scheme = trimmed.split("://").nth(1).unwrap_or(trimmed);
     without_scheme
         .split('/')
         .next()
@@ -82,7 +79,10 @@ pub fn apply_anthropic_cache_control_in_place(
     let marker = build_cache_marker(cache_ttl);
     let mut breakpoints_used = 0usize;
 
-    if messages.first().is_some_and(|m| m.role == MessageRole::System) {
+    if messages
+        .first()
+        .is_some_and(|m| m.role == MessageRole::System)
+    {
         apply_cache_marker(&mut messages[0], &marker, native_anthropic);
         breakpoints_used += 1;
     }

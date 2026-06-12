@@ -58,11 +58,7 @@ pub fn merge_and_rank(
             .then_with(|| a.order.cmp(&b.order))
     });
 
-    scored
-        .into_iter()
-        .take(limit)
-        .map(|s| s.hit)
-        .collect()
+    scored.into_iter().take(limit).map(|s| s.hit).collect()
 }
 
 fn dedup_key(url: &str, title: &str) -> String {

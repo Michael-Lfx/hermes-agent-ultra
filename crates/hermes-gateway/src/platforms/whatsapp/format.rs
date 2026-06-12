@@ -3,7 +3,7 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-use super::config::{WhatsAppConfig, MAX_MESSAGE_LENGTH};
+use super::config::{MAX_MESSAGE_LENGTH, WhatsAppConfig};
 
 static FENCE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"```[\s\S]*?```").expect("valid regex"));
@@ -86,7 +86,11 @@ pub fn truncate_message(content: &str, limit: usize) -> Vec<String> {
     chunks
 }
 
-pub fn outgoing_chunks(cfg: &WhatsAppConfig, content: &str, include_reply_prefix: bool) -> Vec<String> {
+pub fn outgoing_chunks(
+    cfg: &WhatsAppConfig,
+    content: &str,
+    include_reply_prefix: bool,
+) -> Vec<String> {
     let mut body = format_message(content);
     if include_reply_prefix {
         let prefix = cfg.effective_reply_prefix();
@@ -119,7 +123,9 @@ mod tests {
 
     #[test]
     fn chunk_limit_reserves_prefix_space() {
-        let reserved = MAX_MESSAGE_LENGTH.saturating_sub(DEFAULT_REPLY_PREFIX.len()).max(1024);
+        let reserved = MAX_MESSAGE_LENGTH
+            .saturating_sub(DEFAULT_REPLY_PREFIX.len())
+            .max(1024);
         assert!(reserved < MAX_MESSAGE_LENGTH);
     }
 

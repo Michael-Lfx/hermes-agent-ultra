@@ -373,15 +373,15 @@ pub struct BatchedCommand {
 pub fn classify_batch_class(name: &str) -> BatchCommandClass {
     // Normalise aliases to canonical names first.
     let canonical = match name {
-        "bg"         => "background",
-        "clear"      => "reset",
-        "cancel"     => "stop",
-        "cost"       => "usage",
-        "persona"    => "personality",
-        "think"      => "reasoning",
-        "commands"   => "help",
+        "bg" => "background",
+        "clear" => "reset",
+        "cancel" => "stop",
+        "cost" => "usage",
+        "persona" => "personality",
+        "think" => "reasoning",
+        "commands" => "help",
         "mcp_reload" => "reload_mcp",
-        other        => other,
+        other => other,
     };
     match canonical {
         // ── FireAndForget ──────────────────────────────────────────────────
@@ -395,10 +395,9 @@ pub fn classify_batch_class(name: &str) -> BatchCommandClass {
         "status" | "usage" | "insights" | "help" | "curator" => BatchCommandClass::ReadOnly,
 
         // ── SessionMutation (everything else that the gateway handles) ─────
-        "new" | "reset" | "model" | "personality" | "compress" | "verbose"
-        | "yolo" | "sethome" | "reload_mcp" | "provider" | "profile"
-        | "branch" | "rollback" | "update" | "fast" | "reasoning"
-        | "tools" | "sessions" | "budget" => BatchCommandClass::SessionMutation,
+        "new" | "reset" | "model" | "personality" | "compress" | "verbose" | "yolo" | "sethome"
+        | "reload_mcp" | "provider" | "profile" | "branch" | "rollback" | "update" | "fast"
+        | "reasoning" | "tools" | "sessions" | "budget" => BatchCommandClass::SessionMutation,
 
         // Unknown / not a gateway command → conservative
         _ => BatchCommandClass::SessionMutation,
@@ -1115,9 +1114,15 @@ mod tests {
 
     #[test]
     fn test_classify_fire_and_forget() {
-        assert_eq!(classify_batch_class("background"), BatchCommandClass::FireAndForget);
+        assert_eq!(
+            classify_batch_class("background"),
+            BatchCommandClass::FireAndForget
+        );
         assert_eq!(classify_batch_class("bg"), BatchCommandClass::FireAndForget);
-        assert_eq!(classify_batch_class("btw"), BatchCommandClass::FireAndForget);
+        assert_eq!(
+            classify_batch_class("btw"),
+            BatchCommandClass::FireAndForget
+        );
     }
 
     #[test]
@@ -1147,10 +1152,29 @@ mod tests {
     #[test]
     fn test_classify_session_mutation() {
         for cmd in &[
-            "new", "reset", "clear", "model", "personality", "persona",
-            "compress", "verbose", "yolo", "sethome", "reload_mcp", "mcp_reload",
-            "provider", "profile", "branch", "rollback", "update", "fast",
-            "reasoning", "think", "tools", "sessions", "budget",
+            "new",
+            "reset",
+            "clear",
+            "model",
+            "personality",
+            "persona",
+            "compress",
+            "verbose",
+            "yolo",
+            "sethome",
+            "reload_mcp",
+            "mcp_reload",
+            "provider",
+            "profile",
+            "branch",
+            "rollback",
+            "update",
+            "fast",
+            "reasoning",
+            "think",
+            "tools",
+            "sessions",
+            "budget",
         ] {
             assert_eq!(
                 classify_batch_class(cmd),
@@ -1163,7 +1187,10 @@ mod tests {
 
     #[test]
     fn test_classify_unknown_is_conservative() {
-        assert_eq!(classify_batch_class("xyzzy"), BatchCommandClass::SessionMutation);
+        assert_eq!(
+            classify_batch_class("xyzzy"),
+            BatchCommandClass::SessionMutation
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1197,7 +1224,10 @@ mod tests {
         assert_eq!(cmds[1].args, "设定提醒");
         assert_eq!(cmds[2].name, "btw");
         assert_eq!(cmds[2].args, "现在几点");
-        assert!(cmds.iter().all(|c| c.class == BatchCommandClass::FireAndForget));
+        assert!(
+            cmds.iter()
+                .all(|c| c.class == BatchCommandClass::FireAndForget)
+        );
     }
 
     #[test]
@@ -1234,7 +1264,10 @@ mod tests {
         let text = "/background task\n/model gpt-4";
         let cmds = parse_batch_commands(text);
         assert_eq!(cmds.len(), 2);
-        assert!(cmds.iter().any(|c| c.class == BatchCommandClass::SessionMutation));
+        assert!(
+            cmds.iter()
+                .any(|c| c.class == BatchCommandClass::SessionMutation)
+        );
     }
 
     #[test]
@@ -1257,10 +1290,16 @@ mod tests {
     #[test]
     fn test_batch_ios_dash_normalisation_in_args() {
         let em = '\u{2014}';
-        let text = format!("/background task {}provider openai\n/background another", em);
+        let text = format!(
+            "/background task {}provider openai\n/background another",
+            em
+        );
         let cmds = parse_batch_commands(&text);
         assert_eq!(cmds.len(), 2);
-        assert!(cmds[0].args.contains("--provider"), "em-dash should be normalised to --");
+        assert!(
+            cmds[0].args.contains("--provider"),
+            "em-dash should be normalised to --"
+        );
     }
 
     #[test]
@@ -1270,7 +1309,10 @@ mod tests {
                    /background 分析桌面下的所有文件";
         let cmds = parse_batch_commands(text);
         assert_eq!(cmds.len(), 3);
-        assert!(cmds.iter().all(|c| c.class == BatchCommandClass::FireAndForget));
+        assert!(
+            cmds.iter()
+                .all(|c| c.class == BatchCommandClass::FireAndForget)
+        );
         assert_eq!(cmds[0].args, "帮我写一封邮件介绍产品");
         assert_eq!(cmds[1].args, "帮我定个5分钟后的提醒");
         assert_eq!(cmds[2].args, "分析桌面下的所有文件");

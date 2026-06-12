@@ -8,9 +8,9 @@
 use std::path::{Path, PathBuf};
 
 use crate::paths::{
-    self, intermediate_home_basename, legacy_home_basename, primary_home_basename, user_home_dir,
-    INTERMEDIATE_HOME_DIR, LEGACY_HOME_DIR, LOCALAPPDATA_SUBDIR_INTERMEDIATE,
+    self, INTERMEDIATE_HOME_DIR, LEGACY_HOME_DIR, LOCALAPPDATA_SUBDIR_INTERMEDIATE,
     LOCALAPPDATA_SUBDIR_LEGACY, LOCALAPPDATA_SUBDIR_NEW, PRIMARY_HOME_DIR,
+    intermediate_home_basename, legacy_home_basename, primary_home_basename, user_home_dir,
 };
 
 /// Ensure the effective Hermes Ultra home exists (empty if newly created).

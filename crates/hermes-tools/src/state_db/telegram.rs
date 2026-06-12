@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use super::error::StateDbError;
@@ -391,7 +391,11 @@ pub fn is_telegram_lobby_system_command(text: &str) -> bool {
     if !trimmed.starts_with('/') {
         return false;
     }
-    let cmd = trimmed.split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+    let cmd = trimmed
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     matches!(
         cmd.as_str(),
         "/topic" | "/status" | "/sessions" | "/usage" | "/cost" | "/help" | "/platforms"

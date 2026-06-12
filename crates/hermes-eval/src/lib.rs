@@ -58,6 +58,6 @@ pub use reporter::{JsonReporter, Reporter};
 pub use result::{AggregateMetrics, RunRecord, TaskResult, TaskStatus};
 pub use runner::{Runner, RunnerConfig, TaskRollout};
 pub use tblite::{
-    tblite_smoke_tasks, NoopRollout, SmokePassVerifier, SmokeRollout, TbliteSmokeAdapter,
+    NoopRollout, SmokePassVerifier, SmokeRollout, TbliteSmokeAdapter, tblite_smoke_tasks,
 };
 pub use verifier::{VerificationOutcome, Verifier};

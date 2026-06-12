@@ -1053,9 +1053,10 @@ mod tests {
     #[test]
     fn test_default_anthropic_beta_list_oauth_appends() {
         let api = default_anthropic_beta_list(None, false);
-        assert!(api
-            .iter()
-            .any(|b| *b == "fine-grained-tool-streaming-2025-05-14"));
+        assert!(
+            api.iter()
+                .any(|b| *b == "fine-grained-tool-streaming-2025-05-14")
+        );
 
         let oauth = default_anthropic_beta_list(None, true);
         assert!(oauth.iter().any(|b| *b == "oauth-2025-04-20"));

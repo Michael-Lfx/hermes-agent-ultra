@@ -97,7 +97,7 @@ impl FileSkillStore {
             _ => {
                 return Err(SkillError::GuardViolation(format!(
                     "Invalid skill {field}: path traversal or separators are not allowed"
-                )))
+                )));
             }
         };
 
@@ -212,7 +212,7 @@ impl FileSkillStore {
         }
 
         let rest = &raw[3..]; // skip first "---"
-                              // Find the closing "---"
+        // Find the closing "---"
         let end = rest
             .find("\n---")
             .ok_or_else(|| SkillError::Parse("Missing closing --- in frontmatter".to_string()))?;
@@ -469,11 +469,7 @@ impl FileSkillStore {
                                     .and_then(|p| p.strip_prefix(&root).ok())
                                     .and_then(|rel| {
                                         let s = rel.to_string_lossy().to_string();
-                                        if s.is_empty() {
-                                            None
-                                        } else {
-                                            Some(s)
-                                        }
+                                        if s.is_empty() { None } else { Some(s) }
                                     })
                             });
 
