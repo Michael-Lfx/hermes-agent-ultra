@@ -11,8 +11,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use hermes_core::{BudgetConfig, Message, MessageRole};
 use crate::prompt_builder::DEFAULT_AGENT_IDENTITY;
+use hermes_core::{BudgetConfig, Message, MessageRole};
 
 const MEMORY_ENTRY_DELIMITER: &str = "\n§\n";
 const MEMORY_CHAR_LIMIT: usize = 2200;
@@ -30,6 +30,9 @@ pub struct ContextManager {
     max_context_chars: usize,
     /// Running sum of `content.len()` for all messages (kept in sync on mutation).
     total_message_chars: usize,
+    /// Monotonically increasing counter bumped on every mutation. Used by
+    /// `MessageAnalysisCache` to detect when cached token estimates are stale.
+    pub(crate) message_generation: u64,
 }
 
 fn message_content_len(message: &Message) -> usize {
@@ -47,6 +50,7 @@ impl ContextManager {
             messages: Vec::new(),
             max_context_chars,
             total_message_chars: 0,
+            message_generation: 0,
         }
     }
 
@@ -66,12 +70,14 @@ impl ContextManager {
     pub fn replace_messages(&mut self, messages: Vec<Message>) {
         self.total_message_chars = sum_message_chars(&messages);
         self.messages = messages;
+        self.message_generation = self.message_generation.wrapping_add(1);
     }
 
     /// Add a message to the conversation history.
     pub fn add_message(&mut self, message: Message) {
         self.total_message_chars += message_content_len(&message);
         self.messages.push(message);
+        self.message_generation = self.message_generation.wrapping_add(1);
     }
 
     /// Get a reference to the current messages.
@@ -212,14 +218,12 @@ Prioritize thoughtful dialogue, concise synthesis, and grounded follow-up questi
 Use one focused question at a time to help the user clarify goals, assumptions, or emotions before advising.\n\
 Balance empathy with factual precision and actionable guidance.";
 
-const BUILTIN_PERSONALITY_SECURITY_AUDITOR: &str =
-    "You are operating in the `security-auditor` persona.\n\
+const BUILTIN_PERSONALITY_SECURITY_AUDITOR: &str = "You are operating in the `security-auditor` persona.\n\
 Prioritize threat modeling, abuse-path detection, and least-privilege recommendations.\n\
 For every meaningful change, identify probable attack surfaces, data exposure risk, and concrete mitigations.\n\
 Separate confirmed vulnerabilities from hypotheses and provide verification steps for each claim.";
 
-const BUILTIN_PERSONALITY_RELEASE_MANAGER: &str =
-    "You are operating in the `release-manager` persona.\n\
+const BUILTIN_PERSONALITY_RELEASE_MANAGER: &str = "You are operating in the `release-manager` persona.\n\
 Prioritize production readiness, rollback safety, and explicit release gates.\n\
 Frame decisions with launch criteria, test coverage confidence, operational risk, and contingency plan.\n\
 When uncertainty remains, recommend the smallest safe release unit and next validation step.";
@@ -229,26 +233,22 @@ Prioritize reliability, observability, and measurable service behavior.\n\
 Start incident/problem analysis from signals (logs, metrics, traces), then isolate likely failure domains.\n\
 Recommend changes that reduce blast radius, improve recovery time, and keep runbooks actionable.";
 
-const BUILTIN_PERSONALITY_MCP_INTEGRATOR: &str =
-    "You are operating in the `mcp-integrator` persona.\n\
+const BUILTIN_PERSONALITY_MCP_INTEGRATOR: &str = "You are operating in the `mcp-integrator` persona.\n\
 Prioritize connector compatibility, capability mapping, and deterministic tool interfaces.\n\
 When integrating providers or plugins, reason explicitly about protocol contracts, auth flow, and failure handling.\n\
 Favor minimal, testable integration steps with clear schema/version boundaries.";
 
-const BUILTIN_PERSONALITY_QUANT_RESEARCHER: &str =
-    "You are operating in the `quant-researcher` persona.\n\
+const BUILTIN_PERSONALITY_QUANT_RESEARCHER: &str = "You are operating in the `quant-researcher` persona.\n\
 Prioritize hypothesis-driven analysis, risk-adjusted thinking, and falsifiable experiment design.\n\
 For strategy questions, define assumptions, market regime sensitivity, and evaluation metrics before conclusions.\n\
 Never present profitability as guaranteed; separate observed edge from speculative inference.";
 
-const BUILTIN_PERSONALITY_PERFORMANCE_ENGINEER: &str =
-    "You are operating in the `performance-engineer` persona.\n\
+const BUILTIN_PERSONALITY_PERFORMANCE_ENGINEER: &str = "You are operating in the `performance-engineer` persona.\n\
 Prioritize latency, throughput, and resource-efficiency constraints.\n\
 Use profiling-first diagnosis, quantify bottlenecks, and propose benchmarkable optimizations.\n\
 Prefer changes that preserve correctness while improving p50/p95/p99 behavior under realistic load.";
 
-const BUILTIN_PERSONALITY_RESEARCH_SCOUT: &str =
-    "You are operating in the `research-scout` persona.\n\
+const BUILTIN_PERSONALITY_RESEARCH_SCOUT: &str = "You are operating in the `research-scout` persona.\n\
 Prioritize evidence discovery, source quality, and synthesis clarity.\n\
 For novel or uncertain topics, gather multiple primary sources, extract convergent facts, and mark disagreement areas.\n\
 Return concise findings with recommended next experiments or validation checks.";

@@ -97,6 +97,38 @@ impl TurnState {
 }
 
 // ---------------------------------------------------------------------------
+// MessageAnalysisCache — per-turn token estimate cache
+// ---------------------------------------------------------------------------
+
+/// Caches the per-turn `estimate_request_tokens_for_compression` result so it
+/// is only recomputed when `ContextManager::message_generation` changes.
+#[derive(Default)]
+pub(crate) struct MessageAnalysisCache {
+    /// Generation value when the cache was last populated.
+    pub(crate) cached_generation: u64,
+    /// Approximate request token count from the last analysis, or `None`
+    /// if the cache has never been filled or was explicitly invalidated.
+    pub(crate) approx_request_tokens: Option<u32>,
+}
+
+impl MessageAnalysisCache {
+    /// Return a cached value if `current_generation` matches, otherwise `None`.
+    pub(crate) fn get(&self, current_generation: u64) -> Option<u32> {
+        if self.approx_request_tokens.is_some() && self.cached_generation == current_generation {
+            self.approx_request_tokens
+        } else {
+            None
+        }
+    }
+
+    /// Store a fresh estimate together with the generation it was computed for.
+    pub(crate) fn set(&mut self, generation: u64, tokens: u32) {
+        self.cached_generation = generation;
+        self.approx_request_tokens = Some(tokens);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TurnContext — all loop-local mutable state
 // ---------------------------------------------------------------------------
 
@@ -204,6 +236,9 @@ pub(crate) struct TurnContext {
     pub context_pressure_warned_at: f64,
     pub context_pressure_last_warn_at: Option<Instant>,
     pub context_pressure_last_warn_percent: f64,
+
+    // --- Token estimate cache ---
+    pub(crate) token_analysis: MessageAnalysisCache,
 }
 
 impl TurnContext {
@@ -308,6 +343,7 @@ impl TurnContext {
             context_pressure_warned_at: 0.0,
             context_pressure_last_warn_at: None,
             context_pressure_last_warn_percent: 0.0,
+            token_analysis: MessageAnalysisCache::default(),
         }
     }
 }
@@ -488,11 +524,18 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
         }
     }
 
-    let approx_request_tokens = estimate_request_tokens_for_compression(
-        tc.ctx.get_messages(),
-        &tc.system_content,
-        tc.active_tool_schemas.as_ref(),
-    ) as u32;
+    let approx_request_tokens = {
+        let msg_gen = tc.ctx.message_generation;
+        tc.token_analysis.get(msg_gen).unwrap_or_else(|| {
+            let tokens = estimate_request_tokens_for_compression(
+                tc.ctx.get_messages(),
+                &tc.system_content,
+                tc.active_tool_schemas.as_ref(),
+            ) as u32;
+            tc.token_analysis.set(msg_gen, tokens);
+            tokens
+        })
+    };
     let rt_snap = route_learning::primary_runtime_snapshot(agent);
     if let Some(err) = crate::message_sanitization::ollama_context_limit_error(
         agent.config().ollama_num_ctx,
