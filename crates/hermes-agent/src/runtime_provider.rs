@@ -825,6 +825,7 @@ pub(crate) fn note_primary_rate_limited_if_applicable(agent: &AgentLoop) {
         .map(|state| state.turn_fallback.is_fallback_activated())
         .unwrap_or(false);
     let primary_prov = agent
+        .router
         .stored_primary_runtime
         .provider
         .as_deref()

@@ -882,17 +882,15 @@ pub struct AgentLoop {
     code_index: Option<Arc<Mutex<CodeIndex>>>,
     /// LSP-style context injection controls.
     lsp_context: LspContextConfig,
-    /// Rolling per-route performance state for online smart-routing adaptation.
-    pub(crate) route_learning: Arc<Mutex<HashMap<String, RouteLearningStats>>>,
-    /// Frozen primary runtime at session start (Python `_primary_runtime`).
-    pub(crate) stored_primary_runtime: PrimaryRuntime,
+    /// SmartRouter facade: wraps per-route learning stats + frozen primary runtime.
+    pub(crate) router: crate::smart_router::SmartRouter,
     /// When set, tool calls use this async path instead of sync `ToolRegistry` handlers
     /// (avoids `block_in_place` + `block_on` from inside `JoinSet` tasks on the gateway).
     pub(crate) async_tool_dispatch: Option<AsyncToolDispatch>,
     /// Mid-run `/steer` queue (Python `_pending_steer`).
     pub(crate) pending_steer: PendingSteer,
-    /// Python `agent.context_compressor.ContextCompressor` (LLM summary + boundary alignment).
-    pub(crate) context_compressor: Arc<tokio::sync::Mutex<ContextCompressor>>,
+    /// Compression orchestrator (wraps ContextCompressor; orchestration methods live on AgentLoop).
+    pub(crate) context_compressor: crate::compression_orchestrator::ContextCompressionOrchestrator,
     /// Reused SQLite persistence handle for this agent (Python `SessionDB._conn` parity).
     shared_session_persistence: std::sync::OnceLock<Arc<SessionPersistence>>,
     /// Per-turn cache for OpenAI-compat provider message/tool JSON serialization.
@@ -1229,8 +1227,10 @@ impl AgentLoop {
                 Err(_) => return,
             };
             let mut fb = state.turn_fallback.clone();
-            let restored =
-                fb.restore_primary_runtime(&self.stored_primary_runtime, &mut state.active_runtime);
+            let restored = fb.restore_primary_runtime(
+                &self.router.stored_primary_runtime,
+                &mut state.active_runtime,
+            );
             state.turn_fallback = fb;
             restored
         };
@@ -1346,7 +1346,10 @@ impl AgentLoop {
         let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
-        let context_compressor = build_context_compressor_for_config(&config);
+        let context_compressor =
+            crate::compression_orchestrator::ContextCompressionOrchestrator::new(
+                build_context_compressor_for_config(&config),
+            );
         Self {
             config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
@@ -1366,8 +1369,7 @@ impl AgentLoop {
             sub_agent_orchestrator: None,
             code_index,
             lsp_context,
-            route_learning,
-            stored_primary_runtime,
+            router: crate::smart_router::SmartRouter::new(route_learning, stored_primary_runtime),
             async_tool_dispatch: None,
             pending_steer: PendingSteer::new(),
             context_compressor,
@@ -1612,7 +1614,10 @@ impl AgentLoop {
         // let code_index = Self::init_code_index(&config);
         let lsp_context = Self::build_lsp_context_config(&config);
         let stored_primary_runtime = Self::primary_runtime_from_config(&config);
-        let context_compressor = build_context_compressor_for_config(&config);
+        let context_compressor =
+            crate::compression_orchestrator::ContextCompressionOrchestrator::new(
+                build_context_compressor_for_config(&config),
+            );
         Self {
             config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
@@ -1632,8 +1637,7 @@ impl AgentLoop {
             sub_agent_orchestrator: None,
             code_index: None,
             lsp_context,
-            route_learning,
-            stored_primary_runtime,
+            router: crate::smart_router::SmartRouter::new(route_learning, stored_primary_runtime),
             async_tool_dispatch: None,
             pending_steer: PendingSteer::new(),
             context_compressor,
@@ -2014,7 +2018,12 @@ impl AgentLoop {
 
     async fn compute_compression_feasibility_warning(&self) -> Option<String> {
         const AUX_FLOOR: u64 = 64_000;
-        let threshold = self.context_compressor.lock().await.threshold_tokens();
+        let threshold = self
+            .context_compressor
+            .inner
+            .lock()
+            .await
+            .threshold_tokens();
         let aux_model = std::env::var("HERMES_COMPRESSION_MODEL")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -3212,6 +3221,7 @@ impl AgentLoop {
             &tool_schemas,
         );
         self.context_compressor
+            .inner
             .lock()
             .await
             .should_compress(Some(estimated))
@@ -3260,7 +3270,7 @@ impl AgentLoop {
             .filter(|n| !n.trim().is_empty());
         let estimated_tokens = estimate_messages_tokens(&messages);
         let compressed = {
-            let mut compressor = self.context_compressor.lock().await;
+            let mut compressor = self.context_compressor.inner.lock().await;
             compressor.set_context_length(context_length);
             compressor
                 .compress(messages, Some(estimated_tokens), memory_hint.as_deref())
@@ -3519,7 +3529,7 @@ impl AgentLoop {
         let mut after = ctx.total_chars();
         let mut after_pct = (after * 100) / max_c;
         let threshold_pct = {
-            let compressor = self.context_compressor.lock().await;
+            let compressor = self.context_compressor.inner.lock().await;
             (compressor.threshold_percent() * 100.0) as usize
         };
         if after_pct >= threshold_pct {
@@ -6412,7 +6422,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(DummyProvider::default()),
         );
-        if let Ok(mut m) = agent.route_learning.lock() {
+        if let Ok(mut m) = agent.router.route_learning.lock() {
             m.insert(
                 "openai:gpt-4o".to_string(),
                 RouteLearningStats {

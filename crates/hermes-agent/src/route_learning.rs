@@ -286,7 +286,7 @@ pub(crate) fn route_learning_stats_for_key(
 ) -> Option<RouteLearningStats> {
     let now_ms = now_unix_ms();
     let mut persist_snapshot: Option<HashMap<String, RouteLearningStats>> = None;
-    let stats = if let Ok(mut map) = agent.route_learning.lock() {
+    let stats = if let Ok(mut map) = agent.router.route_learning.lock() {
         let mut changed = prune_route_learning_locked(&mut map, now_ms);
         let out = map
             .get(key)
@@ -311,10 +311,7 @@ pub(crate) fn route_learning_stats_for_key(
 // Scoring
 // ---------------------------------------------------------------------------
 
-pub(crate) fn route_learning_score(
-    stats: Option<&RouteLearningStats>,
-    cheap_bias: f64,
-) -> f64 {
+pub(crate) fn route_learning_score(stats: Option<&RouteLearningStats>, cheap_bias: f64) -> f64 {
     let success_rate = stats.map(|s| s.success_rate).unwrap_or(0.90);
     let avg_latency_ms = stats.map(|s| s.avg_latency_ms).unwrap_or(1800.0);
     let latency_score = (1.0 / (1.0 + (avg_latency_ms / 2500.0))).clamp(0.05, 1.0);
@@ -348,7 +345,7 @@ pub(crate) fn update_route_learning(
     let key = route_learning_key_for_route(agent, route, response_model);
     let alpha = smart_routing_learning_alpha();
     let mut persist_snapshot: Option<HashMap<String, RouteLearningStats>> = None;
-    if let Ok(mut map) = agent.route_learning.lock() {
+    if let Ok(mut map) = agent.router.route_learning.lock() {
         let now_ms = now_unix_ms();
         let _ = prune_route_learning_locked(&mut map, now_ms);
         let entry = map.entry(key).or_insert_with(RouteLearningStats::default);
@@ -422,7 +419,7 @@ pub(crate) fn primary_runtime_snapshot(agent: &AgentLoop) -> PrimaryRuntime {
         .state
         .lock()
         .map(|state| state.active_runtime.clone())
-        .unwrap_or_else(|_| agent.stored_primary_runtime.clone());
+        .unwrap_or_else(|_| agent.router.stored_primary_runtime.clone());
     snap.credential_pool = agent.primary_credential_pool.clone();
     snap
 }
@@ -446,8 +443,11 @@ fn try_build_cheap_runtime(
         return Err(());
     }
     let (_, model_name) = extract_provider_and_model(agent, model_full);
-    let base_url =
-        crate::runtime_provider::resolve_runtime_base_url(agent, &provider_lc, cheap.base_url.as_deref());
+    let base_url = crate::runtime_provider::resolve_runtime_base_url(
+        agent,
+        &provider_lc,
+        cheap.base_url.as_deref(),
+    );
     let api_mode = base_url
         .as_deref()
         .and_then(detect_api_mode_for_url)
@@ -480,7 +480,8 @@ fn try_build_cheap_runtime(
     )
     .map_err(|_| ())?;
 
-    let (command, args) = crate::runtime_provider::resolve_runtime_command_args(agent, Some(&provider_lc));
+    let (command, args) =
+        crate::runtime_provider::resolve_runtime_command_args(agent, Some(&provider_lc));
     if provider_lc == "copilot-acp"
         && command
             .as_deref()
@@ -552,10 +553,8 @@ pub(crate) fn resolve_smart_runtime_route(
             let primary_stats = route_learning_stats_for_key(agent, &primary_key);
             let cheap_stats = route_learning_stats_for_key(agent, &cheap_key);
             let primary_score = route_learning_score(primary_stats.as_ref(), 0.0);
-            let cheap_score = route_learning_score(
-                cheap_stats.as_ref(),
-                smart_routing_learning_cheap_bias(),
-            );
+            let cheap_score =
+                route_learning_score(cheap_stats.as_ref(), smart_routing_learning_cheap_bias());
             let margin = smart_routing_learning_switch_margin();
             if smart_routing_learning_enabled() && (cheap_score + margin) < primary_score {
                 tracing::debug!(
@@ -655,10 +654,7 @@ pub(crate) fn resolve_reliability_degrade_model(
 // Retry failover chain
 // ---------------------------------------------------------------------------
 
-pub(crate) fn resolve_retry_failover_chain(
-    agent: &AgentLoop,
-    active_model: &str,
-) -> Vec<String> {
+pub(crate) fn resolve_retry_failover_chain(agent: &AgentLoop, active_model: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let active_lc = active_model.trim().to_ascii_lowercase();

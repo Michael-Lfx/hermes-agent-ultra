@@ -1,4 +1,4 @@
-//! Session-scoped usage counters and context-engine transition (Python `reset_session_state`).
+﻿//! Session-scoped usage counters and context-engine transition (Python `reset_session_state`).
 
 use std::collections::HashMap;
 
@@ -330,7 +330,7 @@ impl AgentLoop {
 
         let config = self.config();
         let new_session_id = config.session_id.clone();
-        if let Ok(mut compressor) = self.context_compressor.try_lock() {
+        if let Ok(mut compressor) = self.context_compressor.inner.try_lock() {
             transition_context_engine_session(
                 &mut *compressor,
                 &config,
@@ -365,7 +365,7 @@ impl AgentLoop {
                 .session_usage
                 .accumulate_api_call(usage, &model, provider, base_url);
         }
-        if let Ok(mut compressor) = self.context_compressor.try_lock() {
+        if let Ok(mut compressor) = self.context_compressor.inner.try_lock() {
             compressor.update_from_usage(usage.prompt_tokens);
         }
     }
@@ -410,7 +410,7 @@ impl AgentLoop {
             ..SessionUsageDisplay::default()
         };
 
-        if let Ok(compressor) = self.context_compressor.try_lock() {
+        if let Ok(compressor) = self.context_compressor.inner.try_lock() {
             let ctx_used = compressor.last_prompt_tokens();
             let ctx_max = compressor.config_context_length();
             display.context_used = Some(ctx_used);
