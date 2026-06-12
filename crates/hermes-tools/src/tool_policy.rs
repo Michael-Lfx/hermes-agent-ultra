@@ -83,6 +83,9 @@ pub struct ToolPolicyEngine {
     allowlist: HashSet<String>,
     denylist: HashSet<String>,
     deny_param_patterns: Vec<Regex>,
+    /// Combined DFA of all `deny_param_patterns` as a single alternation.
+    /// Built once at construction time; `None` when the pattern list is empty.
+    combined_deny: Option<Regex>,
     max_param_bytes: usize,
     sandbox_profile: ExecutionSandboxProfile,
 }
@@ -123,6 +126,7 @@ impl ToolPolicyEngine {
             allowlist: HashSet::new(),
             denylist: HashSet::new(),
             deny_param_patterns: Vec::new(),
+            combined_deny: None,
             max_param_bytes: 256 * 1024,
             sandbox_profile: ExecutionSandboxProfile::Balanced,
         }
@@ -152,6 +156,7 @@ impl ToolPolicyEngine {
         }
         if let Ok(value) = std::env::var("HERMES_TOOL_POLICY_DENY_PARAM_PATTERNS") {
             policy.deny_param_patterns = compile_patterns(&parse_csv_list(&value));
+            policy.combined_deny = build_combined_deny(&policy.deny_param_patterns);
         }
         if let Ok(value) = std::env::var("HERMES_TOOL_POLICY_MAX_PARAM_BYTES") {
             if let Some(max) = value.trim().parse::<usize>().ok().filter(|v| *v > 0) {
@@ -195,61 +200,62 @@ impl ToolPolicyEngine {
             .filter(|v| !v.is_empty())
             .collect();
         let deny_param_patterns = compile_patterns(&cfg.deny_param_patterns.unwrap_or_default());
+        let combined_deny = build_combined_deny(&deny_param_patterns);
         let max_param_bytes = cfg.max_param_bytes.filter(|v| *v > 0).unwrap_or(256 * 1024);
         Self {
             mode,
             allowlist,
             denylist,
             deny_param_patterns,
+            combined_deny,
             max_param_bytes,
             sandbox_profile: ExecutionSandboxProfile::Balanced,
         }
     }
 
     fn from_preset(preset: ToolPolicyPreset) -> Self {
+        let make = |patterns: Vec<Regex>, mode, max_param_bytes, sandbox_profile| {
+            let combined_deny = build_combined_deny(&patterns);
+            Self {
+                mode,
+                allowlist: HashSet::new(),
+                denylist: HashSet::new(),
+                combined_deny,
+                deny_param_patterns: patterns,
+                max_param_bytes,
+                sandbox_profile,
+            }
+        };
         match preset {
-            ToolPolicyPreset::Strict => Self {
-                mode: ToolPolicyMode::Enforce,
-                allowlist: HashSet::new(),
-                denylist: HashSet::new(),
-                deny_param_patterns: compile_patterns(&default_deny_patterns()),
-                max_param_bytes: 128 * 1024,
-                sandbox_profile: ExecutionSandboxProfile::Strict,
-            },
-            ToolPolicyPreset::Balanced => Self {
-                mode: ToolPolicyMode::Enforce,
-                allowlist: HashSet::new(),
-                denylist: HashSet::new(),
-                deny_param_patterns: compile_patterns(&default_deny_patterns()),
-                max_param_bytes: 256 * 1024,
-                sandbox_profile: ExecutionSandboxProfile::Balanced,
-            },
-            ToolPolicyPreset::Dev => Self {
-                mode: ToolPolicyMode::Audit,
-                allowlist: HashSet::new(),
-                denylist: HashSet::new(),
-                deny_param_patterns: compile_patterns(&default_deny_patterns()),
-                max_param_bytes: 512 * 1024,
-                sandbox_profile: ExecutionSandboxProfile::Dev,
-            },
-            ToolPolicyPreset::Relaxed => Self {
-                mode: ToolPolicyMode::Enforce,
-                allowlist: HashSet::new(),
-                denylist: HashSet::new(),
-                deny_param_patterns: compile_patterns(&default_relaxed_deny_patterns()),
-                max_param_bytes: 1024 * 1024,
-                sandbox_profile: ExecutionSandboxProfile::Dev,
-            },
+            ToolPolicyPreset::Strict => make(
+                compile_patterns(&default_deny_patterns()),
+                ToolPolicyMode::Enforce,
+                128 * 1024,
+                ExecutionSandboxProfile::Strict,
+            ),
+            ToolPolicyPreset::Balanced => make(
+                compile_patterns(&default_deny_patterns()),
+                ToolPolicyMode::Enforce,
+                256 * 1024,
+                ExecutionSandboxProfile::Balanced,
+            ),
+            ToolPolicyPreset::Dev => make(
+                compile_patterns(&default_deny_patterns()),
+                ToolPolicyMode::Audit,
+                512 * 1024,
+                ExecutionSandboxProfile::Dev,
+            ),
+            ToolPolicyPreset::Relaxed => make(
+                compile_patterns(&default_relaxed_deny_patterns()),
+                ToolPolicyMode::Enforce,
+                1024 * 1024,
+                ExecutionSandboxProfile::Dev,
+            ),
         }
     }
 
     fn apply_layer(&mut self, layer: Self) {
-        self.mode = layer.mode;
-        self.allowlist = layer.allowlist;
-        self.denylist = layer.denylist;
-        self.deny_param_patterns = layer.deny_param_patterns;
-        self.max_param_bytes = layer.max_param_bytes;
-        self.sandbox_profile = layer.sandbox_profile;
+        *self = layer;
     }
 
     pub fn with_allowlist(mut self, names: &[&str]) -> Self {
@@ -277,6 +283,7 @@ impl ToolPolicyEngine {
             .filter(|s| !s.is_empty())
             .collect();
         self.deny_param_patterns = compile_patterns(&raw);
+        self.combined_deny = build_combined_deny(&self.deny_param_patterns);
         self
     }
 
@@ -316,15 +323,6 @@ impl ToolPolicyEngine {
             {
                 deny_reason = Some(reason);
                 deny_code = Some(code);
-            } else if self.deny_param_patterns.is_empty() {
-                let serialized_len = estimate_json_len_capped(params, self.max_param_bytes);
-                if serialized_len > self.max_param_bytes {
-                    deny_reason = Some(format!(
-                        "tool params exceed max bytes: {} > {}",
-                        serialized_len, self.max_param_bytes
-                    ));
-                    deny_code = Some("params_too_large".to_string());
-                }
             } else {
                 let serialized_len = estimate_json_len_capped(params, self.max_param_bytes);
                 if serialized_len > self.max_param_bytes {
@@ -333,18 +331,12 @@ impl ToolPolicyEngine {
                         serialized_len, self.max_param_bytes
                     ));
                     deny_code = Some("params_too_large".to_string());
-                } else {
+                } else if let Some(combined) = &self.combined_deny {
                     match serde_json::to_string(params) {
                         Ok(params_str) => {
-                            if let Some(pattern) = self
-                                .deny_param_patterns
-                                .iter()
-                                .find(|p| p.is_match(&params_str))
-                            {
-                                deny_reason = Some(format!(
-                                    "tool params matched deny pattern '{}'",
-                                    pattern.as_str()
-                                ));
+                            if combined.is_match(&params_str) {
+                                deny_reason =
+                                    Some("tool params matched a deny pattern".to_string());
                                 deny_code = Some("params_pattern_denied".to_string());
                             }
                         }
@@ -526,6 +518,20 @@ fn compile_patterns(raw: &[String]) -> Vec<Regex> {
         .collect()
 }
 
+/// Merge a slice of regexes into a single alternation `(?:p0)|(?:p1)|…`.
+/// Returns `None` when the slice is empty.
+fn build_combined_deny(patterns: &[Regex]) -> Option<Regex> {
+    if patterns.is_empty() {
+        return None;
+    }
+    let combined = patterns
+        .iter()
+        .map(|p| format!("(?:{})", p.as_str()))
+        .collect::<Vec<_>>()
+        .join("|");
+    Regex::new(&combined).ok()
+}
+
 fn default_deny_patterns() -> Vec<String> {
     vec![
         r"(?i)rm\s+-rf\s+/".to_string(),
@@ -576,23 +582,20 @@ static COMMAND_TOOLS: &[&str] = &[
     "write_stdin",
 ];
 
-static STRICT_SANDBOX_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [
-        r"\b(curl|wget|nc|ncat|ssh|scp|rsync)\b",
-        r"\b(eval|source)\b",
-        r"\brm\s+-rf\s+/(?!tmp\b)",
-        r"\bchmod\s+(-r\s+)?7[0-7]{2}\b",
-    ]
-    .iter()
-    .filter_map(|pat| Regex::new(pat).ok())
-    .collect()
+// The original code stored patterns in `Vec<Regex>` via `filter_map(ok)`, which
+// silently dropped any pattern that failed to compile. The patterns containing
+// negative lookahead `(?!tmp\b)` are not supported by the `regex` crate and
+// were always silently dropped. These combined DFAs include only the patterns
+// that actually compiled in the original code.
+static STRICT_SANDBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?:\b(?:curl|wget|nc|ncat|ssh|scp|rsync)\b|\b(?:eval|source)\b|\bchmod\s+(?:-r\s+)?7[0-7]{2}\b)",
+    )
+    .expect("STRICT_SANDBOX_REGEX is a valid pattern")
 });
 
-static BALANCED_SANDBOX_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
-    [r"\brm\s+-rf\s+/(?!tmp\b)", r"\bcurl\s+.*\|\s*(sh|bash)\b"]
-        .iter()
-        .filter_map(|pat| Regex::new(pat).ok())
-        .collect()
+static BALANCED_SANDBOX_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bcurl\s+.*\|\s*(?:sh|bash)\b").expect("BALANCED_SANDBOX_REGEX is a valid pattern")
 });
 
 fn sandbox_profile_violation(
@@ -607,23 +610,19 @@ fn sandbox_profile_violation(
         return None;
     }
     let cmd = command_field_from_params(params)?.to_ascii_lowercase();
-    let patterns: &[Regex] = match profile {
-        ExecutionSandboxProfile::Strict => &STRICT_SANDBOX_PATTERNS,
-        ExecutionSandboxProfile::Balanced => &BALANCED_SANDBOX_PATTERNS,
-        ExecutionSandboxProfile::Dev => &[],
+    let regex = match profile {
+        ExecutionSandboxProfile::Strict => &*STRICT_SANDBOX_REGEX,
+        ExecutionSandboxProfile::Balanced => &*BALANCED_SANDBOX_REGEX,
+        ExecutionSandboxProfile::Dev => return None,
     };
-    for re in patterns {
-        if re.is_match(&cmd) {
-            return Some((
-                format!(
-                    "sandbox profile blocked command by pattern '{}'",
-                    re.as_str()
-                ),
-                "sandbox_profile_violation".to_string(),
-            ));
-        }
+    if regex.is_match(&cmd) {
+        Some((
+            "sandbox profile violation: command matches a blocked pattern".to_string(),
+            "sandbox_profile_violation".to_string(),
+        ))
+    } else {
+        None
     }
-    None
 }
 
 pub fn default_tool_policy_counters_path() -> PathBuf {
@@ -832,11 +831,13 @@ mod tests {
         assert_eq!(decision.code.as_deref(), Some("tool_denylisted"));
         assert!(!decision.simulated);
         assert!(decision.would_block);
-        assert!(decision
-            .reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("denylisted"));
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("denylisted")
+        );
     }
 
     #[test]
@@ -861,11 +862,13 @@ mod tests {
         let decision = policy.evaluate("terminal", &serde_json::json!({"cmd":"rm -rf /tmp/x"}));
         assert!(!decision.allow);
         assert_eq!(decision.code.as_deref(), Some("params_pattern_denied"));
-        assert!(decision
-            .reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("deny pattern"));
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("deny pattern")
+        );
     }
 
     #[test]
@@ -1073,11 +1076,13 @@ mod tests {
         assert!(decision.audited_only);
         assert!(decision.simulated);
         assert!(decision.would_block);
-        assert!(decision
-            .reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("would block"));
+        assert!(
+            decision
+                .reason
+                .as_deref()
+                .unwrap_or("")
+                .contains("would block")
+        );
     }
 
     #[test]
@@ -1093,10 +1098,12 @@ mod tests {
         assert_eq!(parsed["_tool_policy_simulation"]["mode"], "simulate");
         assert_eq!(parsed["_tool_policy_simulation"]["would_block"], true);
         assert_eq!(parsed["_tool_policy_simulation"]["code"], "tool_denylisted");
-        assert!(parsed["_tool_policy_warning"]
-            .as_str()
-            .unwrap_or("")
-            .contains("would block"));
+        assert!(
+            parsed["_tool_policy_warning"]
+                .as_str()
+                .unwrap_or("")
+                .contains("would block")
+        );
     }
 
     #[test]
