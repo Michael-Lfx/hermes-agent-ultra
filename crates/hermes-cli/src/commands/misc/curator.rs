@@ -10,14 +10,15 @@ pub(crate) async fn handle_curator_command(
     args: &[&str],
 ) -> Result<CommandResult, AgentError> {
     let skills_dir = hermes_config::hermes_home().join("skills");
+    let store = hermes_skills::UsageStore::with_dir(skills_dir.clone());
     let curator_config = curator_config_from_app(host);
 
     let sub = args.first().map(|s| s.to_lowercase()).unwrap_or_default();
 
     match sub.as_str() {
         "status" | "" => {
-            let rows = hermes_skills::agent_created_report(&skills_dir);
-            let state = hermes_skills::load_curator_state(&skills_dir);
+            let rows = store.agent_created_report();
+            let state = hermes_skills::load_curator_state(&store);
 
             if rows.is_empty() {
                 let mut out = String::from("No agent-created skills found.\n\n");
@@ -95,10 +96,10 @@ pub(crate) async fn handle_curator_command(
             let dry_run = args
                 .get(1)
                 .is_some_and(|s| s.eq_ignore_ascii_case("--dry-run"));
-            let before_state = hermes_skills::load_curator_state(&skills_dir);
+            let before_state = hermes_skills::load_curator_state(&store);
             if dry_run {
                 let result =
-                    hermes_skills::apply_automatic_transitions(&skills_dir, &curator_config);
+                    hermes_skills::apply_automatic_transitions(&store, &curator_config);
                 let report_text = format!(
                     "Curator dry-run: checked={} stale={} archived={} reactivated={}",
                     result.checked, result.marked_stale, result.archived, result.reactivated
@@ -108,20 +109,20 @@ pub(crate) async fn handle_curator_command(
             }
 
             // Run the curator
-            let result = hermes_skills::apply_automatic_transitions(&skills_dir, &curator_config);
+            let result = hermes_skills::apply_automatic_transitions(&store, &curator_config);
             let report_text = format!(
                 "Curator run: checked={} stale={} archived={} reactivated={}",
                 result.checked, result.marked_stale, result.archived, result.reactivated
             );
             emit_command_output(host, report_text);
-            let after_state = hermes_skills::load_curator_state(&skills_dir);
+            let after_state = hermes_skills::load_curator_state(&store);
             // Detect if a backup was created during curator run (state changed)
             if before_state.last_run_at != after_state.last_run_at {
                 emit_command_output(host, "\n[Curator state updated]");
             }
         }
         "history" => {
-            let state = hermes_skills::load_curator_state(&skills_dir);
+            let state = hermes_skills::load_curator_state(&store);
             if state.run_count == 0 {
                 emit_command_output(host, "No curator run history yet.");
             } else {
