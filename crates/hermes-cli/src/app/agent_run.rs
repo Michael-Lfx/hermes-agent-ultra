@@ -176,7 +176,7 @@ impl App {
                     if result.turn_exit_reason == "plan_awaiting_approval" {
                         if let Some(plan) = result.plan_pending.as_deref() {
                             Self::emit_lifecycle_event(
-                                &self.stream_handle_shared,
+                                &self.stream.stream_handle_shared,
                                 format!(
                                     "Plan awaiting approval. Review the plan above, then: \
                                      /plan-mode approve | reject [feedback] | edit <revised plan>"
