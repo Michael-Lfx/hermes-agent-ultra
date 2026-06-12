@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 
 use hermes_skills::read_hub_lock;
 
-use crate::sanitize::{contains_residual_pii, sanitize_text, slugify_name};
+use crate::sanitize::{contains_residual_pii, normalize_domain_key, sanitize_text, slugify_name};
 use crate::types::{
     SkillProvenance, SkillReferenceSnippet, SkillStructure, SkillTriggerHints,
     WorkPackageSkillPayload, sha256_hex,
@@ -97,9 +97,13 @@ pub fn build_work_package_skill(
         return None;
     }
     let domain_keys = if options.domain_keys.is_empty() {
-        vec![format!("topic:{name_slug}")]
+        vec![normalize_domain_key(&format!("topic:{name_slug}"))]
     } else {
-        options.domain_keys.clone()
+        options
+            .domain_keys
+            .iter()
+            .map(|k| normalize_domain_key(k))
+            .collect()
     };
     let body = body_for_contribution(&content);
     let references_redacted = collect_skill_auxiliary_files(skill_dir);

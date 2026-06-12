@@ -1,5 +1,6 @@
 //! Band metrics for work package payloads.
 
+use hermes_insights::sanitize::normalize_duration_band;
 use hermes_insights::types::WorkMetricsPayload;
 
 pub fn build_work_metrics(
@@ -9,7 +10,7 @@ pub fn build_work_metrics(
 ) -> WorkMetricsPayload {
     WorkMetricsPayload {
         turn_band: band_turns(user_turns),
-        duration_band: "unknown".to_string(),
+        duration_band: normalize_duration_band("unknown"),
         tool_failure_band: band_tool_failures(tool_failures),
         skill_patch_count_band: band_skill_patches(skill_patch_count),
     }

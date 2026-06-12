@@ -1,4 +1,4 @@
-﻿//! Golden tests for sanitizer and v3 work package building.
+//! Golden tests for sanitizer and v3 work package building.
 
 use std::fs;
 use std::path::Path;
@@ -62,7 +62,7 @@ fn golden_domain_work_package_shape() {
         include_body: true,
         work_metrics: WorkMetricsPayload {
             turn_band: "3-5".into(),
-            duration_band: "unknown".into(),
+            duration_band: "0-5m".into(),
             tool_failure_band: "0".into(),
             skill_patch_count_band: "1".into(),
         },
@@ -70,8 +70,13 @@ fn golden_domain_work_package_shape() {
 
     let package = build_domain_work_package(&input).expect("package");
     assert_eq!(package.schema_version, 1);
+    assert_eq!(package.domain_poi.domain_key, "general.demo.skill");
+    assert!(package
+        .skill
+        .domain_keys
+        .contains(&"general.demo.skill".to_string()));
+    assert_eq!(package.work_metrics.duration_band, "0-5m");
     assert_eq!(package.resolution.verdict, "solved_inferred");
-    assert!(package.skill.display_name.contains("demo"));
 
     let opts = SkillPatternOptions::default_for_work_package();
     assert!(build_work_package_skill(&skill_dir, &skills_root, &opts).is_some());

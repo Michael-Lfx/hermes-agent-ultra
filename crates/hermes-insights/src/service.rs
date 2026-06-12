@@ -3,11 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use hermes_config::InsightsContributionConfig;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::client::{ContributionClient, FlushResult};
 use crate::outbox::ContributionOutbox;
-use crate::paths::{audit_path, ensure_state_dir, outbox_path};
+use crate::paths::{append_audit_event, ensure_state_dir, outbox_path};
 use crate::session_skills::record_skill_touch;
 use crate::skill::{find_skill_dir_by_slug, SkillChangeKind};
 use crate::types::{
@@ -50,41 +50,50 @@ impl ContributionService {
     }
 
     fn audit_drop(&self, reason: &str, detail: &str) {
-        let path = audit_path(&self.hermes_home);
-        let line = serde_json::json!({
-            "ts": chrono::Utc::now().to_rfc3339(),
-            "event": "dropped",
-            "reason": reason,
-            "detail": detail,
-        });
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            use std::io::Write;
-            let _ = writeln!(file, "{line}");
-        }
+        warn!(reason, detail, "insights: contribution dropped");
+        append_audit_event(&self.hermes_home, reason, detail);
     }
 
-    fn try_enqueue(&self, envelope: ContributionEnvelope) {
-        match self.outbox.enqueue(envelope) {
-            Ok(true) => debug!("insights: enqueued domain_work_package"),
-            Ok(false) => debug!("insights: duplicate content_hash skipped"),
-            Err(e) => warn!("insights: outbox enqueue failed: {e}"),
+    fn try_enqueue(&self, envelope: &ContributionEnvelope) -> bool {
+        match self.outbox.enqueue(envelope.clone()) {
+            Ok(true) => {
+                info!("insights: enqueued domain_work_package");
+                true
+            }
+            Ok(false) => {
+                info!("insights: duplicate content_hash skipped (not re-enqueued)");
+                false
+            }
+            Err(e) => {
+                warn!("insights: outbox enqueue failed: {e}");
+                false
+            }
         }
     }
 
     pub fn enqueue_work_package(&self, input: &WorkPackageBuildInput) -> bool {
         if !self.config.enabled {
+            warn!(work_id = %input.work_id, "insights: contribution master switch off — skip enqueue");
             return false;
         }
         let Some(package) = build_domain_work_package(input) else {
-            self.audit_drop("work_package_build_failed", &input.work_id);
+            self.audit_drop(
+                "work_package_build_failed",
+                &format!("work_id={}", input.work_id),
+            );
             return false;
         };
         if !package_reportable(&self.config, &package.resolution) {
-            self.audit_drop("resolution_gate", &package.resolution.verdict);
+            self.audit_drop(
+                "resolution_gate",
+                &format!(
+                    "work_id={} verdict={} evidence_tier={} min_tier={}",
+                    input.work_id,
+                    package.resolution.verdict,
+                    package.resolution.evidence_tier,
+                    self.config.min_evidence_tier
+                ),
+            );
             return false;
         }
         let collected_at = chrono::Utc::now().to_rfc3339();
@@ -99,8 +108,15 @@ impl ContributionService {
                 return false;
             }
         };
-        self.try_enqueue(envelope);
-        true
+        info!(
+            work_id = %input.work_id,
+            verdict = %package.resolution.verdict,
+            evidence_tier = %package.resolution.evidence_tier,
+            domain_key = %package.domain_poi.domain_key,
+            skill_slug = %package.skill.name_slug,
+            "insights: domain work package ready for outbox"
+        );
+        self.try_enqueue(&envelope)
     }
 
     pub fn preview_work_package(&self, input: &WorkPackageBuildInput) -> Option<ContributionEnvelope> {
@@ -224,18 +240,49 @@ impl ContributionService {
         inputs: Vec<WorkPackageBuildInput>,
     ) {
         if !config.enabled || !config.on_session_end {
+            debug!(
+                enabled = config.enabled,
+                on_session_end = config.on_session_end,
+                "insights: spawn_work_packages skipped by config"
+            );
             return;
         }
+        let package_count = inputs.len();
+        let upload_ready = config.upload_ready();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let Ok(svc) = ContributionService::open(hermes_home, config.clone()) else {
+            info!(
+                package_count,
+                upload_ready,
+                "insights: processing session-end work packages"
+            );
+            let Ok(svc) = ContributionService::open(hermes_home.clone(), config.clone()) else {
+                warn!(
+                    home = %hermes_home.display(),
+                    "insights: failed to open ContributionService for session-end upload"
+                );
                 return;
             };
+            let mut enqueued = 0u32;
             for input in inputs {
-                svc.enqueue_work_package(&input);
+                if svc.enqueue_work_package(&input) {
+                    enqueued += 1;
+                }
             }
+            info!(enqueued, package_count, "insights: session-end enqueue complete");
             if config.upload_ready() {
-                let _ = svc.flush().await;
+                match svc.flush().await {
+                    Ok(result) => info!(
+                        uploaded = result.uploaded,
+                        duplicates = result.duplicates,
+                        rejected = result.rejected,
+                        skipped_no_endpoint = result.skipped_no_endpoint,
+                        "insights: session-end flush complete"
+                    ),
+                    Err(e) => warn!("insights: session-end flush failed: {e}"),
+                }
+            } else {
+                info!("insights: upload not ready — packages remain in local outbox");
             }
         });
     }

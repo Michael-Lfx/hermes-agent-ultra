@@ -18,6 +18,28 @@ pub fn audit_path(hermes_home: &Path) -> PathBuf {
     state_dir(hermes_home).join("audit.jsonl")
 }
 
+/// Append a work-package gate / drop event (same file as contribution audit).
+pub fn append_audit_event(hermes_home: &Path, reason: &str, detail: &str) {
+    let path = audit_path(hermes_home);
+    let line = serde_json::json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "event": "dropped",
+        "reason": reason,
+        "detail": detail,
+    });
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        use std::io::Write;
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 /// Last batch POST body written by `flush` (for upload debugging).
 pub fn last_batch_path(hermes_home: &Path) -> PathBuf {
     state_dir(hermes_home).join("last_batch.json")

@@ -525,6 +525,14 @@ pub fn make_gateway_session_teardown_handler(deps: GatewayHandlerDeps) -> Sessio
 }
 
 async fn gateway_run_session_teardown(ctx: SessionTeardownContext, deps: GatewayHandlerDeps) {
+    tracing::info!(
+        reason = %ctx.reason,
+        session_id = %ctx.session_id,
+        session_key = %ctx.session_key,
+        platform = %ctx.platform,
+        message_count = ctx.messages.len(),
+        "gateway: session teardown — running agent session-end hooks"
+    );
     let gateway_ctx = GatewayRuntimeContext {
         session_key: ctx.session_key.clone(),
         session_id: ctx.session_id.clone(),
