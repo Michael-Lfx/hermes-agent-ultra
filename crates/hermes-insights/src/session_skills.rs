@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, warn};
 
 use crate::paths::state_dir;
 
@@ -23,6 +24,10 @@ fn session_skills_path(hermes_home: &Path) -> PathBuf {
 }
 
 pub fn set_active_session(hermes_home: &Path, session_id: &str) {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return;
+    }
     let path = session_skills_path(hermes_home);
     let mut file = SessionSkillsFile {
         session_id: session_id.to_string(),
@@ -34,7 +39,12 @@ pub fn set_active_session(hermes_home: &Path, session_id: &str) {
         if let Ok(existing) = serde_json::from_str::<SessionSkillsFile>(&raw) {
             if existing.session_id == session_id {
                 file = existing;
+            } else if existing.session_id.is_empty() {
+                // Skill touches may arrive before the session id is bound (gateway first turn).
+                file = existing;
+                file.session_id = session_id.to_string();
             }
+            // Different non-empty session id → fresh session, keep empty slugs.
         }
     }
     if let Some(parent) = path.parent() {
@@ -59,12 +69,31 @@ pub fn record_skill_touch(hermes_home: &Path, name_slug: &str, created: bool) {
         file.patch_count = file.patch_count.saturating_add(1);
     }
     write_file(&path, &file);
+    debug!(
+        session_id = %file.session_id,
+        slug,
+        created,
+        patch_count = file.patch_count,
+        "insights: recorded session skill touch"
+    );
 }
 
 pub fn drain_session_skills(hermes_home: &Path, session_id: &str) -> SessionSkillSummary {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return SessionSkillSummary::default();
+    }
     let path = session_skills_path(hermes_home);
     let file = read_file(&path);
-    if file.session_id != session_id {
+    let session_matches = file.session_id == session_id
+        || (file.session_id.is_empty() && !file.slugs.is_empty());
+    if !session_matches {
+        warn!(
+            expected_session_id = session_id,
+            file_session_id = %file.session_id,
+            slug_count = file.slugs.len(),
+            "insights: session_skills drain skipped — session_id mismatch"
+        );
         return SessionSkillSummary::default();
     }
     let summary = SessionSkillSummary {
@@ -73,6 +102,13 @@ pub fn drain_session_skills(hermes_home: &Path, session_id: &str) -> SessionSkil
         skill_created: file.created,
     };
     let _ = std::fs::remove_file(path);
+    debug!(
+        session_id,
+        slug_count = summary.slugs.len(),
+        patch_count = summary.patch_count,
+        skill_created = summary.skill_created,
+        "insights: drained session skill binding"
+    );
     summary
 }
 
@@ -96,5 +132,51 @@ fn write_file(path: &Path, file: &SessionSkillsFile) {
     }
     if let Ok(raw) = serde_json::to_string_pretty(file) {
         let _ = std::fs::write(path, raw);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn set_active_session_adopts_orphaned_skill_touches() {
+        let tmp = TempDir::new().unwrap();
+        record_skill_touch(tmp.path(), "my-skill", true);
+        set_active_session(tmp.path(), "session-uuid-a");
+        let summary = drain_session_skills(tmp.path(), "session-uuid-a");
+        assert_eq!(summary.slugs, vec!["my-skill".to_string()]);
+        assert!(summary.skill_created);
+    }
+
+    #[test]
+    fn session_end_does_not_wipe_when_rebinding_same_session() {
+        let tmp = TempDir::new().unwrap();
+        set_active_session(tmp.path(), "session-uuid-a");
+        record_skill_touch(tmp.path(), "my-skill", false);
+        set_active_session(tmp.path(), "session-uuid-a");
+        let summary = drain_session_skills(tmp.path(), "session-uuid-a");
+        assert_eq!(summary.slugs, vec!["my-skill".to_string()]);
+    }
+
+    #[test]
+    fn new_session_clears_previous_session_slugs() {
+        let tmp = TempDir::new().unwrap();
+        set_active_session(tmp.path(), "session-a");
+        record_skill_touch(tmp.path(), "old-skill", false);
+        set_active_session(tmp.path(), "session-b");
+        record_skill_touch(tmp.path(), "new-skill", true);
+        let summary = drain_session_skills(tmp.path(), "session-b");
+        assert_eq!(summary.slugs, vec!["new-skill".to_string()]);
+        assert!(summary.skill_created);
+    }
+
+    #[test]
+    fn drain_accepts_orphan_slugs_without_session_id() {
+        let tmp = TempDir::new().unwrap();
+        record_skill_touch(tmp.path(), "orphan-skill", true);
+        let summary = drain_session_skills(tmp.path(), "session-uuid-a");
+        assert_eq!(summary.slugs, vec!["orphan-skill".to_string()]);
     }
 }

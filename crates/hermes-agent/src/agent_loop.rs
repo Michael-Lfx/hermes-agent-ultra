@@ -1,4 +1,4 @@
-//! Core agent loop engine.
+﻿//! Core agent loop engine.
 //!
 //! The `AgentLoop` orchestrates the autonomous agent cycle:
 //! 1. Send messages + tools to the LLM
@@ -1850,7 +1850,6 @@ impl AgentLoop {
             .session_id
             .clone()
             .unwrap_or_else(|| "default".to_string());
-        touch_active_session(&hermes_home, &session_id);
         let auxiliary = if interest_cfg.session_end_llm_enabled() {
             tracing::warn!(
                 "interest: session-end LLM extraction is enabled; user-only messages may be sent to the auxiliary LLM provider"
@@ -2200,6 +2199,13 @@ impl AgentLoop {
             updated.session_id = Some(sid.to_string());
             *guard = Arc::new(updated);
         }
+        let hermes_home = self
+            .config()
+            .hermes_home
+            .as_ref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(hermes_config::hermes_home);
+        touch_active_session(&hermes_home, sid);
     }
 
     /// Current runtime session id from agent config.

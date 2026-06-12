@@ -52,6 +52,14 @@ pub struct InsightsContributionConfig {
     #[serde(default = "default_min_work_turns")]
     pub min_work_turns: u32,
 
+    /// Resolution labeling: `hybrid` (default), `llm`, or `rules`.
+    #[serde(default = "default_resolution_mode")]
+    pub resolution_mode: String,
+
+    /// Run resolution LLM at session end when mode is `llm` or `hybrid`.
+    #[serde(default = "default_resolution_llm_on_session_end")]
+    pub resolution_llm_on_session_end: bool,
+
     /// Legacy v2 skill age gate — kept for config.yaml / `hermes config` compat.
     #[serde(default = "default_skill_min_age_hours")]
     pub skill_min_age_hours: u32,
@@ -108,6 +116,14 @@ fn default_min_work_turns() -> u32 {
     2
 }
 
+fn default_resolution_mode() -> String {
+    "hybrid".to_string()
+}
+
+fn default_resolution_llm_on_session_end() -> bool {
+    true
+}
+
 fn default_upload_skills_refresh() -> bool {
     true
 }
@@ -125,6 +141,8 @@ impl Default for InsightsContributionConfig {
             exclude_verdicts: default_exclude_verdicts(),
             require_skill_binding: default_require_skill_binding(),
             min_work_turns: default_min_work_turns(),
+            resolution_mode: default_resolution_mode(),
+            resolution_llm_on_session_end: default_resolution_llm_on_session_end(),
             skill_min_age_hours: default_skill_min_age_hours(),
             upload_skills_refresh: default_upload_skills_refresh(),
             auth_token: None,
@@ -170,6 +188,33 @@ impl InsightsContributionConfig {
     pub fn verdict_excluded(&self, verdict: &str) -> bool {
         self.exclude_verdicts.iter().any(|v| v == verdict)
     }
+
+    pub fn resolution_mode_normalized(&self) -> String {
+        self.resolution_mode.trim().to_ascii_lowercase()
+    }
+
+    pub fn resolution_uses_llm(&self) -> bool {
+        matches!(
+            self.resolution_mode_normalized().as_str(),
+            "llm" | "hybrid"
+        )
+    }
+
+    pub fn resolution_uses_rules(&self) -> bool {
+        matches!(
+            self.resolution_mode_normalized().as_str(),
+            "rules" | "hybrid"
+        )
+    }
+
+    /// Session-end resolution LLM when mode is `llm` or `hybrid`.
+    pub fn session_end_resolution_llm_enabled(&self) -> bool {
+        if !self.enabled || !self.resolution_uses_llm() {
+            return false;
+        }
+        self.resolution_llm_on_session_end
+            || crate::managed_gateway::env_var_enabled("HERMES_INSIGHTS_RESOLUTION_LLM")
+    }
 }
 
 #[cfg(test)]
@@ -208,6 +253,17 @@ mod tests {
         assert!(!cfg.upload_ready());
         cfg.auth_token = Some("eyJhbGciOiJIUzI1NiJ9.test".to_string());
         assert!(cfg.upload_ready());
+    }
+
+    #[test]
+    fn hybrid_resolution_defaults() {
+        let cfg = InsightsContributionConfig::default();
+        assert_eq!(cfg.resolution_mode, "hybrid");
+        assert!(cfg.resolution_llm_on_session_end);
+        assert!(!cfg.session_end_resolution_llm_enabled());
+        let mut enabled = cfg.clone();
+        enabled.enabled = true;
+        assert!(enabled.session_end_resolution_llm_enabled());
     }
 
     #[test]

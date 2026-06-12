@@ -1019,6 +1019,13 @@ fn apply_user_config_patch_dotted(
                 ))
             })?;
         }
+        ["insights", "contribution", "resolution_mode"] => {
+            config.insights.contribution.resolution_mode = value.trim().to_string();
+        }
+        ["insights", "contribution", "resolution_llm_on_session_end"] => {
+            config.insights.contribution.resolution_llm_on_session_end =
+                parse_bool_config_value(value, "insights.contribution.resolution_llm_on_session_end")?;
+        }
         ["insights", "contribution", "skill_min_age_hours"] => {
             config.insights.contribution.skill_min_age_hours = value.parse().map_err(|_| {
                 ConfigError::ValidationError(format!(
@@ -1336,6 +1343,16 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
         }
         ["insights", "contribution", "min_work_turns"] => {
             Ok(config.insights.contribution.min_work_turns.to_string())
+        }
+        ["insights", "contribution", "resolution_mode"] => {
+            Ok(config.insights.contribution.resolution_mode.clone())
+        }
+        ["insights", "contribution", "resolution_llm_on_session_end"] => {
+            Ok(config
+                .insights
+                .contribution
+                .resolution_llm_on_session_end
+                .to_string())
         }
         ["insights", "contribution", "upload_skills_refresh"] => {
             Ok(config.insights.contribution.upload_skills_refresh.to_string())

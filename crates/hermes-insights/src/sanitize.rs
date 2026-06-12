@@ -12,6 +12,12 @@ static GIT_REMOTE_RE: LazyLock<Regex> =
 static ABS_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)(?:^|[\s"'`])([~/][\w./\\-]+|[A-Za-z]:\\[\w\\.-]+)"#).unwrap()
 });
+static V3_DOMAIN_KEY_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9._-]{2,127}$").unwrap());
+static V3_TAXONOMY_CODE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-z0-9.]+$").unwrap());
+
+const VALID_DURATION_BANDS: &[&str] = &["0-5m", "5-15m", "15-30m", "30m+"];
 
 const POI_BLOCKLIST: &[&str] = &[
     "user", "assistant", "system", "memory", "interest", "config", "session", "prompt",
@@ -194,6 +200,202 @@ pub fn taxonomy_hints_for(readable_key: &str) -> Vec<String> {
     hint.map(|h| vec![h.to_string()]).unwrap_or_default()
 }
 
+const DOMAIN_KEY_WEAK_SEGMENTS: &[&str] = &[
+    "skill",
+    "skills",
+    "keyword",
+    "topic",
+    "path",
+    "user",
+    "agent",
+    "tool",
+    "tools",
+    "help",
+    "manage",
+    "create",
+    "update",
+    "patch",
+    "unknown",
+    "session",
+    "general",
+    "domain",
+    "file",
+    "code",
+    "test",
+    "error",
+    "content",
+    "message",
+    "assistant",
+    "hermes",
+    "gateway",
+];
+
+/// True when a normalized v3 `domain_key` is too generic for ops analytics.
+pub fn is_weak_v3_domain_key(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    if key.is_empty() || key == "general.unknown" {
+        return true;
+    }
+    if DOMAIN_KEY_WEAK_SEGMENTS.contains(&key.as_str()) {
+        return true;
+    }
+    if let Some(tail) = key.strip_prefix("general.") {
+        let segments: Vec<&str> = tail.split('.').filter(|s| !s.is_empty()).collect();
+        if segments.len() == 1 && DOMAIN_KEY_WEAK_SEGMENTS.contains(&segments[0]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a legacy/raw domain id is unsuitable before normalization (`topic:skill`, etc.).
+pub fn is_weak_domain_key_raw(raw: &str) -> bool {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower.starts_with("keyword:") || lower.starts_with("path:") {
+        return true;
+    }
+    for prefix in ["topic:", "lang:", "tech:"] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            if rest.is_empty() || DOMAIN_KEY_WEAK_SEGMENTS.contains(&rest) {
+                return true;
+            }
+            if prefix == "topic:" && rest.starts_with("domain-") && rest.len() <= 16 {
+                return true;
+            }
+        }
+    }
+    is_weak_v3_domain_key(&normalize_domain_key(raw))
+}
+
+/// Whether `domain_key` matches v3 ingest schema (`SERVER_V3_DOMAIN_WORK_PACKAGE` §4.2).
+pub fn is_valid_v3_domain_key(key: &str) -> bool {
+    V3_DOMAIN_KEY_RE.is_match(key.trim())
+}
+
+/// Map legacy POI keys (`topic:`, `lang:`, `tech:`) to v3 `domain_key` form.
+pub fn normalize_domain_key(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "general.unknown".to_string();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if is_valid_v3_domain_key(&lower) {
+        return lower;
+    }
+    if let Some(rest) = lower.strip_prefix("topic:") {
+        return clamp_v3_domain_key(&join_domain_segments(&["general"], rest));
+    }
+    if let Some(rest) = lower.strip_prefix("lang:") {
+        return clamp_v3_domain_key(&join_domain_segments(&["software", "lang"], rest));
+    }
+    if let Some(rest) = lower.strip_prefix("tech:") {
+        return clamp_v3_domain_key(&join_domain_segments(&["software", "tech"], rest));
+    }
+    if lower.starts_with("interest:") {
+        let hash = crate::types::sha256_hex(lower.as_bytes());
+        return clamp_v3_domain_key(&format!("session.{hash}"));
+    }
+    clamp_v3_domain_key(&sanitize_freeform_domain_key(&lower))
+}
+
+/// Normalize optional taxonomy code to v3 `[a-z0-9.]+` or drop when invalid.
+pub fn normalize_taxonomy_code(raw: &str) -> Option<String> {
+    let lower = raw.trim().to_ascii_lowercase();
+    if lower.is_empty() {
+        return None;
+    }
+    let cleaned = lower
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' {
+                c
+            } else {
+                '.'
+            }
+        })
+        .collect::<String>();
+    let collapsed = collapse_char(&cleaned, '.');
+    if V3_TAXONOMY_CODE_RE.is_match(&collapsed) {
+        Some(collapsed)
+    } else {
+        None
+    }
+}
+
+/// Map session duration band to v3 allowed enum; unknown → conservative default.
+pub fn normalize_duration_band(raw: &str) -> String {
+    let band = raw.trim();
+    if VALID_DURATION_BANDS.contains(&band) {
+        band.to_string()
+    } else {
+        "0-5m".to_string()
+    }
+}
+
+fn join_domain_segments(prefix: &[&str], tail: &str) -> String {
+    let tail_seg = domain_segment_from_text(tail);
+    if tail_seg.is_empty() {
+        prefix.join(".")
+    } else {
+        format!("{}.{}", prefix.join("."), tail_seg)
+    }
+}
+
+fn domain_segment_from_text(text: &str) -> String {
+    slugify_name(text).replace('-', ".")
+}
+
+fn sanitize_freeform_domain_key(raw: &str) -> String {
+    let mut out = String::new();
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
+            out.push(c.to_ascii_lowercase());
+        } else if c.is_whitespace() || c == ':' || c == '/' {
+            out.push('.');
+        }
+    }
+    collapse_char(&out, '.')
+}
+
+fn collapse_char(input: &str, ch: char) -> String {
+    let mut out = String::new();
+    let mut prev_dot = false;
+    for c in input.chars() {
+        if c == ch {
+            if !prev_dot && !out.is_empty() {
+                out.push(ch);
+            }
+            prev_dot = true;
+        } else {
+            out.push(c);
+            prev_dot = false;
+        }
+    }
+    out.trim_matches(ch).to_string()
+}
+
+fn clamp_v3_domain_key(raw: &str) -> String {
+    let mut key = collapse_char(raw.trim(), '.');
+    if key.is_empty() {
+        key = "general.unknown".to_string();
+    }
+    if !key
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        key = format!("general.{key}");
+    }
+    if key.len() > 128 {
+        key = key.chars().take(128).collect();
+    }
+    if !is_valid_v3_domain_key(&key) {
+        let hash = &crate::types::sha256_hex(key.as_bytes())[..8];
+        key = format!("general.{hash}");
+    }
+    key
+}
+
 pub fn slugify_name(name: &str) -> String {
     let lower = name.trim().to_ascii_lowercase();
     let slug: String = lower
@@ -255,5 +457,33 @@ mod tests {
         ));
         assert!(is_contributable_for_ops("interest:abc", "Beijing dialect"));
         assert!(is_contributable_for_ops("lang:rust", "Rust"));
+    }
+
+    #[test]
+    fn normalize_domain_key_maps_legacy_prefixes() {
+        assert_eq!(
+            normalize_domain_key("topic:douyin-content"),
+            "general.douyin.content"
+        );
+        assert_eq!(normalize_domain_key("lang:rust"), "software.lang.rust");
+        assert_eq!(normalize_domain_key("tech:docker"), "software.tech.docker");
+        assert_eq!(
+            normalize_domain_key("finance.reconciliation"),
+            "finance.reconciliation"
+        );
+        assert!(is_valid_v3_domain_key(&normalize_domain_key("topic:session-7852986e")));
+    }
+
+    #[test]
+    fn normalize_duration_band_rejects_unknown() {
+        assert_eq!(normalize_duration_band("unknown"), "0-5m");
+        assert_eq!(normalize_duration_band("15-30m"), "15-30m");
+    }
+
+    #[test]
+    fn weak_domain_keys_detected() {
+        assert!(is_weak_v3_domain_key("general.skill"));
+        assert!(is_weak_domain_key_raw("topic:skill"));
+        assert!(!is_weak_v3_domain_key("creative.douyin.content"));
     }
 }

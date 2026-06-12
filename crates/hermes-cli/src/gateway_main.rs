@@ -935,7 +935,7 @@ pub(crate) fn build_agent_for_gateway_context(
         ctx.session_key.clone()
     };
     if !effective_session_id.trim().is_empty() {
-        agent_config.session_id = Some(effective_session_id);
+        agent_config.session_id = Some(effective_session_id.clone());
     }
     let home = ctx
         .home
@@ -949,6 +949,13 @@ pub(crate) fn build_agent_for_gateway_context(
             &mut agent_config,
             Path::new(h),
         );
+    }
+    if !effective_session_id.trim().is_empty() {
+        let hermes_home = home
+            .map(Path::new)
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(hermes_config::hermes_home);
+        hermes_agent::work_session::touch_active_session(&hermes_home, &effective_session_id);
     }
     hermes_agent::attach_agent_runtime(
         AgentLoop::new(agent_config, agent_tools, provider)

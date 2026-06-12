@@ -13,8 +13,8 @@ pub mod types;
 
 pub use client::{ContributionClient, FlushResult};
 pub use paths::{
-    audit_path, installation_id_path, last_batch_path, load_or_create_installation_id,
-    outbox_path, state_dir,
+    append_audit_event, audit_path, installation_id_path, last_batch_path,
+    load_or_create_installation_id, outbox_path, state_dir,
 };
 pub use service::ContributionService;
 pub use session_skills::{SessionSkillSummary, drain_session_skills, record_skill_touch, set_active_session};
