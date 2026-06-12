@@ -193,14 +193,6 @@ impl UsageStore {
         if name.is_empty() {
             return Ok(());
         }
-        if is_protected_skill(&self.skills_dir, name) {
-            tracing::debug!(
-                skill = %name,
-                skills_dir = %self.skills_dir.display(),
-                "skipping usage mutation for protected skill"
-            );
-            return Ok(());
-        }
         let _lock = self.acquire_usage_lock()?;
         let mut usage = self.load_usage();
         let rec = usage.entry(name.to_string()).or_default();
@@ -449,12 +441,6 @@ impl UsageStore {
         let name = skill_name.trim();
         if name.is_empty() {
             return Ok((false, "Skill name is required.".to_string()));
-        }
-        if is_protected_skill(&self.skills_dir, name) {
-            return Ok((
-                false,
-                format!("Skill '{name}' is bundled or hub-installed and cannot be archived."),
-            ));
         }
         let Some(src) = find_skill_dir(&self.skills_dir, name) else {
             return Ok((false, format!("Skill '{name}' not found.")));
@@ -747,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn protected_skills_do_not_get_usage_records() {
+    fn protected_skills_can_get_usage_records() {
         let dir = tempdir().unwrap();
         let skills = dir.path();
         let store = make_store(&dir);
@@ -762,7 +748,10 @@ mod tests {
         store.bump_view("bundled").unwrap();
         store.bump_use("hubbed").unwrap();
         store.set_state("bundled", STATE_ARCHIVED).unwrap();
-        assert!(store.load_usage().is_empty());
+        // Preset skills now receive normal usage records — only curator
+        // operations are blocked via mark_agent_created / auto-heal.
+        let usage = store.load_usage();
+        assert!(!usage.is_empty());
         assert!(!is_agent_created(skills, "bundled"));
         assert!(!is_agent_created(skills, "hubbed"));
         assert!(is_agent_created(skills, "mine"));
@@ -833,7 +822,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_refuses_protected_and_restore_refuses_shadowing() {
+    fn archive_allows_protected_and_restore_refuses_shadowing() {
         let dir = tempdir().unwrap();
         let skills = dir.path();
         let store = make_store(&dir);
@@ -841,11 +830,14 @@ mod tests {
         store.archive_skill("shared").unwrap();
         write_skill(skills, "shared", None);
         fs::write(skills.join(".bundled_manifest"), "shared:abc\n").unwrap();
+        // Restore refuses to shadow an existing skill (protected or not).
         let (ok, msg) = store.restore_skill("shared").unwrap();
         assert!(!ok);
         assert!(msg.contains("shadow"));
+        // Archiving a protected skill is now allowed — only curator operations
+        // are blocked on protected skills.
         let (ok, _) = store.archive_skill("shared").unwrap();
-        assert!(!ok);
+        assert!(ok);
     }
 
     #[test]
