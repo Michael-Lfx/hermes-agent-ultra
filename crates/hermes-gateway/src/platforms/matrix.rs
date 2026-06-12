@@ -50,7 +50,10 @@ use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter};
-use crate::platforms::helpers::{media_category, mime_from_extension};
+use crate::platforms::helpers::{
+    image_extension_from_content_type, image_fallback_text, media_category, mime_from_extension,
+    normalized_image_content_type, parse_env_bool, remote_image_file_name,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -144,7 +147,7 @@ struct MatrixNativeDecryptConfig {
 
 impl MatrixNativeDecryptConfig {
     fn from_env() -> Option<Self> {
-        if !Self::env_truthy(NATIVE_DECRYPT_ENABLED_ENV) {
+        if !parse_env_bool(NATIVE_DECRYPT_ENABLED_ENV, false) {
             return None;
         }
 
@@ -154,16 +157,6 @@ impl MatrixNativeDecryptConfig {
             .filter(|v| !v.is_empty());
 
         Some(Self { device_id_override })
-    }
-
-    fn env_truthy(key: &str) -> bool {
-        std::env::var(key)
-            .ok()
-            .map(|v| {
-                let normalized = v.trim().to_ascii_lowercase();
-                matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-            })
-            .unwrap_or(false)
     }
 }
 
@@ -594,74 +587,6 @@ pub fn mxc_to_http(homeserver_url: &str, mxc_uri: &str) -> Option<String> {
         server,
         media_id
     ))
-}
-
-fn normalized_image_content_type(content_type: Option<&str>) -> Option<String> {
-    let normalized = content_type?
-        .split(';')
-        .next()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?
-        .to_ascii_lowercase();
-    if normalized.starts_with("image/") {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn image_extension_from_content_type(content_type: Option<&str>) -> Option<&'static str> {
-    let normalized = normalized_image_content_type(content_type)?;
-    match normalized.as_str() {
-        "image/jpeg" => Some("jpg"),
-        "image/png" => Some("png"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "image/bmp" => Some("bmp"),
-        "image/tiff" => Some("tiff"),
-        "image/svg+xml" => Some("svg"),
-        "image/heic" => Some("heic"),
-        "image/heif" => Some("heif"),
-        "image/avif" => Some("avif"),
-        _ => None,
-    }
-}
-
-fn remote_image_file_name(image_url: &str, content_type: Option<&str>) -> String {
-    let stripped = image_url
-        .split('#')
-        .next()
-        .unwrap_or(image_url)
-        .split('?')
-        .next()
-        .unwrap_or(image_url)
-        .trim_end_matches('/');
-    let base = stripped.rsplit('/').next().unwrap_or("").trim();
-    let mut file_name = if base.is_empty() {
-        "image".to_string()
-    } else {
-        base.to_string()
-    };
-
-    let has_extension = std::path::Path::new(&file_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some();
-
-    if !has_extension {
-        let ext = image_extension_from_content_type(content_type).unwrap_or("png");
-        file_name.push('.');
-        file_name.push_str(ext);
-    }
-
-    file_name
-}
-
-fn image_fallback_text(image_url: &str, caption: Option<&str>) -> String {
-    match caption.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(c) => format!("{c}\n{image_url}"),
-        None => image_url.to_string(),
-    }
 }
 
 // ---------------------------------------------------------------------------

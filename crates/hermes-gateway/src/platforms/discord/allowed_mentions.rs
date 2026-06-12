@@ -3,6 +3,8 @@
 use hermes_config::PlatformConfig;
 use serde_json::{Value, json};
 
+use crate::platforms::helpers::parse_bool_str;
+
 /// What mention types the bot may generate in outbound messages.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscordAllowedMentions {
@@ -76,11 +78,7 @@ fn env_bool_override(name: &str) -> Option<bool> {
 }
 
 pub fn parse_bool_like(raw: &str) -> bool {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => true,
-        "0" | "false" | "no" | "off" | "" => false,
-        _ => false,
-    }
+    parse_bool_str(raw)
 }
 
 #[cfg(test)]

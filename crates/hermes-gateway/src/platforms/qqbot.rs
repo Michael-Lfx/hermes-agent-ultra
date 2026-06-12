@@ -14,6 +14,7 @@ use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter};
+use crate::platforms::helpers::image_fallback_text;
 
 const QQ_TOKEN_URL: &str = "https://bots.qq.com/app/getAppAccessToken";
 const QQ_API_BASE: &str = "https://api.sgroup.qq.com";
@@ -158,13 +159,6 @@ impl QqBotAdapter {
             format!("{QQ_API_BASE}/v2/groups/{chat_id}/files")
         } else {
             format!("{QQ_API_BASE}/v2/users/{chat_id}/files")
-        }
-    }
-
-    fn image_fallback_text(image_url: &str, caption: Option<&str>) -> String {
-        match caption.map(str::trim).filter(|s| !s.is_empty()) {
-            Some(c) => format!("{c}\n{image_url}"),
-            None => image_url.to_string(),
         }
     }
 
@@ -374,7 +368,7 @@ impl PlatformAdapter for QqBotAdapter {
                     error = %err,
                     "QQBot image send failed; falling back to text"
                 );
-                let fallback = Self::image_fallback_text(image_url, caption);
+                let fallback = image_fallback_text(image_url, caption);
                 self.send_text(chat_id, &fallback).await
             }
         }
@@ -396,11 +390,11 @@ mod tests {
     #[test]
     fn qqbot_image_fallback_text_formats_caption() {
         assert_eq!(
-            QqBotAdapter::image_fallback_text("https://example.com/plot.png", Some("Daily chart")),
+            image_fallback_text("https://example.com/plot.png", Some("Daily chart")),
             "Daily chart\nhttps://example.com/plot.png"
         );
         assert_eq!(
-            QqBotAdapter::image_fallback_text("https://example.com/plot.png", Some("   ")),
+            image_fallback_text("https://example.com/plot.png", Some("   ")),
             "https://example.com/plot.png"
         );
     }

@@ -731,9 +731,7 @@ async fn apply_curator(
                     gw.execute_curator_pin_unpin(&name, false)
                 }
                 GatewayCommandResult::CuratorArchive { name } => gw.execute_curator_archive(&name),
-                GatewayCommandResult::CuratorRestore { name } => {
-                    gw.execute_curator_restore(&name)
-                }
+                GatewayCommandResult::CuratorRestore { name } => gw.execute_curator_restore(&name),
                 GatewayCommandResult::CuratorListArchived => gw.execute_curator_list_archived(),
                 _ => unreachable!("apply_curator called with non-curator variant"),
             };

@@ -27,6 +27,10 @@ use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter};
 use crate::gateway::IncomingMessage;
+use crate::platforms::helpers::{
+    image_extension_from_content_type, image_fallback_text, normalized_image_content_type,
+    remote_image_file_name,
+};
 
 #[path = "weixin_format.rs"]
 mod weixin_format;
@@ -1790,72 +1794,6 @@ pub async fn qr_login(
 
     println!("\n微信登录超时。");
     Err(GatewayError::Platform("weixin: QR login timed out".into()))
-}
-
-fn normalized_image_content_type(content_type: Option<&str>) -> Option<String> {
-    let normalized = content_type?
-        .split(';')
-        .next()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?
-        .to_ascii_lowercase();
-    if normalized.starts_with("image/") {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn image_extension_from_content_type(content_type: Option<&str>) -> Option<&'static str> {
-    let normalized = normalized_image_content_type(content_type)?;
-    match normalized.as_str() {
-        "image/jpeg" => Some("jpg"),
-        "image/png" => Some("png"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "image/bmp" => Some("bmp"),
-        "image/tiff" => Some("tiff"),
-        "image/svg+xml" => Some("svg"),
-        "image/heic" => Some("heic"),
-        "image/heif" => Some("heif"),
-        "image/avif" => Some("avif"),
-        _ => None,
-    }
-}
-
-fn remote_image_file_name(image_url: &str, content_type: Option<&str>) -> String {
-    let stripped = image_url
-        .split('#')
-        .next()
-        .unwrap_or(image_url)
-        .split('?')
-        .next()
-        .unwrap_or(image_url)
-        .trim_end_matches('/');
-    let base = stripped.rsplit('/').next().unwrap_or("").trim();
-    let mut file_name = if base.is_empty() {
-        "image".to_string()
-    } else {
-        base.to_string()
-    };
-
-    let has_extension = std::path::Path::new(&file_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some();
-    if !has_extension {
-        let ext = image_extension_from_content_type(content_type).unwrap_or("png");
-        file_name.push('.');
-        file_name.push_str(ext);
-    }
-    file_name
-}
-
-fn image_fallback_text(image_url: &str, caption: Option<&str>) -> String {
-    match caption.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(c) => format!("{c}\n{image_url}"),
-        None => image_url.to_string(),
-    }
 }
 
 #[async_trait]

@@ -22,6 +22,7 @@ use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter};
 use crate::gateway::IncomingMessage;
+use crate::platforms::helpers::parse_bool_str;
 
 pub const DEFAULT_SERVER: &str = "https://ntfy.sh";
 pub const ECHO_TAG: &str = "hermes-agent";
@@ -76,7 +77,7 @@ impl NtfyConfig {
         let markdown = extra_bool(extra, "markdown").unwrap_or_else(|| {
             std::env::var("NTFY_MARKDOWN")
                 .ok()
-                .map(|v| truthy(&v))
+                .map(|v| parse_bool_str(&v))
                 .unwrap_or(false)
         });
         let stream_timeout_secs = extra
@@ -116,17 +117,10 @@ fn extra_string(extra: &HashMap<String, serde_json::Value>, key: &str) -> Option
 fn extra_bool(extra: &HashMap<String, serde_json::Value>, key: &str) -> Option<bool> {
     match extra.get(key)? {
         serde_json::Value::Bool(v) => Some(*v),
-        serde_json::Value::String(v) => Some(truthy(v)),
+        serde_json::Value::String(v) => Some(parse_bool_str(v)),
         serde_json::Value::Number(n) => Some(n.as_i64().unwrap_or_default() != 0),
         _ => None,
     }
-}
-
-fn truthy(raw: &str) -> bool {
-    matches!(
-        raw.trim().to_ascii_lowercase().as_str(),
-        "1" | "true" | "yes" | "on"
-    )
 }
 
 #[derive(Debug, Clone, Deserialize)]

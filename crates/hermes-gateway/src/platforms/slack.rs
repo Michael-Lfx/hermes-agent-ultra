@@ -21,6 +21,8 @@ use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter, describe_secret};
+use crate::format::to_slack_mrkdwn;
+use crate::platforms::helpers::split_message_by_chars;
 
 /// Slack Web API base URL.
 const SLACK_API_BASE: &str = "https://slack.com/api";
@@ -702,7 +704,7 @@ impl SlackAdapter {
         text: &str,
         thread_ts: Option<&str>,
     ) -> Result<String, GatewayError> {
-        let chunks = split_message(text, MAX_MESSAGE_LENGTH);
+        let chunks = split_message_by_chars(text, MAX_MESSAGE_LENGTH);
         let mut last_ts = String::new();
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -1141,9 +1143,13 @@ impl PlatformAdapter for SlackAdapter {
         &self,
         chat_id: &str,
         text: &str,
-        _parse_mode: Option<ParseMode>,
+        parse_mode: Option<ParseMode>,
     ) -> Result<(), GatewayError> {
-        self.post_message(chat_id, text, None).await?;
+        let formatted = match parse_mode {
+            Some(ParseMode::Markdown) => to_slack_mrkdwn(text),
+            _ => text.to_string(),
+        };
+        self.post_message(chat_id, &formatted, None).await?;
         Ok(())
     }
 
@@ -1226,33 +1232,6 @@ fn reactions_toggle_enabled(raw: Option<&str>, default_enabled: bool) -> bool {
 }
 
 /// Split a message into chunks that fit within the given max length.
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < text.len() {
-        let end = (start + max_len).min(text.len());
-
-        if end >= text.len() {
-            chunks.push(text[start..].to_string());
-            break;
-        }
-
-        let break_at = text[start..end]
-            .rfind('\n')
-            .map(|pos| start + pos + 1)
-            .unwrap_or(end);
-
-        chunks.push(text[start..break_at].to_string());
-        start = break_at;
-    }
-
-    chunks
-}
 
 fn slack_image_url_blocks(image_url: &str, caption: Option<&str>) -> (serde_json::Value, String) {
     let caption = caption.map(str::trim).filter(|s| !s.is_empty());
@@ -1283,17 +1262,17 @@ mod tests {
 
     #[test]
     fn split_message_short() {
-        let chunks = split_message("hello", 4000);
+        let chunks = split_message_by_chars("hello", 4000);
         assert_eq!(chunks, vec!["hello"]);
     }
 
     #[test]
     fn split_message_long() {
         let text = "a".repeat(5000);
-        let chunks = split_message(&text, 4000);
+        let chunks = split_message_by_chars(&text, 4000);
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].len(), 4000);
-        assert_eq!(chunks[1].len(), 1000);
+        assert_eq!(chunks[0].chars().count(), 4000);
+        assert_eq!(chunks[1].chars().count(), 1000);
     }
 
     #[test]
@@ -1734,6 +1713,6 @@ mod tests {
     #[test]
     fn split_message_at_newline_boundary() {
         let text = format!("{}\n{}", "a".repeat(3999), "b".repeat(100));
-        assert_eq!(split_message(&text, 4000).len(), 2);
+        assert_eq!(split_message_by_chars(&text, 4000).len(), 2);
     }
 }

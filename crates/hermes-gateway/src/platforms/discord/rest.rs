@@ -29,50 +29,7 @@ pub fn truncate_to_char_limit(text: &str, max_chars: usize) -> String {
 }
 
 pub fn split_message(text: &str, max_chars: usize) -> Vec<String> {
-    if text.is_empty() {
-        return vec![String::new()];
-    }
-    if char_count(text) <= max_chars {
-        return vec![text.to_string()];
-    }
-    let mut chunks = Vec::new();
-    let mut rest = text;
-    while !rest.is_empty() {
-        if char_count(rest) <= max_chars {
-            chunks.push(rest.to_string());
-            break;
-        }
-
-        let mut end_byte = 0;
-        let mut count = 0;
-        for (byte_idx, ch) in rest.char_indices() {
-            count += 1;
-            end_byte = byte_idx + ch.len_utf8();
-            if count >= max_chars {
-                break;
-            }
-        }
-
-        if end_byte >= rest.len() {
-            chunks.push(rest.to_string());
-            break;
-        }
-
-        let break_at = rest[..end_byte]
-            .rfind('\n')
-            .map(|pos| pos + 1)
-            .filter(|&pos| pos > 0)
-            .unwrap_or(end_byte);
-
-        chunks.push(rest[..break_at].to_string());
-        rest = &rest[break_at..];
-        if break_at == 0 {
-            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
-            chunks.push(rest[..ch_len.min(rest.len())].to_string());
-            rest = &rest[ch_len.min(rest.len())..];
-        }
-    }
-    chunks
+    crate::platforms::helpers::split_message_by_chars(text, max_chars)
 }
 
 pub fn is_forum_channel_type(channel_type: Option<u8>) -> bool {

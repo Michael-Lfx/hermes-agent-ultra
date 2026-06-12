@@ -1187,7 +1187,7 @@ impl Gateway {
         let store = hermes_skills::UsageStore::new();
         let config = &self.config.curator;
         let result = hermes_skills::apply_automatic_transitions(&store, config);
-    
+
         let mut lines = vec![];
         if dry_run {
             lines.push("── curator dry-run ──".to_string());
@@ -1198,7 +1198,7 @@ impl Gateway {
         lines.push(format!("marked stale: {}", result.marked_stale));
         lines.push(format!("archived: {}", result.archived));
         lines.push(format!("reactivated: {}", result.reactivated));
-    
+
         if !dry_run {
             let mut state = hermes_skills::load_curator_state(&store);
             state.last_run_at = Some(chrono::Utc::now().to_rfc3339());
@@ -1209,10 +1209,12 @@ impl Gateway {
             ));
             let _ = hermes_skills::save_curator_state(&store, &state);
             lines.push("State updated.".to_string());
-            lines.push("\n🤖 LLM review is running in background, results will appear here shortly…"
-                .to_string());
+            lines.push(
+                "\n🤖 LLM review is running in background, results will appear here shortly…"
+                    .to_string(),
+            );
         }
-    
+
         lines.join("\n")
     }
 
@@ -1278,7 +1280,9 @@ impl Gateway {
                     let header = "📋 Curator LLM review complete:\n\n";
                     let truncated_body = Self::truncate_to_chars(&result, 1500);
                     let truncated = if result.chars().count() > 1500 {
-                        format!("{truncated_body}\n\n(truncated, check /curator status for full summary)")
+                        format!(
+                            "{truncated_body}\n\n(truncated, check /curator status for full summary)"
+                        )
                     } else {
                         truncated_body
                     };

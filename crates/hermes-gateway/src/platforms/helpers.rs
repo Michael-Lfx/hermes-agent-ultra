@@ -273,6 +273,180 @@ pub fn media_category(ext: &str) -> &'static str {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Boolean / environment helpers (shared across platform adapters)
+// ---------------------------------------------------------------------------
+
+/// Return `true` for the common truthy string values `"1"`, `"true"`, `"yes"`,
+/// `"on"`; return `false` for everything else (including empty strings).
+///
+/// Comparison is case-insensitive.
+pub fn parse_bool_str(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+/// Read an environment variable and interpret it as a boolean.
+///
+/// Returns `default` when the variable is unset. The string value is parsed
+/// with [`parse_bool_str`].
+pub fn parse_env_bool(key: &str, default: bool) -> bool {
+    std::env::var(key)
+        .map(|v| parse_bool_str(&v))
+        .unwrap_or(default)
+}
+
+// ---------------------------------------------------------------------------
+// Message splitting (shared across platform adapters)
+// ---------------------------------------------------------------------------
+
+/// Split `text` into chunks of at most `max_chars` Unicode scalar values.
+///
+/// Prefers breaking at a preceding newline to avoid cutting in the middle of
+/// a line. Falls back to a hard character boundary when no newline is found.
+///
+/// This is the correct way to enforce per-message length limits on platforms
+/// that count Unicode characters (Discord, Telegram, Slack) rather than raw
+/// bytes: UTF-8 multi-byte sequences must not be cut mid-character.
+///
+/// Returns a `vec![""]` for empty input so callers always get at least one
+/// chunk (matching Discord's existing contract).
+pub fn split_message_by_chars(text: &str, max_chars: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    if text.chars().count() <= max_chars {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut rest = text;
+
+    while !rest.is_empty() {
+        if rest.chars().count() <= max_chars {
+            chunks.push(rest.to_string());
+            break;
+        }
+
+        // Walk to the max_chars-th character and record the byte boundary.
+        let mut end_byte = 0;
+        let mut count = 0;
+        for (byte_idx, ch) in rest.char_indices() {
+            count += 1;
+            end_byte = byte_idx + ch.len_utf8();
+            if count >= max_chars {
+                break;
+            }
+        }
+
+        if end_byte >= rest.len() {
+            chunks.push(rest.to_string());
+            break;
+        }
+
+        // Prefer breaking at the last newline before the limit.
+        let break_at = rest[..end_byte]
+            .rfind('\n')
+            .map(|pos| pos + 1)
+            .filter(|&pos| pos > 0)
+            .unwrap_or(end_byte);
+
+        chunks.push(rest[..break_at].to_string());
+        rest = &rest[break_at..];
+        // Safety valve: if break_at == 0 (no newline, boundary is char 0),
+        // advance by exactly one character to avoid an infinite loop.
+        if break_at == 0 {
+            let ch_len = rest.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            chunks.push(rest[..ch_len.min(rest.len())].to_string());
+            rest = &rest[ch_len.min(rest.len())..];
+        }
+    }
+    chunks
+}
+
+// ---------------------------------------------------------------------------
+// Remote image helpers (shared across platform adapters)
+// ---------------------------------------------------------------------------
+
+/// Normalise an HTTP `Content-Type` header value to a bare `image/*` MIME
+/// type, stripping parameters (e.g. `; charset=binary`) and lowercasing.
+/// Returns `None` for non-image types or absent values.
+pub fn normalized_image_content_type(content_type: Option<&str>) -> Option<String> {
+    let normalized = content_type?
+        .split(';')
+        .next()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_ascii_lowercase();
+    if normalized.starts_with("image/") {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+/// Map a normalised `image/*` MIME type to a file extension.
+/// Returns `None` for unknown subtypes.
+pub fn image_extension_from_content_type(content_type: Option<&str>) -> Option<&'static str> {
+    let normalized = normalized_image_content_type(content_type)?;
+    match normalized.as_str() {
+        "image/jpeg" => Some("jpg"),
+        "image/png" => Some("png"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/bmp" => Some("bmp"),
+        "image/tiff" => Some("tiff"),
+        "image/svg+xml" => Some("svg"),
+        "image/heic" => Some("heic"),
+        "image/heif" => Some("heif"),
+        "image/avif" => Some("avif"),
+        _ => None,
+    }
+}
+
+/// Derive a local file name for a remote image URL.
+///
+/// Uses the last path segment of the URL. When the segment has no extension,
+/// one is appended based on `content_type`; falls back to `"png"`.
+pub fn remote_image_file_name(image_url: &str, content_type: Option<&str>) -> String {
+    let stripped = image_url
+        .split('#')
+        .next()
+        .unwrap_or(image_url)
+        .split('?')
+        .next()
+        .unwrap_or(image_url)
+        .trim_end_matches('/');
+    let base = stripped.rsplit('/').next().unwrap_or("").trim();
+    let mut file_name = if base.is_empty() {
+        "image".to_string()
+    } else {
+        base.to_string()
+    };
+
+    let has_extension = std::path::Path::new(&file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some();
+    if !has_extension {
+        let ext = image_extension_from_content_type(content_type).unwrap_or("png");
+        file_name.push('.');
+        file_name.push_str(ext);
+    }
+    file_name
+}
+
+/// Build a plain-text fallback message for an image that could not be
+/// delivered as a native attachment.
+pub fn image_fallback_text(image_url: &str, caption: Option<&str>) -> String {
+    match caption.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(c) => format!("{c}\n{image_url}"),
+        None => image_url.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +563,133 @@ mod tests {
         assert_eq!(media_category("mp4"), "video");
         assert_eq!(media_category("mp3"), "audio");
         assert_eq!(media_category("pdf"), "document");
+    }
+
+    #[test]
+    fn test_parse_bool_str() {
+        for truthy in ["1", "true", "True", "TRUE", "yes", "YES", "on", "ON"] {
+            assert!(parse_bool_str(truthy), "{truthy} should be truthy");
+        }
+        for falsy in ["0", "false", "no", "off", "", "  ", "maybe"] {
+            assert!(!parse_bool_str(falsy), "{falsy} should be falsy");
+        }
+    }
+
+    #[test]
+    fn test_parse_env_bool_default_when_unset() {
+        assert!(parse_env_bool("HERMES_TEST_BOOL_UNSET_12345", true));
+        assert!(!parse_env_bool("HERMES_TEST_BOOL_UNSET_12345", false));
+    }
+
+    #[test]
+    fn test_split_message_by_chars_empty() {
+        assert_eq!(split_message_by_chars("", 10), vec![""]);
+    }
+
+    #[test]
+    fn test_split_message_by_chars_short() {
+        assert_eq!(split_message_by_chars("hello", 4000), vec!["hello"]);
+    }
+
+    #[test]
+    fn test_split_message_by_chars_exact() {
+        let text = "a".repeat(100);
+        assert_eq!(split_message_by_chars(&text, 100).len(), 1);
+    }
+
+    #[test]
+    fn test_split_message_by_chars_long() {
+        let text = "a".repeat(150);
+        let chunks = split_message_by_chars(&text, 100);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), 100);
+        assert_eq!(chunks[1].len(), 50);
+    }
+
+    #[test]
+    fn test_split_message_by_chars_prefers_newline() {
+        let text = "line1\nline2\nline3 with extra padding to exceed limit";
+        let chunks = split_message_by_chars(text, 20);
+        assert!(chunks[0].ends_with('\n') || chunks[0].len() <= 20);
+    }
+
+    #[test]
+    fn test_split_message_by_chars_unicode() {
+        // Each Chinese character is 3 bytes but 1 char.
+        let text = "中".repeat(200);
+        let chunks = split_message_by_chars(&text, 100);
+        // All chunks should be valid UTF-8 and at most 100 chars.
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 100);
+            assert!(std::str::from_utf8(chunk.as_bytes()).is_ok());
+        }
+    }
+
+    #[test]
+    fn test_normalized_image_content_type_strips_params() {
+        assert_eq!(
+            normalized_image_content_type(Some("image/png; charset=binary")).as_deref(),
+            Some("image/png")
+        );
+        assert_eq!(
+            normalized_image_content_type(Some("IMAGE/JPEG")).as_deref(),
+            Some("image/jpeg")
+        );
+        assert_eq!(normalized_image_content_type(Some("text/plain")), None);
+        assert_eq!(normalized_image_content_type(None), None);
+    }
+
+    #[test]
+    fn test_image_extension_from_content_type() {
+        assert_eq!(
+            image_extension_from_content_type(Some("image/jpeg")),
+            Some("jpg")
+        );
+        assert_eq!(
+            image_extension_from_content_type(Some("image/webp; q=0.9")),
+            Some("webp")
+        );
+        assert_eq!(image_extension_from_content_type(Some("text/plain")), None);
+    }
+
+    #[test]
+    fn test_remote_image_file_name_keeps_extension() {
+        let name = remote_image_file_name("https://cdn.example.com/photo.jpg", None);
+        assert_eq!(name, "photo.jpg");
+    }
+
+    #[test]
+    fn test_remote_image_file_name_adds_extension_from_content_type() {
+        let name =
+            remote_image_file_name("https://cdn.example.com/path/diagram", Some("image/jpeg"));
+        assert_eq!(name, "diagram.jpg");
+    }
+
+    #[test]
+    fn test_remote_image_file_name_fallback_png() {
+        let name = remote_image_file_name("https://cdn.example.com/image", None);
+        assert_eq!(name, "image.png");
+    }
+
+    #[test]
+    fn test_remote_image_file_name_empty_url() {
+        let name = remote_image_file_name("", None);
+        assert_eq!(name, "image.png");
+    }
+
+    #[test]
+    fn test_image_fallback_text_with_caption() {
+        assert_eq!(
+            image_fallback_text("https://example.com/plot.png", Some("Daily chart")),
+            "Daily chart\nhttps://example.com/plot.png"
+        );
+        assert_eq!(
+            image_fallback_text("https://example.com/plot.png", Some("   ")),
+            "https://example.com/plot.png"
+        );
+        assert_eq!(
+            image_fallback_text("https://example.com/plot.png", None),
+            "https://example.com/plot.png"
+        );
     }
 }

@@ -21,6 +21,8 @@ use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter};
 
 use crate::adapter::{AdapterProxyConfig, BasePlatformAdapter, describe_secret};
+use crate::format::to_telegram_markdown_v2;
+use crate::platforms::helpers::split_message_by_chars;
 
 /// Maximum message length for Telegram (4096 characters).
 const MAX_MESSAGE_LENGTH: usize = 4096;
@@ -441,7 +443,7 @@ impl TelegramAdapter {
         keyboard: Option<InlineKeyboardMarkup>,
         message_thread_id: Option<i64>,
     ) -> Result<Vec<i64>, GatewayError> {
-        let chunks = split_message(text, MAX_MESSAGE_LENGTH);
+        let chunks = split_message_by_chars(text, MAX_MESSAGE_LENGTH);
         let mut message_ids = Vec::new();
 
         for (i, chunk) in chunks.iter().enumerate() {
@@ -1078,6 +1080,16 @@ impl TelegramAdapter {
         }
     }
 
+    /// Convert `text` to the wire format required by the resolved Telegram
+    /// parse mode. For `MarkdownV2` this escapes all special characters that
+    /// Telegram requires to be escaped; for other modes the text is unchanged.
+    fn prepare_text_for_parse_mode(&self, text: &str, parse_mode: Option<ParseMode>) -> String {
+        match self.resolve_parse_mode(parse_mode) {
+            Some("MarkdownV2") => to_telegram_markdown_v2(text),
+            _ => text.to_string(),
+        }
+    }
+
     /// Resolve a `ParseMode` to the Telegram API string.
     fn resolve_parse_mode(&self, parse_mode: Option<ParseMode>) -> Option<&'static str> {
         match parse_mode {
@@ -1134,7 +1146,8 @@ impl PlatformAdapter for TelegramAdapter {
         parse_mode: Option<ParseMode>,
     ) -> Result<(), GatewayError> {
         let pm = self.resolve_parse_mode(parse_mode);
-        self.send_text(chat_id, text, pm, None).await?;
+        let prepared = self.prepare_text_for_parse_mode(text, parse_mode);
+        self.send_text(chat_id, &prepared, pm, None).await?;
         Ok(())
     }
 
@@ -1147,10 +1160,11 @@ impl PlatformAdapter for TelegramAdapter {
         message_thread_id: Option<&str>,
     ) -> Result<Option<String>, GatewayError> {
         let pm = self.resolve_parse_mode(parse_mode);
+        let prepared = self.prepare_text_for_parse_mode(text, parse_mode);
         let reply_to = reply_to_message_id.and_then(|id| id.parse::<i64>().ok());
         let thread_id = message_thread_id.and_then(|id| id.parse::<i64>().ok());
         let ids = self
-            .send_text_inner(chat_id, text, pm, reply_to, None, thread_id)
+            .send_text_inner(chat_id, &prepared, pm, reply_to, None, thread_id)
             .await?;
         Ok(ids.first().map(|id| id.to_string()))
     }
@@ -1211,41 +1225,6 @@ impl PlatformAdapter for TelegramAdapter {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Utility functions
-// ---------------------------------------------------------------------------
-
-/// Split a message into chunks that fit within the given max length,
-/// preferring to break at newline boundaries.
-fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    if text.len() <= max_len {
-        return vec![text.to_string()];
-    }
-
-    let mut chunks = Vec::new();
-    let mut start = 0;
-
-    while start < text.len() {
-        let end = (start + max_len).min(text.len());
-
-        if end >= text.len() {
-            chunks.push(text[start..].to_string());
-            break;
-        }
-
-        // Try to break at a newline near the boundary.
-        let break_at = text[start..end]
-            .rfind('\n')
-            .map(|pos| start + pos + 1)
-            .unwrap_or(end);
-
-        chunks.push(text[start..break_at].to_string());
-        start = break_at;
-    }
-
-    chunks
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1256,24 +1235,24 @@ mod tests {
 
     #[test]
     fn split_message_short() {
-        let chunks = split_message("hello", 4096);
+        let chunks = split_message_by_chars("hello", 4096);
         assert_eq!(chunks, vec!["hello"]);
     }
 
     #[test]
     fn split_message_exact_boundary() {
         let text = "a".repeat(4096);
-        let chunks = split_message(&text, 4096);
+        let chunks = split_message_by_chars(&text, 4096);
         assert_eq!(chunks.len(), 1);
     }
 
     #[test]
     fn split_message_long() {
         let text = "a".repeat(5000);
-        let chunks = split_message(&text, 4096);
+        let chunks = split_message_by_chars(&text, 4096);
         assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].len(), 4096);
-        assert_eq!(chunks[1].len(), 904);
+        assert_eq!(chunks[0].chars().count(), 4096);
+        assert_eq!(chunks[1].chars().count(), 904);
     }
 
     #[test]
@@ -1281,7 +1260,7 @@ mod tests {
         let mut text = "a".repeat(4000);
         text.push('\n');
         text.push_str(&"b".repeat(200));
-        let chunks = split_message(&text, 4096);
+        let chunks = split_message_by_chars(&text, 4096);
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].ends_with('\n'));
     }
