@@ -46,6 +46,4 @@ pub(crate) use subconscious::{
 };
 #[cfg(test)]
 pub(crate) use triage::{
-    TriggerTriageAssessment, TriggerTriageDecision, append_triage_learning_feedback,
-    evaluate_trigger_triage, triage_learning_bias, trigger_triage_learning_state_path,
 };
