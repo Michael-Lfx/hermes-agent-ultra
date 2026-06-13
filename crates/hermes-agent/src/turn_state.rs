@@ -224,9 +224,6 @@ pub(crate) struct TurnContext {
     pub web_research_ctrl: Option<WebResearchController>,
     pub web_auxiliary: Option<Arc<AuxiliaryClient>>,
 
-    // --- Listed-equity tool ordering (analyze_stock before web) ---
-    pub equity_research_gate: crate::equity_research_gate::EquityResearchGate,
-
     // --- Checkpoint manager ---
     pub checkpoint_mgr: hermes_tools::CheckpointManager,
 
@@ -268,10 +265,6 @@ impl TurnContext {
         stream_scrubber: Option<ThinkBlockScrubber>,
     ) -> Self {
         let governor_window_limit = governor_window_size();
-        let equity_research_gate =
-            crate::equity_research_gate::EquityResearchGate::from_tool_schemas(
-                tool_schemas.as_ref(),
-            );
         TurnContext {
             ctx,
             system_content,
@@ -339,7 +332,6 @@ impl TurnContext {
             stream_scrubber,
             web_research_ctrl,
             web_auxiliary,
-            equity_research_gate,
             checkpoint_mgr: hermes_tools::CheckpointManager::new(
                 checkpoints_enabled,
                 hermes_home.as_deref().map(Path::new),
@@ -444,7 +436,7 @@ async fn turn_prefetch(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     agent.invalidate_turn_api_messages_cache();
     tc.checkpoint_mgr.new_turn();
     tc.iteration_budget.consume();
-    // tracing::debug!("Agent turn {}", tc.total_turns);
+    tracing::debug!("Agent turn {}", tc.total_turns);
 
     // Housekeeping-only turns enable mute_post_response for the *current* turn's
     // pre-tool narration. Reset each turn so the next LLM stream (especially the
@@ -605,16 +597,16 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             )));
         }
     }
-    // tracing::debug!(
-    //     turn = tc.total_turns,
-    //     model = active_model,
-    //     governor_pressure = llm_governor.pressure,
-    //     governor_max_tokens = ?llm_governor.max_tokens,
-    //     governor_avg_latency_ms = ?turn_governor_runtime.avg_llm_latency_ms,
-    //     governor_avg_tool_error_rate = turn_governor_runtime.avg_tool_error_rate,
-    //     governor_consecutive_error_turns = turn_governor_runtime.consecutive_error_turns,
-    //     "turn governor snapshot"
-    // );
+    tracing::debug!(
+        turn = tc.total_turns,
+        model = active_model,
+        governor_pressure = llm_governor.pressure,
+        governor_max_tokens = ?llm_governor.max_tokens,
+        governor_avg_latency_ms = ?turn_governor_runtime.avg_llm_latency_ms,
+        governor_avg_tool_error_rate = turn_governor_runtime.avg_tool_error_rate,
+        governor_consecutive_error_turns = turn_governor_runtime.consecutive_error_turns,
+        "turn governor snapshot"
+    );
     tc.replay.record(
         "turn_start",
         serde_json::json!({
@@ -1077,18 +1069,18 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             &assistant_msg,
             effective_finish_reason.as_deref(),
         );
-        // tracing::debug!(
-        //     turn = tc.total_turns,
-        //     finish_reason = ?finalization_signals.finish_reason,
-        //     has_tool_calls = finalization_signals.has_tool_calls,
-        //     has_visible_text = finalization_signals.has_visible_text,
-        //     has_visible_text_after_think = finalization_signals.has_visible_text_after_think,
-        //     has_reasoning = finalization_signals.has_reasoning,
-        //     continuation_required = finalization_signals.continuation_required,
-        //     ack_detected = finalization_signals.ack_detected,
-        //     final_gate_passed = finalization_signals.final_gate_passed(),
-        //     "finalization gate evaluation (stream)"
-        // );
+        tracing::debug!(
+            turn = tc.total_turns,
+            finish_reason = ?finalization_signals.finish_reason,
+            has_tool_calls = finalization_signals.has_tool_calls,
+            has_visible_text = finalization_signals.has_visible_text,
+            has_visible_text_after_think = finalization_signals.has_visible_text_after_think,
+            has_reasoning = finalization_signals.has_reasoning,
+            continuation_required = finalization_signals.continuation_required,
+            ack_detected = finalization_signals.ack_detected,
+            final_gate_passed = finalization_signals.final_gate_passed(),
+            "finalization gate evaluation (stream)"
+        );
         tc.replay.record(
             "final_gate",
             serde_json::json!({
@@ -1331,7 +1323,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             agent.set_pending_plan(None);
         }
 
-        // tracing::debug!("No tool calls in response, finishing naturally");
+        tracing::debug!("No tool calls in response, finishing naturally");
         if tc.file_mutation.has_failures() {
             let footer = tc.file_mutation.format_advisory_footer();
             for msg in tc.ctx.get_messages_mut().iter_mut().rev() {
@@ -1672,14 +1664,6 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
     // Cap concurrent delegate_task calls
     crate::tool_executor::cap_delegates(agent, &mut tool_calls);
 
-    let equity_deferred_results = tc.equity_research_gate.gate_tool_calls(&mut tool_calls);
-    if !equity_deferred_results.is_empty() {
-        tracing::info!(
-            blocked = equity_deferred_results.len(),
-            "equity research gate deferred web tool call(s)"
-        );
-    }
-
     // Web research
     let deferred_web_budget_results = if let Some(ref mut ctrl) = tc.web_research_ctrl {
         ctrl.ensure_plan_on_first_web(tc.web_auxiliary.as_ref(), &tc.first_user, &tool_calls)
@@ -1720,10 +1704,6 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
 
     let contextlattice_connect_intent = detect_contextlattice_connect_intent(tc.ctx.get_messages());
     if tool_calls.is_empty() {
-        for result in equity_deferred_results {
-            tc.ctx
-                .add_message(Message::tool_result(&result.tool_call_id, &result.content));
-        }
         for (_, result) in deferred_web_budget_results {
             tc.ctx
                 .add_message(Message::tool_result(&result.tool_call_id, &result.content));
@@ -1731,6 +1711,18 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         return TurnState::CallLlm;
     }
 
+    // Pre-tool hooks + callbacks
+    let tool_names_for_log: Vec<&str> = tool_calls
+        .iter()
+        .map(|tc_| tc_.function.name.as_str())
+        .collect();
+    tracing::debug!(
+        turn = tc.total_turns,
+        tool_count = tool_calls.len(),
+        tools = ?tool_names_for_log,
+        streaming = true,
+        "agent tool batch start"
+    );
     // Pre-parse tool args once; reused by hooks, guardrails, and file mutation.
     let tool_args: Vec<Value> = tool_calls
         .iter()
@@ -1841,11 +1833,6 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         if ctrl.record_results(&tool_calls, &results) {
             tc.active_tool_schemas = Arc::from(ctrl.filter_tool_schemas(tc.tool_schemas.as_ref()));
         }
-    }
-    tc.equity_research_gate
-        .record_tool_batch(&tool_calls, &results);
-    if !equity_deferred_results.is_empty() {
-        results.extend(equity_deferred_results);
     }
     if !deferred_web_budget_results.is_empty() {
         results.extend(

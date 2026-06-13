@@ -44,12 +44,12 @@ pub(crate) fn build_turn_api_messages(
     if let Ok(state) = agent.state.lock() {
         if let Some((cached_key, arc)) = state.turn_api_messages_cache.as_ref() {
             if *cached_key == key {
-                // tracing::debug!(cache = "hit", msg_count = arc.len());
+                tracing::debug!(cache = "hit", msg_count = arc.len());
                 return Arc::clone(arc);
             }
         }
     }
-    // tracing::debug!(cache = "miss");
+    tracing::debug!(cache = "miss");
 
     let cfg = agent.config();
     let prefetch = agent
@@ -74,12 +74,8 @@ pub(crate) fn build_turn_api_messages(
         ephemeral,
         crate::runtime_provider::active_model(agent).as_str(),
         cfg.cache_ttl.as_str(),
-        agent
-            .use_prompt_caching
-            .load(std::sync::atomic::Ordering::Relaxed),
-        agent
-            .use_native_cache_layout
-            .load(std::sync::atomic::Ordering::Relaxed),
+        cfg.use_prompt_caching,
+        cfg.use_native_cache_layout,
         force_strip_images,
     );
     let messages = agent_runtime_helpers::prepare_wire_messages_for_api(
@@ -119,12 +115,8 @@ fn api_messages_cache_key(
             .map(str::len)
             .unwrap_or(0),
         model_hash: crate::api_messages::hash_str(&crate::runtime_provider::active_model(agent)),
-        use_prompt_caching: agent
-            .use_prompt_caching
-            .load(std::sync::atomic::Ordering::Relaxed),
-        use_native_cache_layout: agent
-            .use_native_cache_layout
-            .load(std::sync::atomic::Ordering::Relaxed),
+        use_prompt_caching: cfg.use_prompt_caching,
+        use_native_cache_layout: cfg.use_native_cache_layout,
         cache_ttl_hash: crate::api_messages::hash_str(&cfg.cache_ttl),
     }
 }
@@ -175,17 +167,11 @@ pub(crate) fn build_api_messages_legacy(
         messages.push(Message::system(ephemeral));
     }
     let cfg = agent.config();
-    if !messages.is_empty()
-        && agent
-            .use_prompt_caching
-            .load(std::sync::atomic::Ordering::Relaxed)
-    {
+    if !messages.is_empty() && cfg.use_prompt_caching {
         crate::prompt_caching::apply_anthropic_cache_control_in_place(
             &mut messages,
             cfg.cache_ttl.as_str(),
-            agent
-                .use_native_cache_layout
-                .load(std::sync::atomic::Ordering::Relaxed),
+            cfg.use_native_cache_layout,
         );
     }
     crate::vision_message_prepare::strip_images_for_non_vision_model(
@@ -703,12 +689,11 @@ pub(crate) fn handle_reasoning_only_prefill(
     max_attempts: u32,
 ) {
     crate::hooks::emit_reasoning_from_message(agent, message);
-    // tracing::debug!(
-    //     "reasoning-only assistant response; prefill continuation ({}/{})",
-    //     attempt,
-    //     max_attempts
-    // );
-    let _ = (attempt, max_attempts);
+    tracing::debug!(
+        "reasoning-only assistant response; prefill continuation ({}/{})",
+        attempt,
+        max_attempts
+    );
 }
 
 // ---------------------------------------------------------------------------
