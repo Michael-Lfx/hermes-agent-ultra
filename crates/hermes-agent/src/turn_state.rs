@@ -1736,6 +1736,22 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .iter()
         .map(|tc_| serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null))
         .collect();
+    // Pre-parse tool args once; reused by hooks, guardrails, and file mutation.
+    let tool_args: Vec<Value> = tool_calls
+        .iter()
+        .map(|tc_| serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null))
+        .collect();
+    let tool_names_for_log: Vec<&str> = tool_calls
+        .iter()
+        .map(|t| t.function.name.as_str())
+        .collect();
+    tracing::debug!(
+        turn = tc.total_turns,
+        tool_count = tool_calls.len(),
+        tools = ?tool_names_for_log,
+        streaming = true,
+        "agent tool batch start"
+    );
 
     for (tc_, args) in tool_calls.iter().zip(tool_args.iter()) {
         let tc_ctx = serde_json::json!({"tool": &tc_.function.name, "turn": tc.total_turns});

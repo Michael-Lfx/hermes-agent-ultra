@@ -29,6 +29,7 @@ impl AgentLoop {
         mut checkpoint_mgr: Option<&mut hermes_tools::CheckpointManager>,
         current_user_task: Option<String>,
     ) -> Vec<ToolResult> {
+        let batch_start = Instant::now();
         let mut join_set = JoinSet::new();
         let tool_concurrency = if hermes_tools::should_parallelize_tool_batch(tool_calls) {
             tool_concurrency.max(1)
@@ -258,88 +259,86 @@ impl AgentLoop {
                 .await
                 .expect("semaphore closed");
             let tool_span = debug_span!("tool_call", tool = %tool_name, id = %tool_call_id);
-            join_set.spawn(
-                async move {
-                    let _permit = _permit; // held for task lifetime; dropped on completion
-                    let dispatch_result = if let Some(dispatch) = async_tool_dispatch.as_ref() {
-                        // tracing::debug!(tool = %tool_name, "agent tool call start (async dispatch)");
-                        dispatch(tool_name.clone(), params).await
-                    } else {
-                        match registry.get(&tool_name) {
-                            Some(entry) => {
-                                // tracing::debug!(tool = %tool_name, "agent tool call start");
-                                let handler = Arc::clone(&entry.handler);
-                                match tokio::task::spawn_blocking(move || handler(params)).await {
-                                    Ok(result) => result,
-                                    Err(e) => Err(ToolError::ExecutionFailed(format!(
-                                        "Tool blocking task join failed: {e}"
-                                    ))),
-                                }
-                            }
-                            None => {
-                                let available = registry.names().join(", ");
-                                let error_msg = format!(
-                                    "Unknown tool '{}'. Available tools: [{}]",
-                                    tool_name, available
-                                );
-                                return ToolResult::err(&tool_call_id, error_msg);
+            join_set.spawn(async move {
+                let _permit = _permit; // held for task lifetime; dropped on completion
+                let started = Instant::now();
+                let dispatch_result = if let Some(dispatch) = async_tool_dispatch.as_ref() {
+                    tracing::debug!(tool = %tool_name, "agent tool call start (async dispatch)");
+                    dispatch(tool_name.clone(), params).await
+                } else {
+                    match registry.get(&tool_name) {
+                        Some(entry) => {
+                            tracing::debug!(tool = %tool_name, "agent tool call start");
+                            let handler = Arc::clone(&entry.handler);
+                            match tokio::task::spawn_blocking(move || handler(params)).await {
+                                Ok(result) => result,
+                                Err(e) => Err(ToolError::ExecutionFailed(format!(
+                                    "Tool blocking task join failed: {e}"
+                                ))),
                             }
                         }
-                    };
-
-                    match dispatch_result {
-                        Ok(output) if async_tool_dispatch.is_some() => {
-                            match tool_result_from_dispatch_output(output) {
-                                Ok(output) => {
-                                    // tracing::debug!(
-                                    //     tool = %tool_name,
-                                    //     elapsed_ms = started.elapsed().as_millis() as u64,
-                                    //     output_chars = output.chars().count(),
-                                    //     "agent tool call finished"
-                                    // );
-                                    if looks_like_tool_error_output(&output) {
-                                        ToolResult::err(&tool_call_id, output)
-                                    } else {
-                                        ToolResult::ok(&tool_call_id, output)
-                                    }
-                                }
-                                Err(e) => {
-                                    // tracing::debug!(
-                                    //     tool = %tool_name,
-                                    //     elapsed_ms = started.elapsed().as_millis() as u64,
-                                    //     error = %e,
-                                    //     "agent tool call failed"
-                                    // );
-                                    ToolResult::err(&tool_call_id, e.to_string())
-                                }
-                            }
-                        }
-                        Ok(output) => {
-                            // tracing::debug!(
-                            //     tool = %tool_name,
-                            //     elapsed_ms = started.elapsed().as_millis() as u64,
-                            //     output_chars = output.chars().count(),
-                            //     "agent tool call finished"
-                            // );
-                            if looks_like_tool_error_output(&output) {
-                                ToolResult::err(&tool_call_id, output)
-                            } else {
-                                ToolResult::ok(&tool_call_id, output)
-                            }
-                        }
-                        Err(e) => {
-                            // tracing::debug!(
-                            //     tool = %tool_name,
-                            //     elapsed_ms = started.elapsed().as_millis() as u64,
-                            //     error = %e,
-                            //     "agent tool call failed"
-                            // );
-                            ToolResult::err(&tool_call_id, e.to_string())
+                        None => {
+                            let available = registry.names().join(", ");
+                            let error_msg = format!(
+                                "Unknown tool '{}'. Available tools: [{}]",
+                                tool_name, available
+                            );
+                            return ToolResult::err(&tool_call_id, error_msg);
                         }
                     }
+                };
+
+                match dispatch_result {
+                    Ok(output) if async_tool_dispatch.is_some() => {
+                        match tool_result_from_dispatch_output(output) {
+                            Ok(output) => {
+                                tracing::debug!(
+                                    tool = %tool_name,
+                                    elapsed_ms = started.elapsed().as_millis() as u64,
+                                    output_chars = output.chars().count(),
+                                    "agent tool call finished"
+                                );
+                                if looks_like_tool_error_output(&output) {
+                                    ToolResult::err(&tool_call_id, output)
+                                } else {
+                                    ToolResult::ok(&tool_call_id, output)
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    tool = %tool_name,
+                                    elapsed_ms = started.elapsed().as_millis() as u64,
+                                    error = %e,
+                                    "agent tool call failed"
+                                );
+                                ToolResult::err(&tool_call_id, e.to_string())
+                            }
+                        }
+                    }
+                    Ok(output) => {
+                        tracing::debug!(
+                            tool = %tool_name,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            output_chars = output.chars().count(),
+                            "agent tool call finished"
+                        );
+                        if looks_like_tool_error_output(&output) {
+                            ToolResult::err(&tool_call_id, output)
+                        } else {
+                            ToolResult::ok(&tool_call_id, output)
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            tool = %tool_name,
+                            elapsed_ms = started.elapsed().as_millis() as u64,
+                            error = %e,
+                            "agent tool call failed"
+                        );
+                        ToolResult::err(&tool_call_id, e.to_string())
+                    }
                 }
-                .instrument(tool_span),
-            );
+            }.instrument(tool_span));
         }
 
         for tool_result in orchestrated {
@@ -396,12 +395,12 @@ impl AgentLoop {
             }
         }
 
-        // tracing::debug!(
-        //     turn,
-        //     tool_count = tool_calls.len(),
-        //     elapsed_ms = batch_start.elapsed().as_millis() as u64,
-        //     "tool batch complete"
-        // );
+        tracing::debug!(
+            turn,
+            tool_count = tool_calls.len(),
+            elapsed_ms = batch_start.elapsed().as_millis() as u64,
+            "tool batch complete"
+        );
         results
     }
 }
