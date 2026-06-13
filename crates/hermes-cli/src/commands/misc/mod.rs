@@ -46,6 +46,9 @@ pub(crate) use subconscious::{
 };
 #[cfg(test)]
 pub(crate) use triage::{
+<<<<<<< HEAD
     append_triage_learning_feedback, evaluate_trigger_triage, triage_learning_bias,
     trigger_triage_learning_state_path, TriggerTriageAssessment, TriggerTriageDecision,
+=======
+>>>>>>> ce69af9b9 (fix(cli): eliminate hermes-cli build warnings and restore test exports.)
 };
