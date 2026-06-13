@@ -4,6 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use hermes_core::{Message, MessageRole};
+use tracing::debug_span;
 
 use crate::memory_manager::build_memory_context_block;
 use crate::prompt_caching::apply_anthropic_cache_control_in_place;
@@ -47,7 +48,7 @@ pub(crate) fn apply_prefetch_to_last_user(messages: &mut [Message], prefetch: &s
     }
 }
 
-pub(crate) fn assemble_api_messages_from_ctx(
+pub fn assemble_api_messages_from_ctx(
     source: &[Message],
     prefetch: &str,
     ephemeral: Option<&str>,
@@ -57,6 +58,13 @@ pub(crate) fn assemble_api_messages_from_ctx(
     use_native_cache_layout: bool,
     force_strip_images: bool,
 ) -> Vec<Message> {
+    let _span = debug_span!(
+        "assemble_api_messages",
+        source_len = source.len(),
+        prefetch_bytes = prefetch.len(),
+        has_ephemeral = ephemeral.is_some(),
+    )
+    .entered();
     let last_user_idx = source.iter().rposition(|m| m.role == MessageRole::User);
     let fenced = if prefetch.trim().is_empty() {
         String::new()

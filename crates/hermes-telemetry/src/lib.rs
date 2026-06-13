@@ -1,15 +1,13 @@
 //! Telemetry bootstrap and in-process metrics registry.
 
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
-
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use tracing_subscriber::Registry;
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
@@ -393,7 +391,7 @@ pub struct MetricsRegistry {
     pub agent_nous_rate_limit_skips_total: AtomicU64,
 }
 
-pub static METRICS: Lazy<MetricsRegistry> = Lazy::new(MetricsRegistry::default);
+pub static METRICS: LazyLock<MetricsRegistry> = LazyLock::new(MetricsRegistry::default);
 
 pub fn record_llm_request() {
     METRICS.llm_requests_total.fetch_add(1, Ordering::Relaxed);

@@ -1723,12 +1723,17 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         streaming = true,
         "agent tool batch start"
     );
-    for tc_ in &tool_calls {
+    // Pre-parse tool args once; reused by hooks, guardrails, and file mutation.
+    let tool_args: Vec<Value> = tool_calls
+        .iter()
+        .map(|tc_| serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null))
+        .collect();
+
+    for (tc_, args) in tool_calls.iter().zip(tool_args.iter()) {
         let tc_ctx = serde_json::json!({"tool": &tc_.function.name, "turn": tc.total_turns});
         hooks::invoke_hook(agent, HookType::PreToolCall, &tc_ctx);
         if let Some(ref cb) = agent.callbacks.on_tool_start {
-            let args: Value = serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null);
-            cb(&tc_.function.name, &args);
+            cb(&tc_.function.name, args);
         }
     }
 
@@ -1759,10 +1764,9 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .max_cost_usd
         .map(|limit| (limit - tc.session_cost_usd).max(0.0));
 
-    // Tool guardrails
-    for tc_ in &tool_calls {
-        let args: Value = serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null);
-        match tc.tool_guardrails.before_call(&tc_.function.name, &args) {
+    // Tool guardrails (reuses pre-parsed tool_args)
+    for (tc_, args) in tool_calls.iter().zip(tool_args.iter()) {
+        match tc.tool_guardrails.before_call(&tc_.function.name, args) {
             crate::tool_guardrails::GuardrailDecision::Halt(reason) => {
                 tc.ctx.add_message(Message::assistant(format!(
                     "[Tool guardrail halt] {reason}"

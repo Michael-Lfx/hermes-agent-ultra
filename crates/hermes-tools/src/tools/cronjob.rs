@@ -6,6 +6,89 @@ use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
+/// Build the timezone-aware schedule description injected into the tool schema.
+///
+/// Mirrors Python `cronjob_tools.py` — the LLM sees the current local time and
+/// timezone so it can produce correct ISO timestamps instead of guessing UTC.
+fn schedule_field_description() -> String {
+    // Import hermes_cron schedule helpers via the crate dependency that is
+    // always present in the workspace binary (hermes-tools depends on it).
+    // We call the public symbol via the crate path.
+    // Only inject the static timezone offset — NOT the current time.
+    // Injecting a live timestamp would bust the LLM prompt cache every minute.
+    // The current time is already available to the LLM via the system prompt;
+    // what it lacks is the UTC offset, which IS static for a given deployment.
+    let tz_env = std::env::var("HERMES_TIMEZONE").unwrap_or_default();
+    let offset_secs = hermes_cron_tz_offset_secs(tz_env.trim());
+    let offset_h = offset_secs / 3600;
+    let offset_m = (offset_secs.abs() % 3600) / 60;
+    let (tz_label, offset_example) = if tz_env.is_empty() {
+        (
+            format!("UTC{:+03}:{:02}", offset_h, offset_m),
+            format!("{:+03}:{:02}", offset_h, offset_m),
+        )
+    } else {
+        let sign = if offset_h >= 0 { "+" } else { "-" };
+        (
+            tz_env.clone(),
+            format!("{}{:02}:{:02}", sign, offset_h.abs(), offset_m),
+        )
+    };
+    format!(
+        "Schedule expression for the cron job.\n\
+         \n\
+         Formats:\n\
+         - Relative duration (PREFERRED for 'in X minutes/hours'): '1m', '30m', '2h', '1d' \
+           — fires once, relative to NOW. Use this whenever the user says 'in X minutes' or \
+           'in X hours'. Do NOT convert to an absolute timestamp yourself.\n\
+         - Recurring interval: 'every 30m', 'every 2h'\n\
+         - Cron expression: '0 9 * * *' — interpreted as UTC. Convert wall-clock times to UTC \
+           before using this format, or prefer an ISO timestamp instead.\n\
+         - Absolute one-time: ISO 8601 timestamp with explicit timezone offset, \
+           e.g. '2026-05-25T10:30:00{offset_example}'. \
+           Always include the offset ({offset_example} for {tz_label}). \
+           Never use a date from conversation history — always derive the date from the \
+           current date shown in the system prompt."
+    )
+}
+
+/// Minimal IANA/offset resolver duplicated here to avoid a cyclic feature dep.
+/// The authoritative implementation lives in `hermes_cron::schedule::hermes_tz_offset`.
+fn hermes_cron_tz_offset_secs(s: &str) -> i32 {
+    if s.is_empty() {
+        return 0;
+    }
+    // Try ±H or ±HH:MM literal
+    let re_lit = regex::Regex::new(r"^([+-])(\d{1,2})(?::?(\d{2}))?$").unwrap();
+    let subject = if let Some(rest) = s.to_ascii_uppercase().strip_prefix("UTC") {
+        rest.to_string()
+    } else {
+        s.to_string()
+    };
+    if let Some(caps) = re_lit.captures(&subject) {
+        let sign: i32 = if &caps[1] == "+" { 1 } else { -1 };
+        let h: i32 = caps[2].parse().unwrap_or(0);
+        let m: i32 = caps
+            .get(3)
+            .map(|c| c.as_str().parse().unwrap_or(0))
+            .unwrap_or(0);
+        return sign * (h * 3600 + m * 60);
+    }
+    match s {
+        "Asia/Shanghai" | "Asia/Chongqing" | "Asia/Hong_Kong" | "Asia/Taipei"
+        | "Asia/Singapore" | "Asia/Kuala_Lumpur" => 8 * 3600,
+        "Asia/Tokyo" | "Asia/Seoul" => 9 * 3600,
+        "Asia/Kolkata" | "Asia/Calcutta" => 5 * 3600 + 30 * 60,
+        "Asia/Bangkok" | "Asia/Jakarta" => 7 * 3600,
+        "Europe/Moscow" => 3 * 3600,
+        "Europe/Paris" | "Europe/Berlin" | "CET" => 3600,
+        "America/New_York" | "US/Eastern" => -5 * 3600,
+        "America/Chicago" | "US/Central" => -6 * 3600,
+        "America/Los_Angeles" | "US/Pacific" => -8 * 3600,
+        _ => 0,
+    }
+}
+
 use std::sync::Arc;
 
 const CRONJOB_DESCRIPTION: &str = "\
@@ -351,7 +434,7 @@ impl ToolHandler for CronjobHandler {
             "prompt".into(),
             json!({
                 "type": "string",
-                "description": "For create: the full self-contained prompt. Alias for task. If skills are also provided, this becomes the task instruction paired with those skills."
+                "description": schedule_field_description()
             }),
         );
         props.insert(

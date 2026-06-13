@@ -6,6 +6,20 @@
 
 #![allow(dead_code)]
 
+// ---------------------------------------------------------------------------
+// Heap profiling: build with `--features dhat-heap` to collect a DHAT profile
+// that shows peak / total allocations on the hot paths.
+//
+// Usage:
+//   cargo test -p hermes-agent --features dhat-heap -- --nocapture 2>/dev/null
+//   # DHAT writes dhat-heap.json; open with https://nnethercote.github.io/dh_view/dh_view.html
+// ---------------------------------------------------------------------------
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
+pub mod profiling;
+
 #[cfg(test)]
 pub mod test_support;
 

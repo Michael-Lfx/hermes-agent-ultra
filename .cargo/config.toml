@@ -17,7 +17,7 @@ incremental = true
 [profile.dev]
 opt-level = 0
 debug = 1
-codegen-units = 16
+codegen-units = 64
 lto = false
 
 [profile.release]
