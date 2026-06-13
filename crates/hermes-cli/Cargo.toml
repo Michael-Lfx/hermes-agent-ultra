@@ -50,6 +50,7 @@ hermes-gateway = { workspace = true, features = [
     "ntfy",
     "api-server",
     "webhook",
+    "talk",
 ] }
 hermes-cron = { workspace = true }
 hermes-environments = { workspace = true }

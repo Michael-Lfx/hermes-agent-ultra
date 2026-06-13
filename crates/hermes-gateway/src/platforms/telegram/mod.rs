@@ -1084,14 +1084,14 @@ impl TelegramAdapter {
     /// parse mode. For `MarkdownV2` this escapes all special characters that
     /// Telegram requires to be escaped; for other modes the text is unchanged.
     fn prepare_text_for_parse_mode(&self, text: &str, parse_mode: Option<ParseMode>) -> String {
-        match self.resolve_parse_mode(parse_mode) {
+        match self.resolve_parse_mode(&parse_mode) {
             Some("MarkdownV2") => to_telegram_markdown_v2(text),
             _ => text.to_string(),
         }
     }
 
     /// Resolve a `ParseMode` to the Telegram API string.
-    fn resolve_parse_mode(&self, parse_mode: Option<ParseMode>) -> Option<&'static str> {
+    fn resolve_parse_mode(&self, parse_mode: &Option<ParseMode>) -> Option<&'static str> {
         match parse_mode {
             Some(ParseMode::Markdown) => Some("MarkdownV2"),
             Some(ParseMode::Html) => Some("HTML"),
@@ -1145,7 +1145,7 @@ impl PlatformAdapter for TelegramAdapter {
         text: &str,
         parse_mode: Option<ParseMode>,
     ) -> Result<(), GatewayError> {
-        let pm = self.resolve_parse_mode(parse_mode);
+        let pm = self.resolve_parse_mode(&parse_mode);
         let prepared = self.prepare_text_for_parse_mode(text, parse_mode);
         self.send_text(chat_id, &prepared, pm, None).await?;
         Ok(())
@@ -1159,7 +1159,7 @@ impl PlatformAdapter for TelegramAdapter {
         reply_to_message_id: Option<&str>,
         message_thread_id: Option<&str>,
     ) -> Result<Option<String>, GatewayError> {
-        let pm = self.resolve_parse_mode(parse_mode);
+        let pm = self.resolve_parse_mode(&parse_mode);
         let prepared = self.prepare_text_for_parse_mode(text, parse_mode);
         let reply_to = reply_to_message_id.and_then(|id| id.parse::<i64>().ok());
         let thread_id = message_thread_id.and_then(|id| id.parse::<i64>().ok());
@@ -1175,7 +1175,7 @@ impl PlatformAdapter for TelegramAdapter {
         message_id: &str,
         text: &str,
     ) -> Result<(), GatewayError> {
-        let pm = self.resolve_parse_mode(None);
+        let pm = self.resolve_parse_mode(&None);
         self.edit_text(chat_id, message_id, text, pm).await
     }
 

@@ -68,4 +68,7 @@ pub mod api_server;
 #[cfg(feature = "webhook")]
 pub mod webhook;
 
+#[cfg(feature = "talk")]
+pub mod aipc_talk;
+
 pub mod helpers;

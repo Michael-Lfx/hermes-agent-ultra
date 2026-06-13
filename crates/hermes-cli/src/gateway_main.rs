@@ -39,6 +39,7 @@ use hermes_gateway::platforms::sms::{SmsAdapter, SmsConfig};
 use hermes_gateway::platforms::telegram::{TelegramAdapter, TelegramConfig};
 use hermes_gateway::platforms::webhook::{WebhookAdapter, WebhookConfig, WebhookPayload};
 use hermes_gateway::platforms::wecom::{WeComAdapter, WeComConfig};
+use hermes_gateway::platforms::aipc_talk::{TalkAdapter, TalkConfig};
 use hermes_gateway::platforms::wecom_callback::{
     WeComCallbackAdapter, WeComCallbackApp, WeComCallbackConfig,
 };
@@ -158,6 +159,11 @@ pub(crate) const GATEWAY_PLATFORM_CATALOG: &[GatewayPlatformEntry] = &[
         key: "api_server",
         label: "API Server",
         emoji: "🌐",
+    },
+    GatewayPlatformEntry {
+        key: "aipc_talk",
+        label: "AIPC Talk",
+        emoji: "🗣️",
     },
 ];
 
@@ -434,6 +440,13 @@ pub(crate) fn build_webhook_config(platform_cfg: &PlatformConfig, secret: String
         port: extra_u16(platform_cfg, "port", 9000),
         path: extra_string(platform_cfg, "path").unwrap_or_else(|| "/webhook".to_string()),
         secret,
+    }
+}
+
+pub(crate) fn build_talk_config(platform_cfg: &PlatformConfig) -> TalkConfig {
+    TalkConfig {
+        bind_addr: extra_string(platform_cfg, "bind_addr")
+            .unwrap_or_else(|| "127.0.0.1:9100".to_string()),
     }
 }
 
@@ -1963,6 +1976,24 @@ pub(crate) async fn register_gateway_adapters(
             println!(
                 "API server adapter enabled on {}:{}",
                 api_cfg.host, api_cfg.port
+            );
+        }
+    }
+
+    if let Some(platform_cfg) = config.platforms.get("aipc_talk") {
+        if platform_cfg.enabled {
+            let talk_cfg = build_talk_config(platform_cfg);
+            let adapter = Arc::new(TalkAdapter::new(talk_cfg.clone()));
+            let (tx, rx) = mpsc::channel::<GatewayIncomingMessage>(256);
+            adapter.set_inbound_sender(tx).await;
+            gateway.register_adapter("aipc_talk", adapter).await;
+            let gw_clone = gateway.clone();
+            sidecar_tasks.push(tokio::spawn(async move {
+                crate::gateway_runtime::run_talk_inbound_loop(gw_clone, rx).await;
+            }));
+            println!(
+                "Talk adapter enabled on {}",
+                talk_cfg.bind_addr
             );
         }
     }
