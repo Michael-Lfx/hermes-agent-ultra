@@ -1,8 +1,8 @@
 //! schedule parsing and next-run computation (`cron/jobs.py`).
 
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime, Utc};
 use cron::Schedule;
-use hermes_core::{cron_wall_offset_at, ensure_aware_naive, ensure_aware_utc, now_utc};
+use hermes_core::{cron_wall_offset_at, now_utc};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -253,14 +253,137 @@ pub fn parse_schedule_value(value: &serde_json::Value) -> Result<ScheduleSpec, S
     }
 }
 
-fn parse_iso_timestamp(s: &str) -> Result<DateTime<Utc>, ScheduleParseError> {
-    let trimmed = s.trim();
-    if let Ok(dt) = DateTime::parse_from_rfc3339(&trimmed.replace('Z', "+00:00")) {
-        return Ok(ensure_aware_utc(dt.with_timezone(&Utc)));
+/// Return the configured UTC offset for Hermes (Python `hermes_time.get_timezone()`).
+///
+/// Resolution order (mirrors Python):
+///   1. `HERMES_TIMEZONE` env var — IANA name (`Asia/Shanghai`) or offset (`+08:00`, `UTC+8`)
+///   2. Falls back to UTC if unset or unrecognised.
+pub fn hermes_tz_offset() -> FixedOffset {
+    let tz_str = std::env::var("HERMES_TIMEZONE").unwrap_or_default();
+    parse_tz_offset(tz_str.trim())
+}
+
+/// Parse a timezone string into a `FixedOffset`.
+/// Supports IANA city names for common zones, `UTC±N`, and `±HH:MM` literals.
+fn parse_tz_offset(s: &str) -> FixedOffset {
+    if s.is_empty() {
+        return FixedOffset::east_opt(0).unwrap();
     }
-    for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"] {
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(trimmed, fmt) {
-            return Ok(ensure_aware_naive(ndt));
+
+    // ±HH:MM or ±HHMM literal
+    if let Some(offset) = try_parse_offset_literal(s) {
+        return offset;
+    }
+
+    // UTC±N  (e.g. "UTC+8", "UTC-5")
+    let upper = s.to_ascii_uppercase();
+    if let Some(rest) = upper.strip_prefix("UTC") {
+        if let Some(offset) = try_parse_offset_literal(rest) {
+            return offset;
+        }
+        if rest.is_empty() {
+            return FixedOffset::east_opt(0).unwrap();
+        }
+    }
+
+    // IANA city-name table for the most common zones.
+    // Only a best-effort subset; callers can always use the literal form.
+    let seconds: i32 = match s {
+        // UTC+8
+        "Asia/Shanghai" | "Asia/Chongqing" | "Asia/Urumqi" | "Asia/Harbin" | "Asia/Chungking"
+        | "Asia/Macao" | "Asia/Macau" | "Asia/Hong_Kong" | "Asia/Taipei" | "Asia/Brunei"
+        | "Asia/Kuala_Lumpur" | "Asia/Kuching" | "Asia/Makassar" | "Asia/Manila"
+        | "Asia/Singapore" | "Australia/Perth" | "Australia/West" => 8 * 3600,
+        // UTC+9
+        "Asia/Tokyo" | "Asia/Seoul" | "Asia/Pyongyang" | "Asia/Yakutsk" | "Japan" | "ROK" => {
+            9 * 3600
+        }
+        // UTC+5:30
+        "Asia/Kolkata" | "Asia/Calcutta" => 5 * 3600 + 30 * 60,
+        // UTC+5:45
+        "Asia/Kathmandu" | "Asia/Katmandu" => 5 * 3600 + 45 * 60,
+        // UTC+6
+        "Asia/Dhaka" | "Asia/Almaty" | "Asia/Bishkek" => 6 * 3600,
+        // UTC+7
+        "Asia/Bangkok" | "Asia/Jakarta" | "Asia/Ho_Chi_Minh" | "Asia/Saigon"
+        | "Asia/Phnom_Penh" | "Asia/Vientiane" | "Asia/Hovd" => 7 * 3600,
+        // UTC+3
+        "Europe/Moscow" | "Asia/Riyadh" | "Asia/Baghdad" | "Africa/Nairobi" => 3 * 3600,
+        // UTC+1
+        "Europe/Paris" | "Europe/Berlin" | "Europe/Rome" | "Europe/Madrid" | "Europe/Amsterdam"
+        | "Europe/Brussels" | "Europe/Vienna" | "Europe/Warsaw" | "Europe/Prague"
+        | "Europe/Budapest" | "CET" | "MET" => 3600,
+        // UTC+2
+        "Europe/Helsinki" | "Europe/Kiev" | "Europe/Kyiv" | "Europe/Riga" | "Europe/Tallinn"
+        | "Europe/Vilnius" | "Europe/Athens" | "Africa/Cairo" | "Asia/Jerusalem"
+        | "Asia/Tel_Aviv" | "EET" => 2 * 3600,
+        // UTC-5
+        "America/New_York" | "America/Toronto" | "US/Eastern" | "EST5EDT" => -5 * 3600,
+        // UTC-6
+        "America/Chicago" | "America/Winnipeg" | "US/Central" | "CST6CDT" => -6 * 3600,
+        // UTC-7
+        "America/Denver" | "America/Phoenix" | "US/Mountain" | "MST7MDT" => -7 * 3600,
+        // UTC-8
+        "America/Los_Angeles" | "America/Vancouver" | "US/Pacific" | "PST8PDT" => -8 * 3600,
+        // UTC+0
+        "UTC" | "GMT" | "Etc/UTC" | "Etc/GMT" => 0,
+        _ => {
+            tracing::warn!(
+                "HERMES_TIMEZONE '{}' not recognised; falling back to UTC. \
+                 Use an offset like '+08:00' for exact control.",
+                s
+            );
+            0
+        }
+    };
+    if seconds >= 0 {
+        FixedOffset::east_opt(seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
+    } else {
+        FixedOffset::west_opt(-seconds).unwrap_or_else(|| FixedOffset::east_opt(0).unwrap())
+    }
+}
+
+fn try_parse_offset_literal(s: &str) -> Option<FixedOffset> {
+    // Matches: +8, -5, +08:00, -05:30, +0800
+    let re = Regex::new(r"^([+-])(\d{1,2})(?::?(\d{2}))?$").ok()?;
+    let caps = re.captures(s)?;
+    let sign: i32 = if &caps[1] == "+" { 1 } else { -1 };
+    let hours: i32 = caps[2].parse().ok()?;
+    let minutes: i32 = caps
+        .get(3)
+        .map(|m| m.as_str().parse().unwrap_or(0))
+        .unwrap_or(0);
+    let total = sign * (hours * 3600 + minutes * 60);
+    if total >= 0 {
+        FixedOffset::east_opt(total)
+    } else {
+        FixedOffset::west_opt(-total)
+    }
+}
+
+/// Current local time in the configured Hermes timezone (Python `_hermes_now()`).
+pub fn hermes_local_now() -> DateTime<FixedOffset> {
+    Utc::now().with_timezone(&hermes_tz_offset())
+}
+
+fn parse_iso_timestamp(s: &str) -> Result<DateTime<Utc>, ScheduleParseError> {
+    let trimmed = s.trim().replace('Z', "+00:00");
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&trimmed) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    let tz = hermes_tz_offset();
+    for fmt in [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ] {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(&trimmed, fmt) {
+            return Ok(ndt
+                .and_local_timezone(tz)
+                .single()
+                .map(|dt| dt.with_timezone(&Utc))
+                .ok_or_else(|| ScheduleParseError(format!("Ambiguous local time '{s}'")))?);
         }
     }
     Err(ScheduleParseError(format!("Invalid timestamp '{s}'")))

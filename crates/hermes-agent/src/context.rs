@@ -104,51 +104,72 @@ impl ContextManager {
     ///
     /// Always preserves:
     /// - The system prompt (first message if it has role System)
-    /// - The last user message
-    /// - The most recent assistant messages
+    /// - The last two messages (final assistant + user pair)
     ///
-    /// Older messages are removed from the middle until the total fits.
+    /// Older non-system messages are dropped from the front in a single pass
+    /// (O(n) amortised, down from the prior O(n²) `Vec::remove` loop).
     pub fn truncate_to_budget(&mut self, budget: &BudgetConfig) {
         let max_chars = budget.max_aggregate_chars.min(self.max_context_chars);
-        let total_chars: usize = self
+
+        // Compute per-message char lengths once (single forward scan).
+        let lens: Vec<usize> = self
             .messages
             .iter()
-            .map(|m| m.content.as_deref().map(|c| c.len()).unwrap_or(0))
-            .sum();
+            .map(|m| m.content.as_deref().map(str::len).unwrap_or(0))
+            .collect();
 
+        let total_chars: usize = lens.iter().sum();
         if total_chars <= max_chars {
             return;
         }
 
-        // Identify system messages (to preserve) and the last user message
+        let n = self.messages.len();
+
+        // System-message prefix (always preserved).
         let system_end = self
             .messages
             .iter()
             .take_while(|m| m.role == MessageRole::System)
             .count();
 
-        // Keep removing oldest non-system messages until we're under budget
-        loop {
-            let current_total: usize = self
-                .messages
-                .iter()
-                .map(|m| m.content.as_deref().map(|c| c.len()).unwrap_or(0))
-                .sum();
-
-            if current_total <= max_chars {
-                break;
-            }
-
-            // Find the first removable message (after system messages, not the last one)
-            if self.messages.len() <= system_end + 2 {
-                // Can't remove any more without losing essential context
-                break;
-            }
-
-            // Remove the oldest non-system message
-            let remove_idx = system_end;
-            self.messages.remove(remove_idx);
+        // Tail preservation: at minimum keep the last 2 messages (user + assistant).
+        // We keep at least that many; if budget allows, we keep more from the tail.
+        let min_tail = 2usize;
+        if n <= system_end + min_tail {
+            // Nothing left to remove.
+            self.total_message_chars = sum_message_chars(&self.messages);
+            return;
         }
+
+        // Accumulate from the rear to find the largest suffix we can keep
+        // while the remaining budget permits the system prefix.
+        let system_chars: usize = lens[..system_end].iter().sum();
+        let mut tail_chars = 0usize;
+        let mut tail_count = 0usize;
+        let mut kept_from_rear = 0usize;
+        for (i, &len) in lens.iter().enumerate().rev() {
+            if i < system_end {
+                break;
+            }
+            tail_chars += len;
+            tail_count += 1;
+            if system_chars + tail_chars > max_chars && tail_count >= min_tail {
+                // The message at index i pushed us over budget — drop it and
+                // all older non-system messages; keep only what we had before
+                // this message (the suffix starting at i+1).
+                kept_from_rear = n - (i + 1);
+                break;
+            }
+            kept_from_rear = n - i;
+        }
+
+        // The messages to keep: system prefix + the computed tail suffix.
+        let keep_start = n.saturating_sub(kept_from_rear);
+        if keep_start > system_end {
+            let drain_end = keep_start;
+            let _ = self.messages.drain(system_end..drain_end);
+        }
+
         self.total_message_chars = sum_message_chars(&self.messages);
     }
 

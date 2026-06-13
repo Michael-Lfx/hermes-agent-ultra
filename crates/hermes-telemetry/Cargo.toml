@@ -22,7 +22,6 @@ hermes-config = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
-once_cell = { workspace = true }
 tokio = { workspace = true }
 opentelemetry = { version = "0.32", default-features = false, features = ["trace"], optional = true }
 opentelemetry_sdk = { version = "0.32", default-features = false, features = ["trace", "rt-tokio"], optional = true }

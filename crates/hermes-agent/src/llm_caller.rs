@@ -33,15 +33,23 @@ pub(crate) fn build_turn_api_messages(
     agent: &AgentLoop,
     ctx: &mut ContextManager,
 ) -> Arc<[Message]> {
+    let _span = tracing::debug_span!(
+        "build_turn_api_messages",
+        msg_count = ctx.len(),
+        total_chars = ctx.total_chars(),
+    )
+    .entered();
     prepare_ctx_for_api_call(agent, ctx);
     let key = api_messages_cache_key(agent, ctx);
     if let Ok(state) = agent.state.lock() {
         if let Some((cached_key, arc)) = state.turn_api_messages_cache.as_ref() {
             if *cached_key == key {
+                tracing::debug!(cache = "hit", msg_count = arc.len());
                 return Arc::clone(arc);
             }
         }
     }
+    tracing::debug!(cache = "miss");
 
     let cfg = agent.config();
     let prefetch = agent

@@ -9,6 +9,8 @@ use hermes_core::{Message, ToolCall, ToolError, ToolResult};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tracing::Instrument as _;
+use tracing::debug_span;
 
 use crate::agent_loop::{
     AgentLoop, inject_runtime_tool_params, is_contextlattice_shell_invocation,
@@ -27,6 +29,7 @@ impl AgentLoop {
         mut checkpoint_mgr: Option<&mut hermes_tools::CheckpointManager>,
         current_user_task: Option<String>,
     ) -> Vec<ToolResult> {
+        let batch_start = Instant::now();
         let mut join_set = JoinSet::new();
         let tool_concurrency = if hermes_tools::should_parallelize_tool_batch(tool_calls) {
             tool_concurrency.max(1)
@@ -170,135 +173,77 @@ impl AgentLoop {
             }
             let tool_call_id = tc.id.clone();
             let tool_name = tc.function.name.clone();
-            let raw_args = tc.function.arguments.clone();
+            // Parse JSON once here; move Value into spawned task instead
+            // of cloning the raw JSON string and re-parsing inside the task.
+            let mut params: Value = match serde_json::from_str(&tc.function.arguments) {
+                Ok(v) => v,
+                Err(e) => {
+                    let error_msg = format!(
+                        "Invalid JSON params for tool '{}': {}. Please check your parameters and retry with valid JSON.",
+                        tool_name, e
+                    );
+                    results.push(ToolResult::err(&tool_call_id, error_msg));
+                    continue;
+                }
+            };
+            inject_runtime_tool_params(
+                &tool_name,
+                &mut params,
+                active_task_id.as_deref(),
+                current_user_task.as_deref(),
+            );
+            if !hermes_tools::plan_allows_tool(plan_phase, &tool_name, &params) {
+                let block = hermes_tools::plan_block_payload(&tool_name);
+                let msg = serde_json::from_str::<Value>(&block)
+                    .ok()
+                    .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                    .unwrap_or(block);
+                results.push(ToolResult::err(&tool_call_id, msg));
+                continue;
+            }
+            if tool_name == "delegate_task" {
+                if current_delegate_depth >= max_delegate_depth {
+                    results.push(ToolResult::err(
+                        &tool_call_id,
+                        format!(
+                            "Delegation depth limit reached ({}/{}).",
+                            current_delegate_depth, max_delegate_depth
+                        ),
+                    ));
+                    continue;
+                }
+                if let Some(obj) = params.as_object_mut() {
+                    obj.insert(
+                        "child_depth".to_string(),
+                        Value::from(current_delegate_depth + 1),
+                    );
+                    obj.insert("max_depth".to_string(), Value::from(max_delegate_depth));
+                    if let Some(remaining) = parent_budget_remaining_usd {
+                        obj.insert(
+                            "parent_budget_remaining_usd".to_string(),
+                            Value::from(remaining),
+                        );
+                    }
+                }
+            }
             let registry = self.tool_registry.clone();
             let async_tool_dispatch = async_tool_dispatch.clone();
-            let max_delegate_depth = max_delegate_depth;
-            let current_delegate_depth = current_delegate_depth;
-            let parent_budget_remaining_usd = parent_budget_remaining_usd;
-            let active_task_id = active_task_id.clone();
-            let current_user_task = current_user_task.clone();
-            let plan_phase = plan_phase;
 
             let _permit = Arc::clone(&sem)
                 .acquire_owned()
                 .await
                 .expect("semaphore closed");
+            let tool_span = debug_span!("tool_call", tool = %tool_name, id = %tool_call_id);
             join_set.spawn(async move {
                 let _permit = _permit; // held for task lifetime; dropped on completion
                 let started = Instant::now();
                 let dispatch_result = if let Some(dispatch) = async_tool_dispatch.as_ref() {
                     tracing::debug!(tool = %tool_name, "agent tool call start (async dispatch)");
-                    let mut params: Value = match serde_json::from_str(&raw_args) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            let error_msg = format!(
-                                "Invalid JSON params for tool '{}': {}. \
-                                 Please check your parameters and retry with valid JSON.",
-                                tool_name, e
-                            );
-                            return ToolResult::err(&tool_call_id, error_msg);
-                        }
-                    };
-                    inject_runtime_tool_params(
-                        &tool_name,
-                        &mut params,
-                        active_task_id.as_deref(),
-                        current_user_task.as_deref(),
-                    );
-                    if !hermes_tools::plan_allows_tool(plan_phase, &tool_name, &params) {
-                        let block = hermes_tools::plan_block_payload(&tool_name);
-                        let msg = serde_json::from_str::<Value>(&block)
-                            .ok()
-                            .and_then(|v| {
-                                v.get("error").and_then(|e| e.as_str()).map(str::to_string)
-                            })
-                            .unwrap_or(block);
-                        return ToolResult::err(&tool_call_id, msg);
-                    }
-                    if tool_name == "delegate_task" {
-                        if current_delegate_depth >= max_delegate_depth {
-                            return ToolResult::err(
-                                &tool_call_id,
-                                format!(
-                                    "Delegation depth limit reached ({}/{}).",
-                                    current_delegate_depth, max_delegate_depth
-                                ),
-                            );
-                        }
-                        if let Some(obj) = params.as_object_mut() {
-                            obj.insert(
-                                "child_depth".to_string(),
-                                Value::from(current_delegate_depth + 1),
-                            );
-                            obj.insert("max_depth".to_string(), Value::from(max_delegate_depth));
-                            if let Some(remaining) = parent_budget_remaining_usd {
-                                obj.insert(
-                                    "parent_budget_remaining_usd".to_string(),
-                                    Value::from(remaining),
-                                );
-                            }
-                        }
-                    }
                     dispatch(tool_name.clone(), params).await
                 } else {
                     match registry.get(&tool_name) {
                         Some(entry) => {
                             tracing::debug!(tool = %tool_name, "agent tool call start");
-                            let mut params: Value = match serde_json::from_str(&raw_args) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    let error_msg = format!(
-                                        "Invalid JSON params for tool '{}': {}. \
-                                         Please check your parameters and retry with valid JSON.",
-                                        tool_name, e
-                                    );
-                                    return ToolResult::err(&tool_call_id, error_msg);
-                                }
-                            };
-                            inject_runtime_tool_params(
-                                &tool_name,
-                                &mut params,
-                                active_task_id.as_deref(),
-                                current_user_task.as_deref(),
-                            );
-                            if !hermes_tools::plan_allows_tool(plan_phase, &tool_name, &params) {
-                                let block = hermes_tools::plan_block_payload(&tool_name);
-                                let msg = serde_json::from_str::<Value>(&block)
-                                    .ok()
-                                    .and_then(|v| {
-                                        v.get("error").and_then(|e| e.as_str()).map(str::to_string)
-                                    })
-                                    .unwrap_or(block);
-                                return ToolResult::err(&tool_call_id, msg);
-                            }
-                            if tool_name == "delegate_task" {
-                                if current_delegate_depth >= max_delegate_depth {
-                                    return ToolResult::err(
-                                        &tool_call_id,
-                                        format!(
-                                            "Delegation depth limit reached ({}/{}).",
-                                            current_delegate_depth, max_delegate_depth
-                                        ),
-                                    );
-                                }
-                                if let Some(obj) = params.as_object_mut() {
-                                    obj.insert(
-                                        "child_depth".to_string(),
-                                        Value::from(current_delegate_depth + 1),
-                                    );
-                                    obj.insert(
-                                        "max_depth".to_string(),
-                                        Value::from(max_delegate_depth),
-                                    );
-                                    if let Some(remaining) = parent_budget_remaining_usd {
-                                        obj.insert(
-                                            "parent_budget_remaining_usd".to_string(),
-                                            Value::from(remaining),
-                                        );
-                                    }
-                                }
-                            }
                             let handler = Arc::clone(&entry.handler);
                             match tokio::task::spawn_blocking(move || handler(params)).await {
                                 Ok(result) => result,
@@ -368,7 +313,7 @@ impl AgentLoop {
                         ToolResult::err(&tool_call_id, e.to_string())
                     }
                 }
-            });
+            }.instrument(tool_span));
         }
 
         for tool_result in orchestrated {
@@ -425,6 +370,12 @@ impl AgentLoop {
             }
         }
 
+        tracing::debug!(
+            turn,
+            tool_count = tool_calls.len(),
+            elapsed_ms = batch_start.elapsed().as_millis() as u64,
+            "tool batch complete"
+        );
         results
     }
 }

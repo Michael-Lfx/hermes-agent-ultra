@@ -30,6 +30,8 @@
 1. 读 registry 条目 → python 路径、rust 位置、fixture_dirs、note
 2. 读 docs/sop/<id>.md → 打开列出的 Python / Rust 源文件
 3. 实现或修改 Rust（仅 touched crate；API 命名 snake_case，与 Python 一致）
+3a. Diff check: 每新增的 Rust 字段/参数/逻辑，必须在 Python 源码中 找到对应行。找不到 → 删除或标记为 Rust-only extension（不在
+    registry parity 范围内）。
 4. 验证编译：cargo build -p <crate>   （失败则只修报错，重复至多 3 次，见防御规则）
 5. 验证 parity：cargo test -p hermes-parity-tests
 6. 验证风格：cargo clippy -p <crate> -- -D warnings  （仅 touched crate）

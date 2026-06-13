@@ -15,7 +15,7 @@ cargo test -p hermes-parity-tests code_execution_stubs
 cargo test -p hermes-tools matches_python_web_search_only
 ```
 
-Golden 来自 Python（`C:\Users\15059\hermes-agent`）：
+Golden 来自 Python（`..\..\..\hermes-agent`）：
 
 ```bash
 python3 -c "import sys; sys.path.insert(0,'../hermes-agent'); ..."

@@ -31,3 +31,4 @@ dist/
 *.zip
 
 .local-wip-backup/
+.cargo\config.toml

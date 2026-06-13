@@ -1,0 +1,5 @@
+---
+alwaysApply: true
+---
+
+每个任务都要通过check, build, related test, fmt related code only, review with Donald Knuth perspective, when all pass then git commit.
