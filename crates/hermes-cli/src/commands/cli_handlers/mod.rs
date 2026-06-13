@@ -14,8 +14,6 @@ mod meeting;
 mod memory;
 mod pairing;
 mod plugins;
-mod server;
-mod server_config;
 mod sessions;
 mod whatsapp;
 
@@ -32,7 +30,6 @@ pub use meeting::handle_cli_meeting;
 pub use memory::handle_cli_memory;
 pub use pairing::handle_cli_pairing;
 pub use plugins::{handle_cli_external_plugin_subcommand, handle_cli_plugins};
-pub use server::handle_cli_server;
 pub use sessions::handle_cli_sessions;
 pub use whatsapp::handle_cli_whatsapp;
 

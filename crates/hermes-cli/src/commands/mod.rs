@@ -52,14 +52,12 @@ pub(crate) use misc::{
 };
 
 /// Result of handling a slash command.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandResult {
     /// The command was fully handled (no further action needed).
     Handled,
     /// The command requires the agent to process a follow-up message.
     NeedsAgent,
-    /// Run the agent with a skill slash invocation message.
-    RunAgent(String),
     /// The user requested to quit the application.
     Quit,
 }
