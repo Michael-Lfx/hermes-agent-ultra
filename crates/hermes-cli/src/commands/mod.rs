@@ -229,12 +229,6 @@ pub(crate) use infra::extract_embedding_diag_line;
 #[cfg(test)]
 pub(crate) use kanban::parse_kanban_add;
 #[cfg(test)]
-pub(crate) use misc::{
-    SubconsciousQueueState, SubconsciousTask, TriggerTriageAssessment, TriggerTriageDecision,
-    append_triage_learning_feedback, evaluate_trigger_triage, parse_reasoning_effort,
-    save_subconscious_state, triage_learning_bias, trigger_triage_learning_state_path,
-};
-#[cfg(test)]
 pub(crate) use plan::handle_plan_command;
 #[cfg(test)]
 pub(crate) use policy::walkthrough_events_path;
