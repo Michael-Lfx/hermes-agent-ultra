@@ -867,6 +867,7 @@ fn is_subprocess_env_passthrough(key: &str, passthrough: &BTreeSet<String>) -> b
     passthrough.contains(key)
 }
 
+
 #[cfg(unix)]
 fn shell_env_cleanup_snippet(configured_passthrough: &[String]) -> String {
     let mut snippet = String::new();

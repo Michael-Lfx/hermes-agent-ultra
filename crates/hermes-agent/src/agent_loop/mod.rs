@@ -1746,7 +1746,7 @@ pub(crate) use finalizer_fns::{
     finalizer_action_execution_requires_retry, finalizer_claim_requires_evidence_retry,
     finalizer_output_quality_requires_retry, inject_runtime_tool_params,
     is_contextlattice_shell_invocation, latest_user_content, objective_eval_score,
-    session_search_has_query, summarize_background_review_result,
+    session_search_has_query,
 };
 
 pub(crate) use cost_fns::{

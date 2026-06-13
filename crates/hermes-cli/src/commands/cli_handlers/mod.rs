@@ -40,9 +40,9 @@ pub(crate) use plugins::{discover_plugin_surface, render_plugin_surface_table};
 pub(crate) use whatsapp::whatsapp_cloud_setup_impl;
 
 #[cfg(test)]
-pub(crate) use acp::{ACP_MULTIMODAL_PREFIX, acp_history_to_messages};
-#[cfg(test)]
 pub(crate) use chat::query_mode_tools_enabled;
+#[cfg(test)]
+pub(crate) use acp::{ACP_MULTIMODAL_PREFIX, acp_history_to_messages};
 #[cfg(test)]
 pub(crate) use chat::{apply_cli_chat_runtime_env, resolve_cli_chat_provider_model};
 #[cfg(test)]
