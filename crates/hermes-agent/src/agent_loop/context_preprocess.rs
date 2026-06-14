@@ -205,8 +205,12 @@ impl AgentLoop {
         cfg.max_concurrent_delegates = 0;
         cfg.quiet_mode = true;
         cfg.skip_memory = true;
-        cfg.use_prompt_caching = self.config().use_prompt_caching;
-        cfg.use_native_cache_layout = self.config().use_native_cache_layout;
+        cfg.use_prompt_caching = self
+            .use_prompt_caching
+            .load(std::sync::atomic::Ordering::Relaxed);
+        cfg.use_native_cache_layout = self
+            .use_native_cache_layout
+            .load(std::sync::atomic::Ordering::Relaxed);
         cfg.cache_ttl = self.config().cache_ttl.clone();
         if let Some(sys) = ctx
             .get_messages()

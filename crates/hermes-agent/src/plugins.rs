@@ -586,6 +586,34 @@ impl PluginManager {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PluginManagerHandle
+// ---------------------------------------------------------------------------
+
+/// Wraps a `PluginManager` mutex with a lock-free `has_hooks` flag so callers
+/// can skip the mutex acquisition when no hooks are registered.
+pub struct PluginManagerHandle {
+    pub inner: std::sync::Arc<std::sync::Mutex<PluginManager>>,
+    has_hooks: std::sync::atomic::AtomicBool,
+}
+
+impl PluginManagerHandle {
+    pub fn new(pm: std::sync::Arc<std::sync::Mutex<PluginManager>>) -> Self {
+        let has_hooks = pm.lock().map(|g| g.has_hooks()).unwrap_or(false);
+        Self {
+            inner: pm,
+            has_hooks: std::sync::atomic::AtomicBool::new(has_hooks),
+        }
+    }
+
+    /// Returns `true` when at least one hook callback is registered.
+    /// Checked without acquiring the inner mutex.
+    #[inline]
+    pub fn has_hooks(&self) -> bool {
+        self.has_hooks.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
 /// Register native Rust plugins compiled into the agent binary.
 pub fn register_builtin_plugins(_mgr: &mut PluginManager) {
     // Extension point for future in-tree plugins (observability, disk-cleanup, …).
