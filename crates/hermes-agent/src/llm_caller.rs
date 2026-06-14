@@ -74,8 +74,12 @@ pub(crate) fn build_turn_api_messages(
         ephemeral,
         crate::runtime_provider::active_model(agent).as_str(),
         cfg.cache_ttl.as_str(),
-        cfg.use_prompt_caching,
-        cfg.use_native_cache_layout,
+        agent
+            .use_prompt_caching
+            .load(std::sync::atomic::Ordering::Relaxed),
+        agent
+            .use_native_cache_layout
+            .load(std::sync::atomic::Ordering::Relaxed),
         force_strip_images,
     );
     let messages = agent_runtime_helpers::prepare_wire_messages_for_api(
@@ -115,8 +119,12 @@ fn api_messages_cache_key(
             .map(str::len)
             .unwrap_or(0),
         model_hash: crate::api_messages::hash_str(&crate::runtime_provider::active_model(agent)),
-        use_prompt_caching: cfg.use_prompt_caching,
-        use_native_cache_layout: cfg.use_native_cache_layout,
+        use_prompt_caching: agent
+            .use_prompt_caching
+            .load(std::sync::atomic::Ordering::Relaxed),
+        use_native_cache_layout: agent
+            .use_native_cache_layout
+            .load(std::sync::atomic::Ordering::Relaxed),
         cache_ttl_hash: crate::api_messages::hash_str(&cfg.cache_ttl),
     }
 }
@@ -167,11 +175,17 @@ pub(crate) fn build_api_messages_legacy(
         messages.push(Message::system(ephemeral));
     }
     let cfg = agent.config();
-    if !messages.is_empty() && cfg.use_prompt_caching {
+    if !messages.is_empty()
+        && agent
+            .use_prompt_caching
+            .load(std::sync::atomic::Ordering::Relaxed)
+    {
         crate::prompt_caching::apply_anthropic_cache_control_in_place(
             &mut messages,
             cfg.cache_ttl.as_str(),
-            cfg.use_native_cache_layout,
+            agent
+                .use_native_cache_layout
+                .load(std::sync::atomic::Ordering::Relaxed),
         );
     }
     crate::vision_message_prepare::strip_images_for_non_vision_model(
