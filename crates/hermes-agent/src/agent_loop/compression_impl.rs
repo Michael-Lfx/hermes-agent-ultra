@@ -92,7 +92,6 @@ impl AgentLoop {
         let (new_system, _) = self.active_cached_system_prompt(&task_hint, &tool_schemas);
         let mut final_messages = compressed;
         Self::patch_leading_system_message(&mut final_messages, &new_system);
-        ctx.replace_messages(final_messages.clone());
         self.reset_interest_sync_cursor();
         self.invalidate_turn_api_messages_cache();
 
@@ -126,6 +125,7 @@ impl AgentLoop {
             let _ = db.update_system_prompt(&new_session_id, &new_system);
         }
 
+        ctx.replace_messages(final_messages);
         release_lock();
         true
     }

@@ -74,7 +74,7 @@ impl AgentLoop {
         state.interest_synced_message_len = messages.len();
     }
 
-    pub(crate) fn interest_on_session_end(&self, messages: &[Message]) {
+    pub(crate) fn interest_on_session_end(&self, as_values: &[Value]) {
         let interest_enabled = self.config().interest.enabled;
         let insights_enabled = hermes_config::load_config(None)
             .unwrap_or_default()
@@ -97,10 +97,6 @@ impl AgentLoop {
         } else {
             Vec::new()
         };
-        let as_values: Vec<Value> = messages
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
         let interest_cfg = self.config().interest.clone();
         let insights_cfg = hermes_config::load_config(None)
             .unwrap_or_default()
@@ -130,7 +126,7 @@ impl AgentLoop {
             interest_cfg,
             insights_cfg,
             session_id,
-            as_values,
+            as_values.to_vec(),
             buffered,
             auxiliary,
         );

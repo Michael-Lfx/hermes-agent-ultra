@@ -24,7 +24,11 @@ impl AgentLoop {
     }
 
     pub(crate) fn memory_on_session_end(&self, messages: &[Message]) {
-        self.interest_on_session_end(messages);
+        let as_values: Vec<Value> = messages
+            .iter()
+            .filter_map(|m| serde_json::to_value(m).ok())
+            .collect();
+        self.interest_on_session_end(&as_values);
         if self.config().skip_memory {
             return;
         }
@@ -34,10 +38,6 @@ impl AgentLoop {
         let Ok(mm) = mm.lock() else {
             return;
         };
-        let as_values: Vec<Value> = messages
-            .iter()
-            .filter_map(|m| serde_json::to_value(m).ok())
-            .collect();
         mm.on_session_end(&as_values);
     }
 

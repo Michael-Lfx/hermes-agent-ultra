@@ -223,6 +223,13 @@ fn hydrate_memory_nudge_counters_from_history(agent: &AgentLoop, history: &[Mess
     if interval == 0 {
         return;
     }
+    if let Ok(state) = agent.state.lock() {
+        if state.evolution_counters.user_turn_count > 0
+            && state.evolution_counters.turns_since_memory > 0
+        {
+            return;
+        }
+    }
     let prior_user_turns = history
         .iter()
         .filter(|m| m.role == MessageRole::User)

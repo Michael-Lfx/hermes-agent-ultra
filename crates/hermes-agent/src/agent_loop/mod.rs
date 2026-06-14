@@ -42,7 +42,7 @@ use crate::message_sanitization::{
     build_partial_stream_stub_response, format_partial_stream_tool_call_warning,
     partial_stream_dropped_tool_names, sanitize_surrogates, strip_budget_warnings_from_messages,
 };
-use crate::plugins::{HookType, PluginManager};
+use crate::plugins::{HookType, PluginManager, PluginManagerHandle};
 use crate::replay::short_sha256_hex;
 use crate::session_persistence::{SessionFlushCursor, SessionPersistence};
 use crate::skill_orchestrator::SkillOrchestrator;
@@ -848,7 +848,7 @@ pub struct AgentLoop {
     /// Consolidated shared mutable state (replaces ~20 scattered Arc<Mutex<>> fields).
     pub state: Arc<Mutex<AgentSharedState>>,
     /// Optional plugin manager for lifecycle hooks.
-    pub plugin_manager: Option<Arc<std::sync::Mutex<PluginManager>>>,
+    pub plugin_manager: Option<PluginManagerHandle>,
     /// Callbacks for progress reporting.
     pub callbacks: Arc<AgentCallbacks>,
     /// Sub-agent delegation depth (0 = root).
@@ -882,6 +882,9 @@ pub struct AgentLoop {
     pub(crate) disable_streaming: Arc<AtomicBool>,
     /// Per-turn vision capability (Python `_vision_supported`; reset each `prepare_turn`).
     pub(crate) vision_supported: Arc<std::sync::atomic::AtomicBool>,
+    /// Runtime prompt-caching policy (updated each LLM call, avoids config deep-clone).
+    pub(crate) use_prompt_caching: Arc<AtomicBool>,
+    pub(crate) use_native_cache_layout: Arc<AtomicBool>,
     /// Plan-then-execute phase (read-only planning → approval → write execution).
     plan_phase: Arc<Mutex<hermes_tools::PlanPhase>>,
     /// Pending structured plan awaiting user approval.
@@ -1156,36 +1159,18 @@ impl AgentLoop {
             interrupted: exit.interrupted,
             session_cost_usd: Some(session_cost_usd),
             session_started_hooks_fired,
-            pending_steer: None,
             api_calls: exit.api_calls,
             turn_exit_reason: exit.turn_exit_reason.to_string(),
             failed: exit.failed,
             partial: exit.partial,
-            guardrail: None,
             interrupt_message: if exit.interrupted {
                 self.interrupt.peek_redirect_message()
             } else {
                 None
             },
-            response_transformed: false,
-            response_previewed: false,
-            cost_status: None,
-            cost_source: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            reasoning_tokens: None,
-            prompt_tokens: None,
-            completion_tokens: None,
-            total_tokens: None,
-            last_prompt_tokens: None,
-            model: None,
-            provider: None,
-            base_url: None,
-            session_id: None,
             plan_pending: exit.plan_pending,
             plan_phase: exit.plan_phase,
+            ..Default::default()
         })
     }
 
@@ -1332,6 +1317,8 @@ impl AgentLoop {
             crate::compression_orchestrator::ContextCompressionOrchestrator::new(
                 build_context_compressor_for_config(&config),
             );
+        let init_prompt_caching = config.use_prompt_caching;
+        let init_native_cache_layout = config.use_native_cache_layout;
         Self {
             config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
@@ -1361,6 +1348,8 @@ impl AgentLoop {
             ),
             disable_streaming: Arc::new(AtomicBool::new(false)),
             vision_supported: Arc::new(AtomicBool::new(true)),
+            use_prompt_caching: Arc::new(AtomicBool::new(init_prompt_caching)),
+            use_native_cache_layout: Arc::new(AtomicBool::new(init_native_cache_layout)),
             plan_phase: Arc::new(Mutex::new(hermes_tools::PlanPhase::Off)),
             pending_plan: Arc::new(Mutex::new(None)),
             synced_tools_registry: None,
@@ -1462,8 +1451,12 @@ impl AgentLoop {
                 .map(str::len)
                 .unwrap_or(0),
             model_hash: crate::api_messages::hash_str(&crate::runtime_provider::active_model(self)),
-            use_prompt_caching: cfg.use_prompt_caching,
-            use_native_cache_layout: cfg.use_native_cache_layout,
+            use_prompt_caching: self
+                .use_prompt_caching
+                .load(std::sync::atomic::Ordering::Relaxed),
+            use_native_cache_layout: self
+                .use_native_cache_layout
+                .load(std::sync::atomic::Ordering::Relaxed),
             cache_ttl_hash: crate::api_messages::hash_str(&cfg.cache_ttl),
         }
     }
@@ -1600,6 +1593,8 @@ impl AgentLoop {
             crate::compression_orchestrator::ContextCompressionOrchestrator::new(
                 build_context_compressor_for_config(&config),
             );
+        let init_prompt_caching = config.use_prompt_caching;
+        let init_native_cache_layout = config.use_native_cache_layout;
         Self {
             config_runtime: std::sync::RwLock::new(Arc::new(config)),
             tool_registry,
@@ -1629,6 +1624,8 @@ impl AgentLoop {
             ),
             disable_streaming: Arc::new(AtomicBool::new(false)),
             vision_supported: Arc::new(AtomicBool::new(true)),
+            use_prompt_caching: Arc::new(AtomicBool::new(init_prompt_caching)),
+            use_native_cache_layout: Arc::new(AtomicBool::new(init_native_cache_layout)),
             plan_phase: Arc::new(Mutex::new(hermes_tools::PlanPhase::Off)),
             pending_plan: Arc::new(Mutex::new(None)),
             synced_tools_registry: None,
@@ -1700,7 +1697,7 @@ impl AgentLoop {
 
     /// Set the plugin manager.
     pub fn with_plugins(mut self, pm: Arc<std::sync::Mutex<PluginManager>>) -> Self {
-        self.plugin_manager = Some(pm);
+        self.plugin_manager = Some(PluginManagerHandle::new(pm));
         self
     }
 

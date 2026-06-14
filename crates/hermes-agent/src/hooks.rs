@@ -21,8 +21,11 @@ use crate::replay::truncate_hook_preview;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn invoke_hook(agent: &AgentLoop, hook: HookType, ctx_val: &Value) -> Vec<HookResult> {
-    if let Some(ref pm) = agent.plugin_manager {
-        if let Ok(pm) = pm.lock() {
+    if let Some(ref handle) = agent.plugin_manager {
+        if !handle.has_hooks() {
+            return Vec::new();
+        }
+        if let Ok(pm) = handle.inner.lock() {
             return pm.invoke_hook(hook, ctx_val);
         }
     }
