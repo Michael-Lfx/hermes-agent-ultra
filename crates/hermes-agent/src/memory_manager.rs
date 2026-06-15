@@ -6,8 +6,6 @@
 //!
 //! The built-in provider is always registered first and cannot be removed.
 //! Multiple external providers can be registered and run concurrently.
-//!
-//! Corresponds to Python `agent/memory_manager.py`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write as _;
