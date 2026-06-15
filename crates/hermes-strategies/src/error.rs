@@ -14,28 +14,6 @@ pub enum StrategyError {
     #[error("Strategy execution failed: {0}")]
     ExecutionFailed(String),
 
-    #[error("Trading error: {0}")]
-    Trading(#[from] hermes_trading::TradingError),
-
-    // --- Declarative strategy errors ---
-    #[error("Strategy definition error: {0}")]
-    DefinitionError(String),
-
-    #[error("Unknown indicator type: {0}")]
-    UnknownIndicatorType(String),
-
-    #[error("Invalid rule expression: {0}")]
-    InvalidRuleExpression(String),
-
-    #[error("Circular indicator dependency: {0}")]
-    CircularDependency(String),
-
-    #[error("Strategy not found: {0}")]
-    NotFound(String),
-
-    #[error("Strategy file I/O error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("Vibe error: {0}")]
+    Vibe(#[from] hermes_vibe::VibeError),
 }

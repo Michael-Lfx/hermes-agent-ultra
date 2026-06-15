@@ -20,8 +20,8 @@ pub enum WatchError {
     #[error("Invalid alert condition: {0}")]
     InvalidCondition(String),
 
-    #[error("Trading error: {0}")]
-    Trading(#[from] hermes_trading::TradingError),
+    #[error("Vibe error: {0}")]
+    Vibe(#[from] hermes_vibe::VibeError),
 
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),

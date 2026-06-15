@@ -10,7 +10,7 @@ description = "Market watch: real-time quotes, watchlist, and alert engine for V
 default = []
 
 [dependencies]
-hermes-trading = { workspace = true }
+hermes-vibe = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }

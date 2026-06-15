@@ -1,4 +1,4 @@
-# trading-Trading → Hermes 0py Rust 重写规划
+# Vibe-Trading → Hermes 0py Rust 重写规划
 
 > **状态**: 规划草案（0py 优先）  
 > **上游**: [HKUDS/Vibe-Trading](https://github.com/HKUDS/Vibe-Trading) v0.1.9  
@@ -32,10 +32,10 @@
 | Vibe 能力 | 0py | Rust / Hermes 实现 | 说明 |
 |-----------|-----|-------------------|------|
 | Agent 循环（48 tools） | — | `hermes-agent` `AgentLoop` | **不移植** LangChain；只挂工具 |
-| MCP server（36 tools） | ✅ | `hermes-mcp` / `rmcp` | 小 MVP 只暴露 2–5 个 trading tool；整包 36+42 详见 §10 反模式 |
+| MCP server（36 tools） | ✅ | `hermes-mcp` / `rmcp` | 小 MVP 只暴露 2–5 个 vibe tool；整包 36+42 详见 §10 反模式 |
 | MCP client（Robinhood 等） | ✅ | `hermes-mcp` client | 远程 MCP 无 Python |
 | Session / JSONL | — | `hermes-agent/session_persistence` | SQLite + FTS |
-| 跨会话 Memory | 🟡 | 自写 `~/.hermes/trading/memory/` 或扩 session | Vibe markdown 文件模式可仿 |
+| 跨会话 Memory | 🟡 | 自写 `~/.hermes/vibe/memory/` 或扩 session | Vibe markdown 文件模式可仿 |
 | Skills 77 条（markdown） | — | `hermes-skills` | 内容可迁入；**执行**靠 tools |
 | skill_writer 自进化 | 🟡 | `hermes-skills` curator | 非 MVP |
 | Web UI (React) | ❌ MVP | 保留 Vibe 前端或 Hermes TUI | API 契约另议 |
@@ -44,7 +44,7 @@
 | `web_search` | — | Hermes 内置 | 不新写 |
 | `read_url` | — | Hermes `web_extract` | SSRF 走现有策略 |
 | `bash` / shell tools | — | Hermes `terminal` + `approval` | 默认严格门控 |
-| Research Goal | 🟡 | 新 `hermes-trading-research` | Goal store + evidence |
+| Research Goal | 🟡 | 新 `hermes-vibe-research` | Goal store + evidence |
 | Hypothesis Registry | 🟡 | SQLite + tool | Phase 3+ |
 | Swarm 29 preset | 🟡 | `sub_agent_orchestrator` + YAML | ≠ Vibe DAG 全量 |
 | CLI TUI | — | `hermes-cli` / Ratatui | 不移植 Vibe Rich UI |
@@ -64,8 +64,8 @@
 | **futu** OpenD | ❌ | — | — | 无官方 Rust SDK |
 | **tencent** HTTP | ✅ | `akshare` / `tenk` | — | A 股 HTTP 源已含 |
 | **auto fallback** | 🟡 | 自研 `MarketDataProvider` trait | `akshare → yfinance-rs → error` | 需显式降级表，非 Vibe 开箱 |
-| Disk cache | ✅ | 自写 `~/.hermes/trading/cache` | Parquet / duckdb | settled bar 缓存 |
-| `get_market_data` tool | ✅ | `hermes-trading-data` | — | MVP 核心 |
+| Disk cache | ✅ | 自写 `~/.hermes/vibe/cache` | Parquet / duckdb | settled bar 缓存 |
+| `get_market_data` tool | ✅ | `hermes-vibe-data` | — | MVP 核心 |
 
 **非 0py（勿作产品依赖）**：Python akshare、AKTools HTTP、mootdx Python、baostock Python。
 
@@ -73,7 +73,7 @@
 
 | Vibe 引擎 / 能力 | 0py | Rust 实现 | 可实现 | 缺口 |
 |------------------|-----|-----------|--------|------|
-| `global_equity` 美股/HK | ✅ | 自写 `hermes-trading-backtest` + Polars | SMA/RSI 模板、日频撮合、指标 | 涨跌停可选 |
+| `global_equity` 美股/HK | ✅ | 自写 `hermes-vibe-backtest` + Polars | SMA/RSI 模板、日频撮合、指标 | 涨跌停可选 |
 | `crypto` | ✅ | 同上 | 24/7、无 T+1 | — |
 | `china_a` A 股 | 🟡 | 同上 + **T+1** 规则 | 日线回测、涨跌停简化版 | 规则需自写 |
 | `china_futures` / `global_futures` | 🟡 | Polars + 保证金模型 | Phase 3+ | 无开箱引擎 |
@@ -82,7 +82,7 @@
 | `composite` 跨市场资金池 | 🟡 | 自研 | Phase 4+ | 汇率/保证金 |
 | 用户 Python `signal_engine` | ❌ | — | — | 改 **Rust 模板** 或未来 WASM/DSL |
 | 动态 `import` 策略 | ❌ | — | — | 0py 明确不做 |
-| `backtest` / `run_backtest` tool | ✅ | `hermes-trading-backtest` | MVP 核心 | — |
+| `backtest` / `run_backtest` tool | ✅ | `hermes-vibe-backtest` | MVP 核心 | — |
 | Monte Carlo / walk-forward | 🟡 | [`nt-backtesting`](https://crates.io/crates/nt-backtesting) 或自写 | Phase 3+ | — |
 | Benchmark（SPY/CSI300） | 🟡 | `akshare` / `yfinance-rs` 拉基准 | Phase 2+ | — |
 | `run_card.json` / md 报告 | ✅ | `serde` + 模板 | HTML/md 原生 | PDF 另议 |
@@ -121,7 +121,7 @@
 | **OKX / Binance** | ✅ | 🟡 | `ccxt-rust` / barter / digdigdig3 | 需 mandate |
 | **Robinhood** MCP | ✅ | 🟡 | `hermes-mcp` client | OAuth 远程 MCP |
 | Tiger / Futu / Longbridge / Dhan / Shoonya | ❌/🟡 | ❌ | 无成熟 Rust SDK | 长期缺口 |
-| mandate / order_guard / kill switch | ✅ | ✅ | **自研 `hermes-trading-trading`** | 必须原生 Rust |
+| mandate / order_guard / kill switch | ✅ | ✅ | **自研 `hermes-vibe-trading`** | 必须原生 Rust |
 | `trading_*` tools | 🟡 | 🟡 | 上表 + 安全栈 | **MVP 全禁写** |
 
 ### 1.6 研究附属
@@ -133,7 +133,7 @@
 | `read_document` PDF/DOCX/XLSX | ❌ MVP | — | 后续：`pdf-extract`、`calamine` 等分批 |
 | Trade journal PDF | ❌ | — | — |
 | 相关性热力图 | 🟡 | Polars corr + 前端或 CLI | Phase 3+ |
-| 持久化 runs / swarm | ✅ | SQLite / 文件树 | `~/.hermes/trading/runs/` |
+| 持久化 runs / swarm | ✅ | SQLite / 文件树 | `~/.hermes/vibe/runs/` |
 
 ### 1.7 技术指标
 
@@ -182,7 +182,7 @@
 
 | 项目 | 成熟度 | 0py | 主要能力 |
 |------|--------|-----|----------|
-| **hermes-trading-backtest**（自研） | 计划 | ✅ | 模板策略、T+1、run_card |
+| **hermes-vibe-backtest**（自研） | 计划 | ✅ | 模板策略、T+1、run_card |
 | **ta-lib-in-rust** | 🟢 | ✅ | 技术指标 |
 | **nyxs_owl** | 🟡 | ✅ | Polars 回测 + 预测模块 |
 | **nt-backtesting** | 🟡 | ✅ | 事件驱动、MC、walk-forward |
@@ -243,7 +243,7 @@
 ## 3. Tools & Skills 接入排期（P0 / P1 / P2 / 后续）
 
 > **接入原则**：**Tool 干活，Skill 指路，Hermes 编排**。  
-> - **Tool** = `hermes-tools` 新注册 + `crates/hermes-trading` 库  
+> - **Tool** = `hermes-tools` 新注册 + `crates/hermes-vibe` 库  
 > - **Skill** = `optional-skills/finance/` 下 `SKILL.md`（无 Python 执行层）  
 > - **Hermes 复用** = 不新写，仅在 skill 里写清何时调用  
 
@@ -264,27 +264,27 @@
 
 | ID | Tool 名 | toolset | 实现 | 依赖 crate | 验收 |
 |----|---------|---------|------|------------|------|
-| T-P0-01 | `get_market_data` | `trading` | `hermes-tools/tools/trading_market_data.rs` | `hermes-trading` → `akshare` | 返回 OHLCV JSON；symbol+日期范围 |
-| T-P0-02 | `run_backtest` | `trading` | `hermes-tools/tools/trading_backtest.rs` | `hermes-trading` → Polars + `ta-lib-in-rust` | `sma_cross(20,50)`；return/dd/trade_count |
+| T-P0-01 | `get_market_data` | `vibe` | `hermes-tools/tools/vibe_market_data.rs` | `hermes-vibe` → `akshare` | 返回 OHLCV JSON；symbol+日期范围 |
+| T-P0-02 | `run_backtest` | `vibe` | `hermes-tools/tools/vibe_backtest.rs` | `hermes-vibe` → Polars + `ta-lib-in-rust` | `sma_cross(20,50)`；return/dd/trade_count |
 
 **工程任务**：
 
 | 任务 | 路径 | 说明 |
 |------|------|------|
-| 库 crate | `crates/hermes-trading/` | `MarketDataProvider`、`BacktestEngine` |
-| 注册模块 | `crates/hermes-tools/src/register/trading.rs` | `pub fn register(ctx)` — 每个 tool 用 `reg(ctx, "trading", ...)` 注册；在 `register/mod.rs` 的 `register_all` 中加 `#[cfg(feature = "trading-research")] trading::register(ctx)` |
-| feature | `crates/hermes-tools/Cargo.toml` | `trading-research = ["dep:hermes-trading"]`；`full = [..., "trading-research"]` |
-| workspace | `Cargo.toml` | `members` 加 `"crates/hermes-trading"`；`workspace.dependencies` 加 `hermes-trading` |
-| golden | `crates/hermes-parity-tests/fixtures/trading_*` | mock JSON parity |
+| 库 crate | `crates/hermes-vibe/` | `MarketDataProvider`、`BacktestEngine` |
+| 注册模块 | `crates/hermes-tools/src/register/vibe.rs` | `pub fn register(ctx)` — 每个 tool 用 `reg(ctx, "vibe", ...)` 注册；在 `register/mod.rs` 的 `register_all` 中加 `#[cfg(feature = "vibe-research")] vibe::register(ctx)` |
+| feature | `crates/hermes-tools/Cargo.toml` | `vibe-research = ["dep:hermes-vibe"]`；`full = [..., "vibe-research"]` |
+| workspace | `Cargo.toml` | `members` 加 `"crates/hermes-vibe"`；`workspace.dependencies` 加 `hermes-vibe` |
+| golden | `crates/hermes-parity-tests/fixtures/vibe_*` | mock JSON parity |
 
-> **注意**：toolset 名称是注册时传入 `reg()` 的字符串参数（如 `"web"`、`"skills"`），不存在 `toolset.rs` 常量文件。trading toolset 统一使用 `"trading"` 字符串。
+> **注意**：toolset 名称是注册时传入 `reg()` 的字符串参数（如 `"web"`、`"skills"`），不存在 `toolset.rs` 常量文件。vibe toolset 统一使用 `"vibe"` 字符串。
 
 **P0 市场范围**：`BTC-USDT`（必测）+ `000001.SZ` 或 `600519.SH`（二选一先通）。
 
 **P0 明确不做**：独立 `get_backtest_report`、T+1、disk cache、第三策略。
 
 ```toml
-# P0 依赖（hermes-trading/Cargo.toml）
+# P0 依赖（hermes-vibe/Cargo.toml）
 akshare = "0.1"
 ta-lib-in-rust = "1.0"
 polars = { version = "0.46", features = ["lazy", "temporal"] }
@@ -296,7 +296,7 @@ polars = { version = "0.46", features = ["lazy", "temporal"] }
 
 | ID | Skill | 路径 | 作用 |
 |----|-------|------|------|
-| S-P0-01 | `trading-research` | `skills/finance/trading-research/SKILL.md` | 路由：何时 `get_market_data` / `run_backtest` vs `web_search`；**禁止编造回测数字** |
+| S-P0-01 | `vibe-research` | `optional-skills/finance/vibe-research/SKILL.md` | 路由：何时 `get_market_data` / `run_backtest` vs `web_search`；**禁止编造回测数字** |
 
 **SKILL.md 必含**：When to Use / When NOT to Use · 工具调用顺序 · 与 `stocks` skill 关系 · Verification 示例 prompt。**不新建** Python `scripts/`。
 
@@ -314,15 +314,15 @@ polars = { version = "0.46", features = ["lazy", "temporal"] }
 # config.yaml — Hermes 现有配置机制
 # tools 字段控制运行时启用的 tool 名列表（默认含 bash/read/write/edit/glob/grep/web_search/web_fetch）
 # platform_toolsets 按平台映射 toolset 名称（如 cli → hermes-cli）
-# P0 场景：编译时启用 trading-research feature 即可注册 get_market_data / run_backtest
+# P0 场景：编译时启用 vibe-research feature 即可注册 get_market_data / run_backtest
 # tools:
 #   - bash
 #   - read
 #   - write
 #   - web_search
 #   - web_fetch
-#   - get_market_data    # trading tool
-#   - run_backtest       # trading tool
+#   - get_market_data    # vibe tool
+#   - run_backtest       # vibe tool
 # P0 不启：delegation, cronjob, terminal, execute_code
 ```
 
@@ -330,9 +330,9 @@ polars = { version = "0.46", features = ["lazy", "temporal"] }
 
 | 周 | 交付 |
 |----|------|
-| W1 | `hermes-trading` crate 搭建 + akshare-rs 可行性 spike + `get_market_data` + unit test |
+| W1 | `hermes-vibe` crate 搭建 + akshare-rs 可行性 spike + `get_market_data` + unit test |
 | W2 | `run_backtest` + parity fixture |
-| W3 | `trading-research` SKILL + `hermes chat` 端到端 |
+| W3 | `vibe-research` SKILL + `hermes chat` 端到端 |
 
 ---
 
@@ -344,31 +344,31 @@ polars = { version = "0.46", features = ["lazy", "temporal"] }
 
 | ID | Tool 名 | 变更 | 说明 |
 |----|---------|------|------|
-| T-P1-01 | `get_market_data` | **增强** | 多市场 symbol；可选 `source`；`TRADING_DATA_CACHE` |
+| T-P1-01 | `get_market_data` | **增强** | 多市场 symbol；可选 `source`；`VIBE_DATA_CACHE` |
 | T-P1-02 | `run_backtest` | **增强** | + `rsi_revert`；+ Sharpe；A 股 **T+1** |
-| T-P1-03 | `get_backtest_report` | **可选** | 读 `~/.hermes/trading/runs/{id}/run_card.json` |
+| T-P1-03 | `get_backtest_report` | **可选** | 读 `~/.hermes/vibe/runs/{id}/run_card.json` |
 
-**库拆分（可选）**：`hermes-trading` → `hermes-trading-data` + `hermes-trading-backtest`。
+**库拆分（可选）**：`hermes-vibe` → `hermes-vibe-data` + `hermes-vibe-backtest`。
 
 #### 3.2.2 Skills（新建/更新）
 
 | ID | Skill | 类型 | 说明 |
 |----|-------|------|------|
-| S-P1-01 | `trading-research` | 更新 | T+1、多模板、run_card 路径 |
-| S-P1-02 | `trading-debate` | 新建 | `delegate_task` bull/bear；子 agent toolset=`trading,web` |
-| S-P1-03 | `finance/stocks` | 更新说明 | 回测走 `trading-research`；quote-only 仍可用 terminal（非 0py） |
+| S-P1-01 | `vibe-research` | 更新 | T+1、多模板、run_card 路径 |
+| S-P1-02 | `vibe-debate` | 新建 | `delegate_task` bull/bear；子 agent toolset=`vibe,web` |
+| S-P1-03 | `finance/stocks` | 更新说明 | 回测走 `vibe-research`；quote-only 仍可用 terminal（非 0py） |
 
 #### 3.2.3 Hermes 复用（P1 开启）
 
 | 能力 | 组件 | P1 用途 |
 |------|------|---------|
-| 多 agent | `delegate_task` | 配合 `trading-debate` |
+| 多 agent | `delegate_task` | 配合 `vibe-debate` |
 | 记忆 | `memory` | 风险偏好、标的池 |
 | 历史 | `session_search` | 上次回测结论 |
 | 定时 | `cronjob` | 可选收盘复盘 |
 
 ```yaml
-active_toolsets: [web, file, skills, memory, delegation, trading]
+active_toolsets: [web, file, skills, memory, delegation, vibe]
 ```
 
 #### 3.2.4 P1 里程碑
@@ -377,7 +377,7 @@ active_toolsets: [web, file, skills, memory, delegation, trading]
 |----|------|
 | W4 | T+1 + RSI + 多市场 smoke |
 | W5 | `run_card.json` + cache |
-| W6 | `trading-debate` + delegate 端到端 |
+| W6 | `vibe-debate` + delegate 端到端 |
 
 ---
 
@@ -401,16 +401,16 @@ active_toolsets: [web, file, skills, memory, delegation, trading]
 
 | ID | Skill | 说明 |
 |----|-------|------|
-| S-P2-01 | `trading-journal` | CSV 路径 + `analyze_trade_journal` |
-| S-P2-02 | `trading-factor` | 何时 `run_factor_ic`；IC 局限 |
-| S-P2-03 | `trading-cron` | `cronjob` 收盘/周报配方 |
-| S-P2-04 | `trading-research` | 更新 benchmark、因子、只读账户 |
+| S-P2-01 | `vibe-journal` | CSV 路径 + `analyze_trade_journal` |
+| S-P2-02 | `vibe-factor` | 何时 `run_factor_ic`；IC 局限 |
+| S-P2-03 | `vibe-cron` | `cronjob` 收盘/周报配方 |
+| S-P2-04 | `vibe-research` | 更新 benchmark、因子、只读账户 |
 
 #### 3.3.3 Hermes / MCP（P2）
 
 | 项 | 说明 |
 |----|------|
-| `hermes mcp serve` | 对外 filter 5–8 个 trading tools |
+| `hermes mcp serve` | 对外 filter 5–8 个 vibe tools |
 | `hermes-mcp` client | 可选 Robinhood MCP 只读 |
 | `rustdx` 离线 | Parquet 导入；`get_market_data` 读本地 |
 
@@ -442,9 +442,9 @@ active_toolsets: [web, file, skills, memory, delegation, trading]
 
 | Skill | 说明 |
 |-------|------|
-| `trading-shadow` | Shadow Account HTML 报告 |
-| `trading-options` | 期权研究 + `options_price` |
-| `trading-crypto-perp` | 永续/资金费率 + ccxt |
+| `vibe-shadow` | Shadow Account HTML 报告 |
+| `vibe-options` | 期权研究 + `options_price` |
+| `vibe-crypto-perp` | 永续/资金费率 + ccxt |
 | Vibe 77 条迁移 | 仅 markdown 路由改写 |
 
 #### 明确不在 0py 路线图内
@@ -465,14 +465,14 @@ active_toolsets: [web, file, skills, memory, delegation, trading]
 
 | 用户需求 | Tool | Skill |
 |----------|------|-------|
-| 拉 K 线 | `get_market_data` | `trading-research` |
+| 拉 K 线 | `get_market_data` | `vibe-research` |
 | 回测 | `run_backtest` | 模板说明、禁止幻觉 |
-| 新闻/宏观 | `web_search` | `trading-research` 分流 |
-| 多空辩论 | `delegate_task` | `trading-debate` |
-| 定时复盘 | `cronjob` | `trading-cron` |
-| 券商 CSV | `analyze_trade_journal` | `trading-journal` |
-| 因子 IC | `run_factor_ic` | `trading-factor` |
-| 写 md 报告 | `write_file` | `trading-research` 输出结构 |
+| 新闻/宏观 | `web_search` | `vibe-research` 分流 |
+| 多空辩论 | `delegate_task` | `vibe-debate` |
+| 定时复盘 | `cronjob` | `vibe-cron` |
+| 券商 CSV | `analyze_trade_journal` | `vibe-journal` |
+| 因子 IC | `run_factor_ic` | `vibe-factor` |
+| 写 md 报告 | `write_file` | `vibe-research` 输出结构 |
 
 ### 3.6 旧档位对应（历史参考）
 
@@ -525,11 +525,11 @@ Hermes 工具启用分两层：**编译时 Cargo feature** + **运行时 `config
 
 编译时：在 `hermes-tools/Cargo.toml` 中启用 feature：
 ```toml
-# 编译时启用 trading（full 默认已含）
-hermes-tools = { workspace = true, features = ["trading-research"] }
+# 编译时启用 vibe（full 默认已含）
+hermes-tools = { workspace = true, features = ["vibe-research"] }
 ```
 
-运行时：在 `config.yaml` 的 `tools` 列表追加 trading tool 名：
+运行时：在 `config.yaml` 的 `tools` 列表追加 vibe tool 名：
 ```yaml
 # config.yaml — 量化研究 profile
 tools:
@@ -542,8 +542,8 @@ tools:
   - skill_view
   - memory
   - delegate_task
-  - get_market_data     # trading
-  - run_backtest        # trading
+  - get_market_data     # vibe
+  - run_backtest        # vibe
 # 默认不启：browser, execute_code（除非用户明确要）
 ```
 
@@ -564,13 +564,13 @@ tools:
 ### 4.4 只新增什么代码
 
 ```
-crates/hermes-trading/          # 仅：akshare 适配 + Polars 回测（纯库）
+crates/hermes-vibe/          # 仅：akshare 适配 + Polars 回测（纯库）
 crates/hermes-tools/
-  register/trading.rs             # reg() 注册 2 个 ToolHandler
-  tools/trading_market_data.rs
-  tools/trading_backtest.rs
-skills/finance/
-  trading-research/SKILL.md       # 教 agent：何时用 get_market_data vs web_search vs stocks skill
+  register/vibe.rs             # reg() 注册 2 个 ToolHandler
+  tools/vibe_market_data.rs
+  tools/vibe_backtest.rs
+optional-skills/finance/
+  vibe-research/SKILL.md       # 教 agent：何时用 get_market_data vs web_search vs stocks skill
 ```
 
 **不要新建**：`VibeAgentLoop`、独立 CLI loop、独立 MCP server 二进制、独立 web_search。
@@ -599,7 +599,7 @@ skills/finance/
     │ hermes-mcp client（可选券商 MCP）                │
     └─────────────────────────────────────────────────┘
          │
-    skill_view("trading-research")  ← 可选 SKILL.md 路由
+    skill_view("vibe-research")  ← 可选 SKILL.md 路由
 ```
 
 ---
@@ -608,12 +608,12 @@ skills/finance/
 
 | 排期 | Crate | 职责 |
 |------|-------|------|
-| P0 | `hermes-trading` | data + backtest 合一 |
-| P1 | `hermes-trading-data` + `hermes-trading-backtest` | 可选拆分 |
-| P2 | `hermes-trading-research` | Goal、evidence（可选） |
-| 后续 | `hermes-trading-trading` / `hermes-trading-factors` | 下单 / 因子 |
+| P0 | `hermes-vibe` | data + backtest 合一 |
+| P1 | `hermes-vibe-data` + `hermes-vibe-backtest` | 可选拆分 |
+| P2 | `hermes-vibe-research` | Goal、evidence（可选） |
+| 后续 | `hermes-vibe-trading` / `hermes-vibe-factors` | 下单 / 因子 |
 
-工具注册：`hermes-tools/src/register/trading.rs` → `register_all` + feature `trading-research`。
+工具注册：`hermes-tools/src/register/vibe.rs` → `register_all` + feature `vibe-research`。
 
 ---
 
@@ -654,25 +654,22 @@ skills/finance/
 ## 8. 测试与工程
 
 ```bash
-# 单元 + 集成（当前 P0）
-cargo test -p hermes-trading
-
-# 单元 + 集成（P1 可选拆分后，若执行库拆分再启用）
-# cargo test -p hermes-trading-data
-# cargo test -p hermes-trading-backtest
+# 单元 + 集成
+cargo test -p hermes-vibe
+cargo test -p hermes-vibe-backtest   # P1 拆分后
+cargo test -p hermes-vibe-data
 
 # 0py 守门：确保无 Python 依赖混入
-rg -i 'python|pyo3' crates/hermes-trading*
+rg -i 'python|pyo3' crates/hermes-vibe*
 
 # Parity golden（遵循 AGENTS.md）
 cargo test -p hermes-parity-tests
 
 # Clippy
-cargo clippy -p hermes-trading -- -D warnings
-cargo clippy -p hermes-parity-tests -- -D warnings
+clippy -p hermes-vibe -- -D warnings
 
 # 网络隔离测试：使用 wiremock mock 行情 API
-cargo test -p hermes-trading --features test-mock
+cargo test -p hermes-vibe --features test-mock
 
 # 端到端验收
 hermes chat  # 回测验收
@@ -688,8 +685,8 @@ hermes chat  # 回测验收
 |------|------|
 | akshare-rs 变更 / API 缺失 | pin 版本 + golden fixture；P0 W1 spike 做 go/no-go |
 | akshare-rs 不可用时的 Plan B | `MarketDataProvider` trait 设计预留 provider 切换；备选 `yfinance-rs` / `tushare-api` / 手写 `reqwest` |
-| 工具过多 | P0 只加 2 个 trading tool |
-| 实盘事故 | P0–P2 禁写；`hermes-trading-trading` 需 mandate 栈先于 tool |
+| 工具过多 | P0 只加 2 个 vibe tool |
+| 实盘事故 | P0–P2 禁写；`hermes-vibe-trading` 需 mandate 栈先于 tool |
 | ccxt-rust 社区维护 | 仅 crypto 场景依赖；A 股/美股不经过 ccxt |
 
 ---
@@ -711,7 +708,7 @@ hermes chat  # 回测验收
 2. P1 是否拆 `get_backtest_report` 独立 tool？
 3. finance profile 默认 toolset 是否含 `delegation`（P0 否 / P1 是）？
 4. akshare-rs 不满足 P0 需求时的 Plan B：切 `yfinance-rs` / `tushare-api` 还是手写 `reqwest` HTTP？
-5. 是否需要 `hermes-trading` 的 `test-mock` feature 来隔离网络测试？
+5. 是否需要 `hermes-vibe` 的 `test-mock` feature 来隔离网络测试？
 
 ---
 

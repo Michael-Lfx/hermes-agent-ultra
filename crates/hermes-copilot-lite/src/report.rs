@@ -28,7 +28,9 @@ impl AnalysisReport {
             let signal_str = last
                 .map(|d| format!("{:?}", d.signal))
                 .unwrap_or_else(|| "N/A".to_string());
-            lines.push(format!("- **{name}**: last signal = {signal_str}"));
+            lines.push(format!(
+                "- **{name}**: last signal = {signal_str}"
+            ));
         }
         lines.join("\n")
     }

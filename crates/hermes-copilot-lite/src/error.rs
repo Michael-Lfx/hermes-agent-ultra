@@ -17,8 +17,8 @@ pub enum CopilotError {
     #[error("Market watch error: {0}")]
     Watch(#[from] hermes_market_watch::WatchError),
 
-    #[error("Trading error: {0}")]
-    Trading(#[from] hermes_trading::TradingError),
+    #[error("Vibe error: {0}")]
+    Vibe(#[from] hermes_vibe::VibeError),
 
     #[error("Orchestration error: {0}")]
     Orchestration(String),

@@ -12,7 +12,6 @@ members = [
     "crates/hermes-mcp",
     "crates/hermes-environments",
     "crates/hermes-config",
-    "crates/hermes-bundled-rg",
     "crates/hermes-intelligence",
     "crates/hermes-acp",
     "crates/hermes-eval",
@@ -23,8 +22,7 @@ members = [
     "crates/hermes-server-client",
     "crates/hermes-acp-server",
     "crates/hermes-wiki",
-    "crates/hermes-trading",
-    "crates/hermes-parity-tests",
+    "crates/hermes-vibe",
     "crates/hermes-strategies",
     "crates/hermes-market-watch",
     "crates/hermes-copilot-lite",
@@ -49,7 +47,6 @@ hermes-skills = { path = "crates/hermes-skills" }
 hermes-mcp = { path = "crates/hermes-mcp" }
 hermes-environments = { path = "crates/hermes-environments" }
 hermes-config = { path = "crates/hermes-config" }
-hermes-bundled-rg = { path = "crates/hermes-bundled-rg" }
 hermes-intelligence = { path = "crates/hermes-intelligence" }
 hermes-acp = { path = "crates/hermes-acp" }
 hermes-eval = { path = "crates/hermes-eval" }
@@ -60,8 +57,7 @@ hermes-insights = { path = "crates/hermes-insights" }
 hermes-server-client = { path = "crates/hermes-server-client" }
 hermes-acp-server = { path = "crates/hermes-acp-server" }
 hermes-wiki = { path = "crates/hermes-wiki" }
-hermes-trading = { path = "crates/hermes-trading" }
-hermes-parity-tests = { path = "crates/hermes-parity-tests" }
+hermes-vibe = { path = "crates/hermes-vibe" }
 hermes-strategies = { path = "crates/hermes-strategies" }
 hermes-market-watch = { path = "crates/hermes-market-watch" }
 hermes-copilot-lite = { path = "crates/hermes-copilot-lite" }
@@ -120,6 +116,4 @@ proptest = "1"
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["download-binaries"] }
 which = "8"
 qrcode = "0.14"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-rqrr = "0.9"
 indicatif = "0.18"

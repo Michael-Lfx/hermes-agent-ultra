@@ -1,6 +1,6 @@
 ---
 name: a-share-quant-tools
-description: "A股量化工具集：数据获取、因子计算、选股筛选，基于 hermes-trading 0py 架构。"
+description: "A股量化工具集：数据获取、因子计算、选股筛选，基于 hermes-vibe 0py 架构。"
 version: 1.0.0
 author: Hermes Agent
 license: MIT
@@ -17,7 +17,7 @@ A股量化工具集，提供从数据获取到选股筛选的完整工作流。
 
 ## 能力
 
-- **数据获取**：通过 `hermes-trading` 的 `MarketDataProvider` 获取 A 股 OHLCV 数据（000001.SZ / 600519.SH 等）
+- **数据获取**：通过 `hermes-vibe` 的 `MarketDataProvider` 获取 A 股 OHLCV 数据（000001.SZ / 600519.SH 等）
 - **因子计算**：使用 `hermes-strategies` 内置指标（SMA、EMA、RSI、MACD、Bollinger）计算量化因子
 - **选股筛选**：基于多因子条件过滤股票池，输出候选列表
 - **实时行情**：通过 `hermes-market-watch` 监控 A 股实时报价和涨跌停预警
@@ -34,7 +34,7 @@ A股量化工具集，提供从数据获取到选股筛选的完整工作流。
 
 ## 依赖
 
-- `hermes-trading` — OHLCV 数据获取
+- `hermes-vibe` — OHLCV 数据获取
 - `hermes-strategies` — 技术指标计算
 - `hermes-market-watch` — 实时行情监控
 
