@@ -420,10 +420,30 @@ impl AgentLoop {
     /// - then append optional configured `system_prompt`
     pub(crate) fn build_system_prompt(
         &self,
-        _task_hint: &str,
+        task_hint: &str,
         tool_schemas: &[ToolSchema],
         model_for_prompt: &str,
     ) -> String {
+        let (static_prompt, dynamic_suffix) =
+            self.build_system_prompt_parts(task_hint, tool_schemas, model_for_prompt);
+        if dynamic_suffix.is_empty() {
+            static_prompt
+        } else {
+            format!("{static_prompt}\n\n{dynamic_suffix}")
+        }
+    }
+
+    /// Returns `(static_prefix, dynamic_suffix)`.
+    ///
+    /// The static prefix is cache-stable across sessions with the same config.
+    /// The dynamic suffix contains per-session metadata (timestamp, session ID,
+    /// model, provider, environment hints, platform hint).
+    pub(crate) fn build_system_prompt_parts(
+        &self,
+        _task_hint: &str,
+        tool_schemas: &[ToolSchema],
+        model_for_prompt: &str,
+    ) -> (String, String) {
         let soul = load_soul_md();
         let mut builder = SystemPromptBuilder::new().with_personality(soul.as_deref());
         if let Some(base) = self.config().system_prompt.as_deref() {
@@ -540,6 +560,7 @@ impl AgentLoop {
             builder = builder.with_block(&repo_map);
         }
 
+        // Dynamic tier: per-session metadata that would invalidate the cached prefix.
         let provider = self.effective_provider_for_prompt(model_for_prompt);
         let session_id = self
             .config()
@@ -563,7 +584,7 @@ impl AgentLoop {
                 .split('/')
                 .next_back()
                 .unwrap_or(model_for_prompt);
-            builder = builder.with_block(&format!(
+            builder = builder.with_dynamic_block(&format!(
                 "You are powered by the model named {}. The exact model ID is {}. When asked what model you are, always answer based on this information, not on any model name returned by the API.",
                 model_short, model_for_prompt
             ));
@@ -572,14 +593,16 @@ impl AgentLoop {
         let environment_hints =
             build_environment_hints(|backend| self.probe_remote_backend_text(backend));
         if !environment_hints.trim().is_empty() {
-            builder = builder.with_block(&environment_hints);
+            builder = builder.with_dynamic_block(&environment_hints);
         }
 
         if let Some(hint) = self.platform_hint_text() {
-            builder = builder.with_block(hint);
+            builder = builder.with_dynamic_block(hint);
         }
 
-        builder.build().to_string()
+        let static_prompt = builder.build().to_string();
+        let dynamic_suffix = builder.build_dynamic();
+        (static_prompt, dynamic_suffix)
     }
 }
 

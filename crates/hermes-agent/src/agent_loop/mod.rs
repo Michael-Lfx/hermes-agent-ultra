@@ -1778,13 +1778,14 @@ impl AgentLoop {
         crate::conversation_loop::active_cached_system_prompt(self, task_hint, tool_schemas)
     }
 
-    /// Returns `(prompt, restored_from_storage)` — restored prompts skip fresh `build_system_prompt`.
+    /// Returns `(full_prompt, restored_from_storage)` — restored prompts skip fresh build.
     pub(crate) fn resolve_initial_system_prompt(
         &self,
         task_hint: &str,
         tool_schemas: &[ToolSchema],
     ) -> (String, bool) {
-        crate::conversation_loop::resolve_initial_system_prompt(self, task_hint, tool_schemas)
+        let r = crate::conversation_loop::resolve_initial_system_prompt(self, task_hint, tool_schemas);
+        (r.full_prompt, r.restored)
     }
 
     pub(crate) fn guard_session_search_without_query(

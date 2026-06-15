@@ -337,7 +337,7 @@ fn persist_turn_session(agent: &AgentLoop, messages: &[Message], inner: &AgentRe
     }
 }
 
-/// Returns `(prompt, restored_from_storage)` using session-level cache when warm.
+/// Returns `(full_prompt, restored_from_storage)` using session-level cache when warm.
 pub(crate) fn active_cached_system_prompt(
     agent: &AgentLoop,
     task_hint: &str,
@@ -350,33 +350,65 @@ pub(crate) fn active_cached_system_prompt(
             }
         }
     }
-    let (prompt, restored) = resolve_initial_system_prompt(agent, task_hint, tool_schemas);
+    let resolved = resolve_initial_system_prompt(agent, task_hint, tool_schemas);
+    let restored = resolved.restored;
+    let prompt = resolved.full_prompt.clone();
     if let Ok(mut state) = agent.state.lock() {
         state.cached_system_prompt = Some(prompt.clone());
     }
     (prompt, restored)
 }
 
-/// Returns `(prompt, restored_from_storage)` - restored prompts skip fresh `build_system_prompt`.
+/// Resolved system prompt for a session turn.
+pub(crate) struct SystemPromptResolved {
+    /// Full joined prompt (static + dynamic). Used for restored sessions and persistence.
+    pub full_prompt: String,
+    /// Cache-stable static prefix (no timestamps, session IDs, or env hints).
+    /// `Some` only for fresh (non-restored) sessions.
+    pub static_prefix: Option<String>,
+    /// Per-session dynamic suffix (timestamps, model, session ID, env hints).
+    /// `Some` only for fresh (non-restored) sessions.
+    pub dynamic_suffix: Option<String>,
+    /// Whether the prompt was restored from stored/SQLite state.
+    pub restored: bool,
+}
+
+/// Returns the resolved system prompt, splitting static/dynamic tiers for new sessions.
+///
+/// Restored sessions return the stored full prompt as a single system message
+/// (preserving the stable cache prefix from that session's first turn).
+/// Fresh sessions return a split so the static prefix can be cached independently
+/// of per-session metadata.
 pub(crate) fn resolve_initial_system_prompt(
     agent: &AgentLoop,
     task_hint: &str,
     tool_schemas: &[ToolSchema],
-) -> (String, bool) {
+) -> SystemPromptResolved {
     if let Some(ref s) = agent.config().stored_system_prompt {
         let t = s.trim();
         if !t.is_empty() {
-            return (s.clone(), true);
+            return SystemPromptResolved {
+                full_prompt: s.clone(),
+                static_prefix: None,
+                dynamic_suffix: None,
+                restored: true,
+            };
         }
     }
-    (
-        agent.build_system_prompt(
-            task_hint,
-            tool_schemas,
-            &crate::runtime_provider::active_model(agent),
-        ),
-        false,
-    )
+    let model = crate::runtime_provider::active_model(agent);
+    let (static_prefix, dynamic_suffix) =
+        agent.build_system_prompt_parts(task_hint, tool_schemas, &model);
+    let full_prompt = if dynamic_suffix.is_empty() {
+        static_prefix.clone()
+    } else {
+        format!("{static_prefix}\n\n{dynamic_suffix}")
+    };
+    SystemPromptResolved {
+        full_prompt,
+        static_prefix: Some(static_prefix),
+        dynamic_suffix: Some(dynamic_suffix),
+        restored: false,
+    }
 }
 
 #[inline]
@@ -468,10 +500,23 @@ async fn run_with_message_prelude(
         Some(v) => Arc::from(v),
         None => agent.tool_registry.schemas(),
     };
-    // Build and inject system prompt (or reuse session-level cache for prefix stability)
-    let (system_content, restored_system) =
-        resolve_initial_system_prompt(agent, &task_hint, &tool_schemas);
-    ctx.add_message(Message::system(&system_content));
+    // Build and inject system prompt (or reuse session-level cache for prefix stability).
+    // Fresh sessions split into a stable static system message (cached by Anthropic/providers)
+    // and a small dynamic suffix (timestamps, model, session ID) as a second system message.
+    let resolved = resolve_initial_system_prompt(agent, &task_hint, &tool_schemas);
+    let restored_system = resolved.restored;
+    let system_content = resolved.full_prompt.clone();
+    match (resolved.static_prefix, resolved.dynamic_suffix) {
+        (Some(static_p), Some(dynamic_s)) => {
+            ctx.add_message(Message::system(&static_p));
+            if !dynamic_s.trim().is_empty() {
+                ctx.add_message(Message::system(&dynamic_s));
+            }
+        }
+        _ => {
+            ctx.add_message(Message::system(&resolved.full_prompt));
+        }
+    }
 
     let mut session_started_hooks_fired = false;
     if !restored_system {
