@@ -112,12 +112,8 @@ impl ContextManager {
         let max_chars = budget.max_aggregate_chars.min(self.max_context_chars);
 
 <<<<<<< HEAD
-        // Fast path: incremental counter already tracks total; skip Vec alloc when within budget.
-        if self.total_message_chars <= max_chars {
-            return;
-        }
 =======
->>>>>>> 8ff8fb4f6 (feat(agent): add profiling infrastructure and 200-turn hot-path baseline)
+>>>>>>> c46bcb788 (perf(hermes-agent): three targeted algorithmic optimizations)
 
         // Compute per-message char lengths once (single forward scan).
         let lens: Vec<usize> = self
@@ -125,11 +121,6 @@ impl ContextManager {
             .iter()
             .map(|m| m.content.as_deref().map(str::len).unwrap_or(0))
             .collect();
-
-        let total_chars: usize = lens.iter().sum();
-        if total_chars <= max_chars {
-            return;
-        }
 
         let n = self.messages.len();
 
