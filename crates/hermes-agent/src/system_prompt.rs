@@ -600,10 +600,6 @@ impl AgentLoop {
         if !environment_hints.trim().is_empty() {
             builder = builder.with_dynamic_block(&environment_hints);
         }
-        let toolchain_line = hermes_tools::tools::env_probe::get_environment_probe_line(false);
-        if !toolchain_line.is_empty() {
-            builder = builder.with_dynamic_block(&toolchain_line);
-        }
 
         if let Some(hint) = self.platform_hint_text() {
             builder = builder.with_dynamic_block(hint);

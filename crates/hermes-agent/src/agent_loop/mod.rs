@@ -1799,8 +1799,7 @@ impl AgentLoop {
         task_hint: &str,
         tool_schemas: &[ToolSchema],
     ) -> (String, bool) {
-        let r =
-            crate::conversation_loop::resolve_initial_system_prompt(self, task_hint, tool_schemas);
+        let r = crate::conversation_loop::resolve_initial_system_prompt(self, task_hint, tool_schemas);
         (r.full_prompt, r.restored)
     }
 
