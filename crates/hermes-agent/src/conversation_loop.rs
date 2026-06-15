@@ -12,6 +12,7 @@ use crate::agent_loop::{
     contextlattice_intelligence_system_hint, effective_max_turns,
     exploratory_problem_solving_system_hint, objective_mode_system_hint,
 };
+use crate::agent_runtime_helpers::strip_think_blocks;
 use crate::codex_responses_adapter::summarize_user_message_for_log_str;
 use crate::context::ContextManager;
 use crate::governor::governor_window_size;
@@ -185,6 +186,13 @@ pub(crate) fn finalize_turn(
     if let Some(ref mut text) = final_response {
         if !interrupted {
             *text = apply_turn_level_output_hooks(agent, text, meta, &messages);
+        }
+        // Strip reasoning/think blocks leaked by models that emit them inline
+        // (e.g. MiniMax without dedicated reasoning_content). Parity with the
+        // streaming path's ThinkBlockScrubber.
+        *text = strip_think_blocks(text);
+        if text.trim().is_empty() {
+            final_response = None;
         }
     }
 
