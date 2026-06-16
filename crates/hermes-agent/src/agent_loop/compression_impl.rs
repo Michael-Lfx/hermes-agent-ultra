@@ -314,6 +314,14 @@ impl AgentLoop {
                     before_pct
                 ),
             );
+            crate::hooks::emit_status(
+                self,
+                "lifecycle",
+                &format!(
+                    "Preflight compression check: no compression needed ({}% of context)",
+                    before_pct
+                ),
+            );
             return;
         }
         tracing::info!(
