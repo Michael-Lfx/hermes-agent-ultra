@@ -79,6 +79,7 @@ impl SessionState {
         hermes_home: &std::path::Path,
         pending: &crate::rpc::interaction::PendingInteractions,
         tool_registry: Arc<hermes_agent::ToolRegistry>,
+        tools_registry: Arc<hermes_tools::ToolRegistry>,
     ) -> Option<Arc<hermes_agent::AgentLoop>> {
         // Fast path: already built
         if let Ok(guard) = self.agent.lock() {
@@ -96,6 +97,7 @@ impl SessionState {
             self.transport.clone(),
             pending,
             tool_registry,
+            tools_registry,
         )?;
         
         let agent_arc = Arc::new(agent);

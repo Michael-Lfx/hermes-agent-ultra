@@ -17,11 +17,24 @@ pub async fn get_model_info(
     let config = state.config.read().await;
     
     let model = config.model.as_deref().unwrap_or("unknown");
+    let provider = config.llm_providers.iter()
+        .find(|(_, cfg)| {
+            config.model.as_deref().map_or(false, |m| {
+                cfg.model.as_deref().map_or(false, |cm| {
+                    m.contains(cm) || cm.contains(m)
+                })
+            })
+        })
+        .map(|(name, _)| name.clone())
+        .unwrap_or_else(|| "default".to_string());
     
     Ok(ok_json(json!({
         "model": model,
-        "provider": "default",
-        "context_length": 128000,
+        "provider": provider,
+        "effective_context_length": 128000,
+        "auto_context_length": 128000,
+        "config_context_length": 128000,
+        "capabilities": {},
     })))
 }
 

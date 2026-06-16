@@ -12,6 +12,7 @@ pub mod interaction;
 pub mod model;
 pub mod prompt;
 pub mod session;
+pub mod setup;
 pub mod slash;
 pub mod tools;
 
@@ -87,6 +88,10 @@ pub async fn dispatch(
         "sudo.respond" => interaction::handle_sudo_respond(request, &state.pending_interactions).await,
         "secret.respond" => interaction::handle_secret_respond(request, &state.pending_interactions).await,
         
+        // Setup / readiness
+        "setup.status" => setup::handle_status(request, state).await,
+        "setup.runtime_check" => setup::handle_runtime_check(request, state).await,
+
         // Unknown method
         _ => Some(JsonRpcResponse::err(
             request.id,

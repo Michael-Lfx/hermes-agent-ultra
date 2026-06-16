@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use hermes_agent::conversation_loop::RunConversationParams;
 use hermes_core::StreamChunk;
 use serde_json::json;
@@ -39,7 +41,7 @@ pub async fn handle_submit(
         }
         
         let config = state.config.read().await.clone();
-        let agent = match session.get_or_build_agent(&config, &state.hermes_home, &state.pending_interactions, state.tool_registry.clone()) {
+        let agent = match session.get_or_build_agent(&config, &state.hermes_home, &state.pending_interactions, state.tool_registry.clone(), state.tools_registry.clone()) {
             Some(a) => a,
             None => {
                 return Some(JsonRpcResponse::err(
@@ -96,15 +98,42 @@ pub async fn handle_submit(
         }
     };
 
+    // Pass tool schemas so the LLM knows which tools are available
+    let tool_schemas = agent.tool_registry.schemas().to_vec();
+
     // Spawn the agent turn in a background task so we can return immediately
     let session_id_owned = session_id.to_string();
     let text_owned = resolved_message;
     let transport_err = transport.clone();
     let sessions_arc = state.sessions.clone();
     tokio::spawn(async move {
-        let stream_callback: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new(move |chunk| {
-            for event in crate::ws::event_adapter::stream_chunk_to_events(&chunk) {
-                let _ = transport.write(&serde_json::to_value(event).unwrap_or_default());
+        let session_id_cb = session_id_owned.clone();
+        let start_sent = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let accumulated = Arc::new(Mutex::new(String::new()));
+        let acc = accumulated.clone();
+        let stream_callback: Box<dyn Fn(StreamChunk) + Send + Sync> = Box::new({
+            let start_sent = start_sent.clone();
+            move |chunk| {
+                if let Some(ref delta) = chunk.delta {
+                    if let Some(ref content) = delta.content {
+                        if let Ok(mut g) = acc.lock() {
+                            g.push_str(content);
+                        }
+                    }
+                }
+                let acc_text = acc
+                    .lock()
+                    .ok()
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                for event in crate::ws::event_adapter::stream_chunk_to_events(
+                    &chunk,
+                    Some(session_id_cb.clone()),
+                    &start_sent,
+                    chunk.finish_reason.is_some().then_some(acc_text.as_str()),
+                ) {
+                    let _ = transport.write(&serde_json::to_value(event).unwrap_or_default());
+                }
             }
         });
         
@@ -114,7 +143,7 @@ pub async fn handle_submit(
             task_id: None,
             stream_callback: Some(stream_callback),
             persist_user_message: None,
-            tools: None,
+            tools: Some(tool_schemas.clone()),
             persist_session: true,
         };
         

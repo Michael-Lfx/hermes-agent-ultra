@@ -23,14 +23,19 @@ use crate::{
 /// 2. Insert a oneshot sender into the pending interactions table
 /// 3. Await the user's response (with 60-second timeout)
 ///
-/// Non-interactive tools are forwarded to the ToolRegistry.
+/// Non-interactive tools are dispatched through the full hermes_tools registry
+/// (all 83 builtin tools with real implementations).
 pub fn create_interaction_dispatch(
     transport: ReplaceableTransport,
     pending: PendingInteractions,
+    tools_registry: Arc<hermes_tools::ToolRegistry>,
+    agent_registry: Arc<hermes_agent::ToolRegistry>,
 ) -> hermes_agent::AsyncToolDispatch {
     Arc::new(move |tool_name: String, params: Value| {
         let transport = transport.clone();
         let pending = pending.clone();
+        let full_registry = Arc::clone(&tools_registry);
+        let agent_reg = Arc::clone(&agent_registry);
         Box::pin(async move {
             match tool_name.as_str() {
                 "clarify" => handle_clarify(params, transport, pending).await,
@@ -38,11 +43,38 @@ pub fn create_interaction_dispatch(
                 "sudo" => handle_sudo(params, transport, pending).await,
                 "secret" => handle_secret(params, transport, pending).await,
                 _ => {
-                    tracing::warn!(tool = %tool_name, "unhandled interactive tool, returning error");
-                    Err(ToolError::ExecutionFailed(format!(
-                        "Tool '{}' is not implemented in interaction dispatch",
-                        tool_name
-                    )))
+                    // Dispatch through the full hermes_tools registry (all builtin tools)
+                    // dispatch_async returns a JSON string directly (errors embedded as {"error":...})
+                    let result = full_registry.dispatch_async(&tool_name, params.clone()).await;
+                    // Check if result looks like an error
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&result) {
+                        if val.get("error").is_some() {
+                            // Error from hermes_tools — check if tool wasn't found
+                            let error_msg = val["error"].as_str().unwrap_or("");
+                            if error_msg.contains("not found") || error_msg.contains("Unknown") {
+                                // Fallback to agent registry sync handler
+                                if let Some(entry) = agent_reg.get(&tool_name) {
+                                    let handler = Arc::clone(&entry.handler);
+                                    match tokio::task::spawn_blocking(move || handler(params)).await {
+                                        Ok(r) => r,
+                                        Err(e) => Err(ToolError::ExecutionFailed(format!(
+                                            "Tool dispatch failed: {}", e
+                                        ))),
+                                    }
+                                } else {
+                                    Err(ToolError::ExecutionFailed(format!(
+                                        "Unknown tool '{}'", tool_name
+                                    )))
+                                }
+                            } else {
+                                Err(ToolError::ExecutionFailed(error_msg.to_string()))
+                            }
+                        } else {
+                            Ok(result)
+                        }
+                    } else {
+                        Ok(result)
+                    }
                 }
             }
         })

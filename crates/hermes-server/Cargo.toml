@@ -39,6 +39,7 @@ uuid = { workspace = true }
 rand = { workspace = true }
 base64 = { workspace = true }
 subtle = "2"
+indexmap = { workspace = true }
 
 # Internal crates
 hermes-core = { workspace = true }

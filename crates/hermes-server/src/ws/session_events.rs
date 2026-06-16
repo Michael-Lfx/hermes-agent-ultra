@@ -1,6 +1,6 @@
 //! Session event helpers for emitting `session.info` and related events.
 
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::{
     core::session::SessionState,
@@ -31,6 +31,10 @@ pub fn emit_session_info(
             "message_count": message_count,
             "title": title,
             "model": model,
+            "provider": Value::Null,
+            "reasoning_effort": Value::Null,
+            "fast": false,
+            "yolo": false,
             "cwd": session.cwd.to_string_lossy(),
             "cols": session.cols,
             "running": session.is_running(),
@@ -38,9 +42,19 @@ pub fn emit_session_info(
             "lazy": true,
             "desktop_contract": 2,
             "profile_name": session.profile,
+            "personality": Value::Null,
             "tools": [],
             "skills": [],
+            "mcp_servers": [],
             "close_on_disconnect": session.close_on_disconnect,
+            "version": env!("CARGO_PKG_VERSION"),
+            "release_date": env!("CARGO_PKG_VERSION"),
+            "usage": {
+                "input": 0,
+                "output": 0,
+                "total": 0,
+                "calls": 0
+            }
         })),
     );
 

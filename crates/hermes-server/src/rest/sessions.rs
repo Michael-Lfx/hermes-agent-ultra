@@ -54,9 +54,12 @@ pub async fn list_sessions(
         }
     }).collect();
     
+    let now = chrono::Utc::now().timestamp() as f64;
     let session_json: Vec<serde_json::Value> = sessions
         .into_iter()
         .map(|s| {
+            let is_active = s.ended_at.is_none()
+                && s.last_active.map(|la| (now - la) < 300.0).unwrap_or(false);
             json!({
                 "id": s.id,
                 "source": s.source,
@@ -66,25 +69,29 @@ pub async fn list_sessions(
                 "last_active": s.last_active,
                 "ended_at": s.ended_at,
                 "message_count": s.message_count,
-                "parent_session_id": s.parent_session_id,
+                "input_tokens": s.input_tokens,
+                "output_tokens": s.output_tokens,
+                "tool_call_count": s.tool_call_count,
+                "cwd": s.cwd,
                 "preview": s.preview,
                 "archived": s.archived,
+                "is_active": is_active,
+                "handoff_platform": s.handoff_platform,
+                "handoff_state": s.handoff_state,
+                "handoff_error": s.handoff_error,
             })
         })
         .collect();
     
-    // Check if legacy format is requested
-    if query.format.as_deref() == Some("legacy") {
-        Ok(ok_json(json!({
-            "sessions": session_json,
-            "total": session_json.len(),
-            "limit": limit,
-            "offset": offset,
-        })))
-    } else {
-        // Desktop expects array format by default
-        Ok(ok_json(json!(session_json)))
-    }
+    let total = session_json.len();
+    
+    // Always return paginated format
+    Ok(ok_json(json!({
+        "sessions": session_json,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })))
 }
 
 /// GET /api/sessions/search - Search sessions
@@ -122,14 +129,13 @@ pub async fn search_sessions(
         .into_iter()
         .map(|r| {
             json!({
-                "id": r.id,
                 "session_id": r.session_id,
                 "role": r.role,
                 "snippet": r.snippet,
-                "timestamp": r.timestamp,
-                "tool_name": r.tool_name,
+                "session_started": r.session_started,
                 "source": r.source,
                 "model": r.model,
+                "lineage_root": r.session_id,
             })
         })
         .collect();
@@ -190,16 +196,29 @@ pub async fn get_session_messages(
     let messages_json: Vec<serde_json::Value> = messages
         .into_iter()
         .map(|m| {
-            json!({
+            let mut msg = json!({
                 "role": m.role,
                 "content": m.content,
-            })
+            });
+            if let Some(rc) = m.reasoning_content {
+                msg["reasoning"] = json!(rc);
+            }
+            if let Some(tci) = m.tool_call_id {
+                msg["tool_call_id"] = json!(tci);
+            }
+            if let Some(tc) = m.tool_calls {
+                msg["tool_calls"] = json!(tc);
+            }
+            if let Some(n) = m.name {
+                msg["name"] = json!(n);
+            }
+            msg
         })
         .collect();
     
     Ok(ok_json(json!({
-        "count": messages_json.len(),
         "messages": messages_json,
+        "session_id": session_id,
     })))
 }
 

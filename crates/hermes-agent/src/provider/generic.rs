@@ -655,6 +655,16 @@ impl LlmProvider for GenericProvider {
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
 
+        let api_key_prefix = api_key.get(..12).unwrap_or("<empty>");
+
+        tracing::info!(
+            target: "hermes_llm",
+            url = %url,
+            model = %effective_model,
+            api_key_prefix,
+            "LLM API call"
+        );
+
         let resp = self
             .send_with_dead_connection_recovery(&url, &api_key, &body)
             .await?;
@@ -668,8 +678,14 @@ impl LlmProvider for GenericProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "<no body>".to_string());
+            tracing::error!(
+                target: "hermes_llm",
+                %status,
+                %body_text,
+                "LLM API request failed"
+            );
             return Err(AgentError::LlmApi(format!(
-                "API error {status}: {body_text}"
+                "API error {status}: {body_text} [url={url}, model={effective_model}, api_key_prefix={api_key_prefix}]"
             )));
         }
 
@@ -714,6 +730,15 @@ impl LlmProvider for GenericProvider {
             body["stream_options"] = serde_json::json!({"include_usage": true});
 
             let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+            let api_key_prefix = api_key.get(..12).unwrap_or("<empty>");
+
+            tracing::info!(
+                target: "hermes_llm",
+                url = %url,
+                model = %effective_model,
+                api_key_prefix,
+                "LLM API stream call"
+            );
 
             let resp = match provider
                 .send_with_dead_connection_recovery(&url, &api_key, &body)
@@ -732,7 +757,13 @@ impl LlmProvider for GenericProvider {
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body_text = resp.text().await.unwrap_or_else(|_| "<no body>".to_string());
-                yield Err(AgentError::LlmApi(format!("API error {status}: {body_text}")));
+                tracing::error!(
+                    target: "hermes_llm",
+                    %status,
+                    %body_text,
+                    "LLM API stream request failed"
+                );
+                yield Err(AgentError::LlmApi(format!("API error {status}: {body_text} [url={url}, model={effective_model}, api_key_prefix={api_key_prefix}]")));
                 return;
             }
 

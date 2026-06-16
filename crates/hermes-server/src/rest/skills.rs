@@ -5,18 +5,8 @@ use std::collections::HashMap;
 use crate::{error::AppError, state::AppState};
 
 /// Parse YAML frontmatter from a markdown file.
-/// Expected format:
-/// ```markdown
-/// ---
-/// name: my-skill
-/// description: A test skill
-/// enabled: true
-/// ---
-///
-/// # Instructions
-/// ...
-/// ```
-fn parse_frontmatter(content: &str) -> Option<HashMap<String, String>> {
+/// Returns a HashMap with serde_yaml::Value to handle non-string types (lists, maps).
+fn parse_frontmatter(content: &str) -> Option<HashMap<String, serde_yaml::Value>> {
     if !content.starts_with("---") {
         return None;
     }
@@ -26,55 +16,63 @@ fn parse_frontmatter(content: &str) -> Option<HashMap<String, String>> {
     serde_yaml::from_str(yaml_str).ok()
 }
 
-/// Scan a directory for skill files (*.md with YAML frontmatter).
+/// Recursively scan a directory for skill files (SKILL.md with YAML frontmatter).
+/// Walks subdirectories looking for SKILL.md files, matching Python rglob("SKILL.md") behavior.
 fn scan_skills_dir(skills_dir: &std::path::Path) -> Vec<serde_json::Value> {
     let mut skills = Vec::new();
-    
-    if let Ok(entries) = std::fs::read_dir(skills_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("md") {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    if let Some(frontmatter) = parse_frontmatter(&content) {
-                        let name = frontmatter.get("name")
-                            .cloned()
-                            .unwrap_or_else(|| {
-                                path.file_stem()
-                                    .unwrap_or_default()
-                                    .to_string_lossy()
-                                    .to_string()
-                            });
-                        
-                        skills.push(json!({
-                            "name": name,
-                            "description": frontmatter.get("description").cloned().unwrap_or_default(),
-                            "enabled": frontmatter.get("enabled")
-                                .and_then(|v| v.parse::<bool>().ok())
-                                .unwrap_or(true),
-                            "category": frontmatter.get("category").cloned().unwrap_or_else(|| "general".to_string()),
-                        }));
-                    }
+    if !skills_dir.exists() {
+        return skills;
+    }
+    scan_skills_recursive(skills_dir, skills_dir, &mut skills);
+    skills
+}
+
+fn scan_skills_recursive(root: &std::path::Path, dir: &std::path::Path, skills: &mut Vec<serde_json::Value>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            // Recurse into subdirectories
+            scan_skills_recursive(root, &path, skills);
+        } else if path.file_name().and_then(|f| f.to_str()) == Some("SKILL.md") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                if let Some(frontmatter) = parse_frontmatter(&content) {
+                    let name = frontmatter.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                        .unwrap_or_else(|| {
+                            path.parent()
+                                .and_then(|p| p.file_name())
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        });
+                    // Category is the grandparent directory name
+                    let category = path.parent()
+                        .and_then(|p| p.parent())
+                        .and_then(|p| p.file_name())
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "general".to_string());
+                    skills.push(json!({
+                        "name": name,
+                        "description": frontmatter.get("description").and_then(|v| v.as_str()).unwrap_or(""),
+                        "enabled": frontmatter.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
+                        "category": category,
+                    }));
                 }
             }
         }
     }
-    
-    skills
 }
 
 /// GET /api/skills - List all skills
 ///
-/// Scans the skills directory for markdown files with YAML frontmatter.
+/// Returns a plain array (desktop expects SkillInfo[] directly).
 pub async fn get_skills(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     // Try to find skills directory
     let skills_dir = state.hermes_home.join("skills");
-    
     let skills = scan_skills_dir(&skills_dir);
-    
-    Ok(Json(json!({
-        "skills": skills,
-        "directory": skills_dir.to_string_lossy(),
-    })))
+    Ok(Json(json!(skills)))
 }
 
 /// Update the `enabled` field in YAML frontmatter of a skill file.
@@ -85,9 +83,9 @@ fn update_frontmatter_enabled(content: &str, enabled: bool) -> Option<String> {
     
     let end = content.find("\n---\n")?;
     let yaml_str = &content[3..end];
-    let mut frontmatter: HashMap<String, String> = serde_yaml::from_str(yaml_str).ok()?;
+    let mut frontmatter: HashMap<String, serde_yaml::Value> = serde_yaml::from_str(yaml_str).ok()?;
     
-    frontmatter.insert("enabled".to_string(), enabled.to_string());
+    frontmatter.insert("enabled".to_string(), serde_yaml::Value::Bool(enabled));
     
     let new_yaml = serde_yaml::to_string(&frontmatter).ok()?;
     let rest = &content[end + 5..];
@@ -117,7 +115,8 @@ pub async fn toggle_skill(
                 if let Ok(content) = std::fs::read_to_string(&path) {
                     if let Some(frontmatter) = parse_frontmatter(&content) {
                         let name = frontmatter.get("name")
-                            .cloned()
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
                             .unwrap_or_else(|| {
                                 path.file_stem()
                                     .unwrap_or_default()

@@ -409,6 +409,10 @@ pub struct DisplayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_progress: Option<String>,
 
+    /// UI language/locale (e.g. "en", "zh-CN"). Read by the desktop frontend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+
     /// Per-platform display overrides keyed by normalized platform name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub platforms: BTreeMap<String, PlatformDisplayConfig>,

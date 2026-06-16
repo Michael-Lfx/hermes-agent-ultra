@@ -33,6 +33,27 @@ pub struct SessionRecord {
     /// Whether the session has been archived.
     #[serde(default)]
     pub archived: bool,
+    /// Input token count from billing.
+    #[serde(default)]
+    pub input_tokens: i64,
+    /// Output token count from billing.
+    #[serde(default)]
+    pub output_tokens: i64,
+    /// Number of tool calls made during the session.
+    #[serde(default)]
+    pub tool_call_count: i64,
+    /// Working directory for the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Handoff state when transferred from a messaging platform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_state: Option<String>,
+    /// Platform name for handoff origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_platform: Option<String>,
+    /// Error message if handoff failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_error: Option<String>,
 }
 
 fn format_preview(raw: &str) -> Option<String> {
@@ -69,6 +90,13 @@ fn row_to_session(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
         last_active: row.get("last_active").ok(),
         lineage_root_id: None,
         archived: archived != 0,
+        input_tokens: row.get("input_tokens").unwrap_or(0),
+        output_tokens: row.get("output_tokens").unwrap_or(0),
+        tool_call_count: row.get("tool_call_count").unwrap_or(0),
+        cwd: row.get("cwd").ok(),
+        handoff_state: row.get("handoff_state").ok(),
+        handoff_platform: row.get("handoff_platform").ok(),
+        handoff_error: row.get("handoff_error").ok(),
     })
 }
 

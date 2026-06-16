@@ -20,6 +20,7 @@ pub fn build_agent(
     transport: ReplaceableTransport,
     pending: &crate::rpc::interaction::PendingInteractions,
     tool_registry: Arc<ToolRegistry>,
+    tools_registry: Arc<hermes_tools::ToolRegistry>,
 ) -> Option<AgentLoop> {
     let mut agent_config = AgentConfig {
         model: config.model.clone().unwrap_or_else(|| "gpt-4o".to_string()),
@@ -34,29 +35,44 @@ pub fn build_agent(
     // Resolve provider and API key from config
     let llm_provider = build_llm_provider(config, &mut agent_config)?;
 
+    // Clone before moving into AgentLoop; also needed for interaction dispatch
+    let dispatch_registry = tool_registry.clone();
     let mut agent = AgentLoop::new(agent_config, tool_registry, llm_provider);
 
     // Bind callbacks to push events to the Desktop client via WebSocket
     let sid = session_id.to_string();
+    let tool_id_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let current_tool = Arc::new(std::sync::Mutex::new(None::<String>));
     let callbacks = AgentCallbacks {
         on_tool_start: Some(Box::new({
             let transport = transport.clone();
             let sid = sid.clone();
             let current_tool = current_tool.clone();
+            let counter = tool_id_counter.clone();
             move |tool_name, args| {
+                let tool_id = format!("tool_{}", counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+                
                 // Track current tool for progress events
                 if let Ok(mut guard) = current_tool.lock() {
                     *guard = Some(tool_name.to_string());
                 }
+                
+                let args_preview = serde_json::to_string(&args).unwrap_or_default();
+                let context = if args_preview.len() > 200 {
+                    format!("{}...", &args_preview[..200])
+                } else {
+                    args_preview.clone()
+                };
                 
                 // Emit tool.start
                 let event = JsonRpcEvent::new(
                     crate::ws::events::types::TOOL_START,
                     Some(sid.clone()),
                     Some(json!({
-                        "tool": tool_name,
-                        "args": args,
+                        "tool_id": tool_id,
+                        "name": tool_name,
+                        "context": context,
+                        "args_text": args_preview,
                     })),
                 );
                 if let Ok(val) = serde_json::to_value(&event) {
@@ -90,7 +106,8 @@ pub fn build_agent(
                     crate::ws::events::types::TOOL_COMPLETE,
                     Some(sid.clone()),
                     Some(json!({
-                        "tool": tool_name,
+                        "name": tool_name,
+                        "args": serde_json::Value::Null,
                         "result": result,
                     })),
                 );
@@ -129,6 +146,20 @@ pub fn build_agent(
                 }
             }
         })),
+        on_stream_delta: Some(Box::new({
+            let transport = transport.clone();
+            let sid = sid.clone();
+            move |text| {
+                let event = JsonRpcEvent::new(
+                    crate::ws::events::types::MESSAGE_DELTA,
+                    Some(sid.clone()),
+                    Some(json!({ "text": text })),
+                );
+                if let Ok(val) = serde_json::to_value(&event) {
+                    let _ = transport.write(&val);
+                }
+            }
+        })),
         status_callback: Some(Arc::new({
             let transport = transport.clone();
             let sid = sid.clone();
@@ -160,9 +191,12 @@ pub fn build_agent(
     agent = agent.with_callbacks(callbacks);
     
     // Set up async tool dispatch for interactive tools (approval/clarify/sudo/secret)
+    // Non-interactive tools fall through to the full hermes_tools registry.
     let dispatch = crate::core::interaction_dispatch::create_interaction_dispatch(
         transport.clone(),
         pending.clone(),
+        tools_registry,
+        dispatch_registry,
     );
     agent = agent.with_async_tool_dispatch(dispatch);
     
@@ -183,9 +217,36 @@ fn build_llm_provider(
     config: &GatewayConfig,
     agent_config: &mut AgentConfig,
 ) -> Option<Arc<dyn LlmProvider>> {
-    // Try to find the first usable provider
+    // Parse model prefix (e.g. "custom:stepfun-ai/step-3.5-flash" → "custom")
+    let model_prefix = config.model.as_deref()
+        .and_then(|m| m.split_once(':'))
+        .map(|(p, _)| p)
+        .filter(|p| !p.is_empty());
+
+    // Priority 1: if model has a provider prefix, find that provider directly
+    if let Some(prefix) = model_prefix {
+        if let Some(cfg) = config.llm_providers.get(prefix) {
+            let api_key = resolve_api_key(cfg)?;
+            let base_url = cfg.base_url.clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+            let model_name = config.model.as_deref()
+                .and_then(|m| m.split_once(':'))
+                .map(|(_, m)| m.trim())
+                .filter(|m| !m.is_empty())
+                .unwrap_or("gpt-4o");
+            agent_config.provider = Some(prefix.to_string());
+            return Some(Arc::new(
+                OpenAiProvider::new(api_key)
+                    .with_base_url(base_url)
+                    .with_model(model_name)
+                    .with_provider_profile(prefix.to_string()),
+            ));
+        }
+    }
+
+    // Priority 2: try to find a known provider with an API key
     for (name, provider_cfg) in &config.llm_providers {
-        let api_key = resolve_api_key(provider_cfg)?;
+        let Some(api_key) = resolve_api_key(provider_cfg) else { continue };
 
         match name.as_str() {
             "openai" => {
@@ -204,12 +265,22 @@ fn build_llm_provider(
         }
     }
 
-    // Fallback: try to create a generic OpenAI-compatible provider
-    if let Some((name, provider_cfg)) = config.llm_providers.iter().next() {
+    // Priority 3: try any remaining provider as generic OpenAI-compatible
+    for (name, provider_cfg) in &config.llm_providers {
         let api_key = resolve_api_key(provider_cfg)?;
-        let _base_url = provider_cfg.base_url.clone();
+        let base_url = provider_cfg.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string());
+        let model_name = config.model.as_deref()
+            .and_then(|m| m.split_once(':'))
+            .map(|(_, m)| m.trim())
+            .filter(|m| !m.is_empty())
+            .unwrap_or("gpt-4o");
         agent_config.provider = Some(name.clone());
-        return Some(Arc::new(OpenAiProvider::new(api_key)));
+        return Some(Arc::new(
+            OpenAiProvider::new(api_key)
+                .with_base_url(base_url)
+                .with_model(model_name)
+                .with_provider_profile(name.clone()),
+        ));
     }
 
     None

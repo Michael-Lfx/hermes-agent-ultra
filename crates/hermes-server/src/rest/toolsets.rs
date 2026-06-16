@@ -47,39 +47,36 @@ async fn write_toolsets_config(
 
 /// GET /api/tools/toolsets - List all toolsets
 ///
-/// Returns toolsets from persisted configuration, falling back to default "all" toolset.
+/// Groups tools by their toolset category using hermes_tools registry.
 pub async fn list_toolsets(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
-    let registry = state.tool_registry.clone();
-    let schemas = registry.schemas();
-    let tool_names: Vec<String> = schemas.iter().map(|s| s.name.clone()).collect();
+    let tools_registry = state.tools_registry.clone();
+    let toolset_names = tools_registry.list_toolsets();
     
-    let config = read_toolsets_config(&state.hermes_home);
+    let mut toolsets: Vec<serde_json::Value> = toolset_names
+        .into_iter()
+        .map(|name| {
+            let tools = tools_registry.tool_names_for_toolset(&name, false);
+            json!({
+                "name": name,
+                "enabled": true,
+                "provider": serde_json::Value::Null,
+                "tools": tools,
+            })
+        })
+        .collect();
     
-    // Build toolsets list from config
-    let mut toolsets = Vec::new();
-    for (name, ts_config) in config {
-        let tools = if name == "all" { tool_names.clone() } else { ts_config.tools };
-        toolsets.push(json!({
-            "name": name,
-            "enabled": ts_config.enabled,
-            "provider": ts_config.provider,
-            "tools": tools,
-        }));
-    }
-    
-    // Ensure "all" toolset exists
+    // Add "all" toolset as aggregate
+    let all_tools = tools_registry.tool_names_for_toolset("all", false);
     if !toolsets.iter().any(|t| t["name"] == "all") {
-        toolsets.push(json!({
+        toolsets.insert(0, json!({
             "name": "all",
             "enabled": true,
-            "provider": null,
-            "tools": tool_names,
+            "provider": serde_json::Value::Null,
+            "tools": all_tools,
         }));
     }
     
-    Ok(Json(json!({
-        "toolsets": toolsets,
-    })))
+    Ok(Json(json!(toolsets)))
 }
 
 /// PUT /api/tools/toolsets/{name} - Enable/disable a toolset
@@ -115,28 +112,33 @@ pub async fn toggle_toolset(
 
 /// GET /api/tools/toolsets/{name}/config - Get toolset configuration
 ///
-/// Returns tool schemas for the tools in this toolset.
+/// Returns toolset config with provider options (matching ToolsetConfig TypeScript type).
 pub async fn get_toolset_config(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let registry = state.tool_registry.clone();
-    let schemas = registry.schemas();
+    let config = read_toolsets_config(&state.hermes_home);
+    let toolset = config.get(&name).cloned().unwrap_or_default();
     
-    // Filter schemas by toolset (currently returns all schemas)
-    let filtered: Vec<_> = if name == "all" {
-        schemas.iter().collect()
-    } else {
-        // TODO: Filter by actual toolset membership when ToolsetManager is integrated
-        schemas.iter().collect()
-    };
+    let providers: Vec<serde_json::Value> = state.tool_registry.schemas().iter()
+        .map(|s| {
+            json!({
+                "name": s.name,
+                "badge": "",
+                "tag": "",
+                "env_vars": [],
+                "post_setup": serde_json::Value::Null,
+                "requires_nous_auth": false,
+                "is_active": toolset.tools.is_empty() || toolset.tools.contains(&s.name),
+            })
+        })
+        .collect();
     
     Ok(Json(json!({
-        "toolset": name,
-        "config": {
-            "tools": filtered.len(),
-            "schemas": filtered,
-        }
+        "name": name,
+        "has_category": false,
+        "providers": providers,
+        "active_provider": toolset.provider,
     })))
 }
 

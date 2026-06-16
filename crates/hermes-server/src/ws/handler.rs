@@ -3,7 +3,7 @@ use axum::{
     response::Response,
 };
 use axum::extract::ws::{Message as WsMessage, WebSocket};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
 
@@ -52,6 +52,16 @@ async fn handle_ws(mut socket: WebSocket, state: AppState) {
             "skin": {
                 "name": "default",
                 "colors": {},
+                "branding": {
+                    "agent_name": "Hermes",
+                    "response_label": " λ Hermes ",
+                    "prompt_symbol": "λ ",
+                    "welcome": "Welcome to Hermes Agent"
+                },
+                "tool_prefix": "\u{250a}",
+                "banner_logo": Value::Null,
+                "banner_hero": Value::Null,
+                "help_header": "Hermes Agent - Type /help for commands"
             }
         })),
     );

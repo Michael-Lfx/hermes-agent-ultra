@@ -79,6 +79,13 @@ impl OpenAiProvider {
             inner: self.inner.with_serialize_cache(cache),
         }
     }
+
+    /// Attach a provider profile for request shaping.
+    pub fn with_provider_profile(self, profile: impl Into<String>) -> Self {
+        Self {
+            inner: self.inner.with_provider_profile(profile),
+        }
+    }
 }
 
 #[async_trait]

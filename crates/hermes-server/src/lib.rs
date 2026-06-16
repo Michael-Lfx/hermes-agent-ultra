@@ -1,3 +1,4 @@
+pub mod backend;
 pub mod core;
 pub mod error;
 pub mod middleware;
@@ -39,6 +40,16 @@ pub async fn run(addr: SocketAddr) -> Result<(), AppError> {
     
     let state = AppState::new(config, hermes_home);
     
+    // Auto-start gateway subprocess
+    let state_gw = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match crate::rest::gateway::start_gateway(axum::extract::State(state_gw)).await {
+            Ok(_) => info!("Gateway auto-started"),
+            Err(e) => tracing::warn!("Failed to auto-start gateway: {}", e),
+        }
+    });
+    
     run_server(addr, state).await
 }
 
@@ -46,6 +57,16 @@ pub async fn run(addr: SocketAddr) -> Result<(), AppError> {
 pub async fn run_with_config(addr: SocketAddr, config: GatewayConfig) -> Result<(), AppError> {
     let hermes_home = hermes_config::hermes_home();
     let state = AppState::new(config, hermes_home);
+    
+    // Auto-start gateway subprocess
+    let state_gw = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match crate::rest::gateway::start_gateway(axum::extract::State(state_gw)).await {
+            Ok(_) => info!("Gateway auto-started"),
+            Err(e) => tracing::warn!("Failed to auto-start gateway: {}", e),
+        }
+    });
     
     run_server(addr, state).await
 }
@@ -72,6 +93,17 @@ pub async fn run_with_profile(addr: SocketAddr, profile: &str) -> Result<(), App
         }
         *state.active_profile.write().await = profile.to_string();
     }
+    
+    // Auto-start gateway subprocess
+    let state_gw = state.clone();
+    tokio::spawn(async move {
+        // Small delay to let server bind first
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        match crate::rest::gateway::start_gateway(axum::extract::State(state_gw)).await {
+            Ok(_) => info!("Gateway auto-started"),
+            Err(e) => tracing::warn!("Failed to auto-start gateway: {}", e),
+        }
+    });
     
     run_server(addr, state).await
 }

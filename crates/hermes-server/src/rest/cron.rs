@@ -12,22 +12,21 @@ fn cron_persistence(state: &AppState) -> hermes_cron::FileJobPersistence {
 }
 
 /// GET /api/cron/jobs - List all cron jobs
+/// Returns a plain array (desktop expects CronJob[] directly).
 pub async fn list_jobs(State(state): State<AppState>) -> Result<Json<serde_json::Value>, AppError> {
     let persistence = cron_persistence(&state);
     let jobs = persistence.load_jobs().await
         .map_err(|e| AppError::Internal(format!("Failed to load cron jobs: {}", e)))?;
     
-    Ok(Json(json!({
-        "jobs": jobs.into_iter().map(|job| {
-            json!({
-                "id": job.id,
-                "name": job.name,
-                "schedule": job.schedule,
-                "prompt": job.prompt,
-                "status": job.status.to_string(),
-            })
-        }).collect::<Vec<_>>()
-    })))
+    Ok(Json(json!(jobs.into_iter().map(|job| {
+        json!({
+            "id": job.id,
+            "name": job.name,
+            "schedule": job.schedule,
+            "prompt": job.prompt,
+            "status": job.status.to_string(),
+        })
+    }).collect::<Vec<_>>())))
 }
 
 /// GET /api/cron/jobs/{id} - Get a cron job

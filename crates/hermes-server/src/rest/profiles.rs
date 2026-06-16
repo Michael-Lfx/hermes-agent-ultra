@@ -117,12 +117,18 @@ pub async fn get_profiles_sessions(
                                 "last_active": s.last_active,
                                 "ended_at": s.ended_at,
                                 "message_count": s.message_count,
-                                "parent_session_id": s.parent_session_id,
+                                "input_tokens": s.input_tokens,
+                                "output_tokens": s.output_tokens,
+                                "tool_call_count": s.tool_call_count,
+                                "cwd": s.cwd,
                                 "preview": s.preview,
                                 "profile": name.clone(),
                                 "is_default_profile": name == "default",
                                 "is_active": is_active,
                                 "archived": s.archived,
+                                "handoff_platform": s.handoff_platform,
+                                "handoff_state": s.handoff_state,
+                                "handoff_error": s.handoff_error,
                             }));
                         }
                     }
@@ -184,7 +190,9 @@ pub async fn list_profiles(
         }
     }
     
-    Ok(ok_json(json!(profiles)))
+    Ok(ok_json(json!({
+        "profiles": profiles,
+    })))
 }
 
 /// GET /api/profiles/active - Get active profile

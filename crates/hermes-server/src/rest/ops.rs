@@ -170,8 +170,7 @@ pub async fn get_logs(
         .collect();
 
     Ok(ok_json(json!({
-        "logs": logs,
-        "lines": logs.len(),
+        "lines": logs,
         "file": log_path.to_string_lossy(),
     })))
 }
