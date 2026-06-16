@@ -28,6 +28,7 @@ use hermes_gateway::platforms::telegram::TelegramAdapter;
 use hermes_gateway::platforms::webhook::WebhookPayload;
 use hermes_gateway::platforms::whatsapp::{WhatsAppConfig, is_paired};
 use hermes_gateway::tool_backends::ClarifyDispatcher;
+use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::ToolRegistry;
 use tokio::sync::{broadcast, mpsc};
 
@@ -154,18 +155,11 @@ pub(crate) async fn run_gateway(
                     .iter()
                     .map(|dep| format!("{} ({})", dep, hermes_config::dep_check::description(*dep)))
                     .collect();
-                tracing::info!(
+                tracing::warn!(
                     deps = %labels.join(", "),
-                    "runtime dependencies missing; starting background install"
+                    "runtime dependencies missing on PATH; run `hermes gateway setup` to install, \
+                     or place binaries under $HERMES_HOME/bin"
                 );
-                if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
-                    hermes_config::spawn_background_install(missing_runtime_deps);
-                } else {
-                    tracing::warn!(
-                        deps = %labels.join(", "),
-                        "HERMES_AUTO_ENSURE_DEPS disabled; missing deps will block tools at use time"
-                    );
-                }
             }
             drop(_p2);
 
@@ -246,9 +240,9 @@ pub(crate) async fn run_gateway(
             let _p6 = _metrics.phase("tools_and_backends");
             let tool_registry = Arc::new(ToolRegistry::new());
             let terminal_backend = build_terminal_backend(&config);
-            let skills_runtime = hermes_cli::skills_runtime::build_skill_provider(true)
-                .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?;
-            let skill_provider = skills_runtime.provider.clone();
+            let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
+            let skill_provider: Arc<dyn hermes_core::SkillProvider> =
+                Arc::new(SkillManager::new(skill_store));
             hermes_cli::gateway_inbound_wiring::wire_gateway_inbound_vision(
                 &gateway,
                 &tool_registry,
@@ -442,7 +436,6 @@ pub(crate) async fn run_gateway(
                 .map_err(|e| AgentError::Io(format!("Failed to listen for Ctrl+C: {}", e)))?;
 
             println!("\nShutting down gateway...");
-            gateway.abort_all_active_routes().await;
             gateway.teardown_all_sessions("shutdown").await;
             cron_scheduler.stop().await;
             gateway.stop_all().await?;
@@ -719,15 +712,6 @@ pub(crate) async fn run_webhook_inbound_loop(
         if let Err(err) = gateway.route_message(&incoming).await {
             tracing::warn!("Failed to route webhook message: {}", err);
         }
-    }
-}
-
-pub(crate) async fn run_talk_inbound_loop(
-    gateway: Arc<Gateway>,
-    mut rx: mpsc::Receiver<GatewayIncomingMessage>,
-) {
-    while let Some(incoming) = rx.recv().await {
-        spawn_gateway_route(gateway.clone(), incoming, "aipc_talk");
     }
 }
 
