@@ -259,7 +259,11 @@ syntax (`ls`, `$HOME`, `&&`, `|`, single-quoted strings) inside terminal \
 calls. MSYS-style paths like `/c/Users/<user>/...` work alongside \
 native `C:\\Users\\<user>\\...` paths. PowerShell builtins \
 (`Get-ChildItem`, `$env:FOO`, `Select-String`) will NOT work — use their \
-POSIX equivalents (`ls`, `$FOO`, `grep`).";
+POSIX equivalents (`ls`, `$FOO`, `grep`). \
+Known quirks: `mkdir -p` is unreliable on MSYS — use `write_file`'s \
+auto-creation or create dirs step-by-step; `cd ~` may fail — use \
+`cd \"$HOME\"` instead; use `command -v <binary>` to check if a program \
+exists (not `which` or `where`).";
 
 pub const BACKEND_PROBE_COMMAND: &str = "printf 'os=%s\\nkernel=%s\\nhome=%s\\ncwd=%s\\nuser=%s\\n' \
 \"$(uname -s 2>/dev/null || echo unknown)\" \
@@ -594,6 +598,10 @@ impl AgentLoop {
             build_environment_hints(|backend| self.probe_remote_backend_text(backend));
         if !environment_hints.trim().is_empty() {
             builder = builder.with_dynamic_block(&environment_hints);
+        }
+        let toolchain_line = hermes_tools::tools::env_probe::get_environment_probe_line(false);
+        if !toolchain_line.is_empty() {
+            builder = builder.with_dynamic_block(&toolchain_line);
         }
 
         if let Some(hint) = self.platform_hint_text() {
