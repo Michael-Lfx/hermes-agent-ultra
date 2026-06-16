@@ -746,7 +746,8 @@ const SUBPROCESS_ENV_BLOCKLIST_PREFIXES: &[&str] = &[
 const SUBPROCESS_ENV_FORCE_PREFIX: &str = "_HERMES_FORCE_";
 const SUBPROCESS_ENV_PASSTHROUGH_VAR: &str = "HERMES_SUBPROCESS_ENV_PASSTHROUGH";
 
-const SANE_PATH_ENTRIES: &[&str] = &[
+#[cfg(unix)]
+const SANE_PATH_ENTRIES_UNIX: &[&str] = &[
     "/usr/local/bin",
     "/usr/bin",
     "/bin",
@@ -755,6 +756,72 @@ const SANE_PATH_ENTRIES: &[&str] = &[
     "/opt/homebrew/bin",
     "/opt/homebrew/sbin",
 ];
+
+#[cfg(windows)]
+fn windows_sane_path_entries() -> Vec<String> {
+    let mut entries = Vec::new();
+    if let Ok(windir) = std::env::var("WINDIR") {
+        let system32 = std::path::Path::new(&windir).join("System32");
+        if system32.is_dir() {
+            entries.push(system32.to_string_lossy().into_owned());
+        }
+    }
+    if let Ok(program_files) = std::env::var("ProgramFiles") {
+        entries.push(program_files);
+    }
+    entries
+}
+
+fn path_separator() -> char {
+    if cfg!(windows) { ';' } else { ':' }
+}
+
+fn join_path_entries(entries: &[String]) -> String {
+    entries.join(&path_separator().to_string())
+}
+
+fn normalize_subprocess_path(path: Option<&str>) -> String {
+    let mut entries: Vec<String> = hermes_config::dep_supplemental_path_entries()
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
+    if let Some(path) = path.filter(|value| !value.trim().is_empty()) {
+        #[cfg(unix)]
+        if std::env::split_paths(path).any(|entry| entry == std::path::Path::new("/usr/bin")) {
+            return path.to_string();
+        }
+        entries.extend(
+            std::env::split_paths(path)
+                .map(|entry| entry.to_string_lossy().to_string())
+                .filter(|entry| !entry.is_empty()),
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        for sane in windows_sane_path_entries() {
+            if !entries.iter().any(|entry| entry == &sane) {
+                entries.push(sane);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        if entries.is_empty() {
+            entries.extend(SANE_PATH_ENTRIES_UNIX.iter().map(|s| (*s).to_string()));
+        } else {
+            for sane in SANE_PATH_ENTRIES_UNIX {
+                if !entries.iter().any(|entry| entry == sane) {
+                    entries.push((*sane).to_string());
+                }
+            }
+        }
+    }
+
+    join_path_entries(&entries)
+}
 
 fn should_strip_subprocess_env(key: &str) -> bool {
     SUBPROCESS_ENV_BLOCKLIST_EXACT.contains(&key)
@@ -798,26 +865,6 @@ fn subprocess_env_passthrough_set(configured: &[String]) -> BTreeSet<String> {
 
 fn is_subprocess_env_passthrough(key: &str, passthrough: &BTreeSet<String>) -> bool {
     passthrough.contains(key)
-}
-
-fn normalize_subprocess_path(path: Option<&str>) -> String {
-    let Some(path) = path.filter(|value| !value.trim().is_empty()) else {
-        return SANE_PATH_ENTRIES.join(":");
-    };
-    if std::env::split_paths(path).any(|entry| entry == std::path::Path::new("/usr/bin")) {
-        return path.to_string();
-    }
-
-    let mut entries: Vec<String> = std::env::split_paths(path)
-        .map(|entry| entry.to_string_lossy().to_string())
-        .filter(|entry| !entry.is_empty())
-        .collect();
-    for sane in SANE_PATH_ENTRIES {
-        if !entries.iter().any(|entry| entry == sane) {
-            entries.push((*sane).to_string());
-        }
-    }
-    entries.join(":")
 }
 
 #[cfg(unix)]
