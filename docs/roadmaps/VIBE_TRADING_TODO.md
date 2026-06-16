@@ -1,7 +1,7 @@
 # Vibe-Trading Rust 重写 — TODO 进度
 
-> **更新时间**：2026-06-15  
-> **总体状态**：P0 ✅ 已完成 → 下一步 P1
+> **更新时间**：2026-06-16  
+> **总体状态**：P0 ✅ 已完成，P1 部分完成（回测持久化、声明式策略框架、rsi_revert 已完成）→ 下一步继续 P1 剩余任务
 
 ---
 
@@ -60,6 +60,7 @@
 - [ ] 定时：`cronjob` 收盘复盘
 
 ### 工程
+
 - [ ] 库拆分（可选）：`hermes-vibe` → `hermes-vibe-data` + `hermes-vibe-backtest`
 - [ ] `run_card.json` 持久化到 `~/.hermes/vibe/runs/`
 
@@ -139,7 +140,6 @@
 | 注册 | `crates/hermes-tools/src/register/trading.rs` |
 | Skill | `skills/finance/trading-research/SKILL.md` |
 | Skill | `skills/finance/trading-debate/SKILL.md` |
-<<<<<<< HEAD
 | Skill | `skills/finance/trading-cron/SKILL.md` |
 | Skill | `optional-skills/finance/stocks/SKILL.md` |
 | Parity | `crates/hermes-parity-tests/fixtures/trading_*/` |
