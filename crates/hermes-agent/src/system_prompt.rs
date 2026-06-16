@@ -254,14 +254,16 @@ pub static BACKEND_PROBE_CACHE: LazyLock<Mutex<HashMap<(String, String), String>
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub const WINDOWS_BASH_SHELL_HINT: &str = "Shell: on this Windows host your `terminal` tool runs commands through \
-cmd.exe (`COMSPEC`), NOT bash, PowerShell, or WSL. Use Windows cmd syntax: \
-`dir` (not `ls`), `where` (not `which`), `type` (not `cat`), `cd /d C:\\path`, \
-`if exist`, `2>nul` for stderr suppression, `&&` / `||` for chaining. \
-Prefer native paths like `C:\\Users\\<user>\\...`; avoid `/usr/bin` and \
-`2>/dev/null`. To locate tools use `where node`, `where python`, `where ffmpeg`. \
-PowerShell cmdlets (`Get-ChildItem`, `$env:FOO`) will NOT work in `terminal`. \
-For multi-line scripts use `execute_code` or `write_file` + `terminal` with \
-`node script.js` / `py -3 script.py` when those interpreters are on PATH.";
+bash (git-bash / MSYS), NOT PowerShell or cmd.exe. Use POSIX shell \
+syntax (`ls`, `$HOME`, `&&`, `|`, single-quoted strings) inside terminal \
+calls. MSYS-style paths like `/c/Users/<user>/...` work alongside \
+native `C:\\Users\\<user>\\...` paths. PowerShell builtins \
+(`Get-ChildItem`, `$env:FOO`, `Select-String`) will NOT work — use their \
+POSIX equivalents (`ls`, `$FOO`, `grep`). \
+Known quirks: `mkdir -p` is unreliable on MSYS — use `write_file`'s \
+auto-creation or create dirs step-by-step; `cd ~` may fail — use \
+`cd \"$HOME\"` instead; use `command -v <binary>` to check if a program \
+exists (not `which` or `where`).";
 
 pub const BACKEND_PROBE_COMMAND: &str = "printf 'os=%s\\nkernel=%s\\nhome=%s\\ncwd=%s\\nuser=%s\\n' \
 \"$(uname -s 2>/dev/null || echo unknown)\" \
@@ -599,6 +601,10 @@ impl AgentLoop {
             build_environment_hints(|backend| self.probe_remote_backend_text(backend));
         if !environment_hints.trim().is_empty() {
             builder = builder.with_dynamic_block(&environment_hints);
+        }
+        let toolchain_line = hermes_tools::tools::env_probe::get_environment_probe_line(false);
+        if !toolchain_line.is_empty() {
+            builder = builder.with_dynamic_block(&toolchain_line);
         }
 
         if let Some(hint) = self.platform_hint_text() {
