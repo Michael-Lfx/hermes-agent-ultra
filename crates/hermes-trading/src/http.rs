@@ -10,17 +10,10 @@ use crate::error::TradingError;
 const MAX_ATTEMPTS: u32 = 3;
 const BACKOFF_MS: [u64; 3] = [200, 400, 800];
 
-/// Browser UA used by Eastmoney / Tencent public quote endpoints (UZI parity).
-pub const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-
-/// Eastmoney `ut` token on push2 / push2his (public web client constant).
-pub const EASTMONEY_UT: &str = "fa5fd1943c7b386f172d6893dbfba10b";
-
 /// HTTP client with connect timeout 10s and total request timeout 30s.
 #[must_use]
 pub fn default_client() -> Client {
     Client::builder()
-        .user_agent(BROWSER_USER_AGENT)
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
         .build()
@@ -44,9 +37,7 @@ pub async fn send_with_retry(
         let response = match build().send().await {
             Ok(resp) => resp,
             Err(e) => {
-                if attempt + 1 >= MAX_ATTEMPTS {
-                    warn!(attempt, error = %e, "HTTP request failed");
-                }
+                warn!(attempt, error = %e, "HTTP request failed");
                 last_err = Some(TradingError::Http(e));
                 continue;
             }
@@ -68,9 +59,7 @@ pub async fn send_with_retry(
 
         if status.is_server_error() {
             let body = response.text().await.unwrap_or_default();
-            if attempt + 1 >= MAX_ATTEMPTS {
-                warn!(%status, attempt, body = %body, "HTTP server error after retries");
-            }
+            warn!(%status, attempt, body = %body, "Server error, retrying");
             last_err = Some(TradingError::InvalidResponse(format!(
                 "HTTP {status}: {body}"
             )));

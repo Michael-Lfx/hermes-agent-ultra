@@ -1,6 +1,11 @@
 //! Trade settlement rules (T+0 vs A-share T+1).
 
-pub use crate::symbol::is_a_share;
+/// Whether a symbol is an A-share (Shenzhen `.SZ` or Shanghai `.SH`).
+#[must_use]
+pub fn is_a_share(symbol: &str) -> bool {
+    let upper = symbol.to_uppercase();
+    upper.ends_with(".SZ") || upper.ends_with(".SH")
+}
 
 /// Settlement mode for backtest trade execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
