@@ -155,23 +155,13 @@ pub(crate) async fn run_gateway(
                     .iter()
                     .map(|dep| format!("{} ({})", dep, hermes_config::dep_check::description(*dep)))
                     .collect();
-                tracing::info!(
+                tracing::warn!(
                     deps = %labels.join(", "),
-                    "runtime dependencies missing; starting background install"
+                    "runtime dependencies missing on PATH; run `hermes gateway setup` to install, \
+                     or place binaries under $HERMES_HOME/bin"
                 );
 <<<<<<< HEAD
 <<<<<<< HEAD
-=======
->>>>>>> c2e9b83fc (feat(deps): background parallel runtime deps and build-time bundled ripgrep)
-                if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
-                    hermes_config::spawn_background_install(missing_runtime_deps);
-                } else {
-                    tracing::warn!(
-                        deps = %labels.join(", "),
-                        "HERMES_AUTO_ENSURE_DEPS disabled; missing deps will block tools at use time"
-                    );
-                }
-                }
             }
             drop(_p2);
 
