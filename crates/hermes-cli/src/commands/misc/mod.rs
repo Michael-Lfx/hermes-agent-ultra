@@ -41,7 +41,7 @@ pub(crate) use triage::handle_trigger_triage_command;
 pub(crate) use reasoning::parse_reasoning_effort;
 #[cfg(test)]
 pub(crate) use subconscious::{
-    save_subconscious_state, SubconsciousQueueState, SubconsciousTask,
+    SubconsciousQueueState, SubconsciousTask, save_subconscious_state,
     subconscious_test_high_risk_state,
 };
 #[cfg(test)]

@@ -2280,10 +2280,8 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
         }
     }
     if let Ok(v) = std::env::var("HERMES_KANBAN_DISPATCH_IN_GATEWAY")
-        && let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v)
-    {
-        config.kanban.dispatch_in_gateway = parsed;
-    }
+        && let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v) {
+            config.kanban.dispatch_in_gateway = parsed;
     if let Ok(v) = std::env::var("HERMES_AGENT_API_MAX_RETRIES") {
         if let Ok(parsed) = v.parse::<u32>() {
             config.agent.api_max_retries = Some(parsed);
