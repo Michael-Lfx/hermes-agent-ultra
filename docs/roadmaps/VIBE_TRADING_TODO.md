@@ -84,6 +84,19 @@
   - 验收：文件不存在时返回清晰错误。
   - 验收：返回 JSON 包含 run_card 全部字段。
 
+#### 数据质量与 API 健壮性
+- [ ] 网络超时与重试
+  - 验收：`reqwest` client 配置连接/读取超时（默认 10s / 30s）。
+  - 验收：对 Binance / Eastmoney 请求实现指数退避重试（最多 3 次）。
+  - 验收：重试失败后返回明确错误，不返回半成品数据。
+- [ ] API 限流与降级
+  - 验收：Binance 429 时识别 `Retry-After` 并等待。
+  - 验收：Eastmoney 返回空数据或 403 时返回 `VibeError::InvalidResponse`。
+  - 验收：mock provider 可模拟 429 / 空数据场景用于测试。
+- [ ] 数据缺口处理
+  - 验收：节假日/停牌导致某日期无数据时不 panic。
+  - 验收：返回数据行数小于请求区间时，在结果中标记 `partial: true`。
+
 ### Skills
 
 - [ ] 更新 `vibe-research` SKILL

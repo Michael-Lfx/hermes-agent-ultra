@@ -654,10 +654,12 @@ skills/finance/
 ## 8. 测试与工程
 
 ```bash
-# 单元 + 集成
+# 单元 + 集成（当前 P0）
 cargo test -p hermes-vibe
-cargo test -p hermes-vibe-backtest   # P1 拆分后
-cargo test -p hermes-vibe-data
+
+# 单元 + 集成（P1 可选拆分后，若执行库拆分再启用）
+# cargo test -p hermes-vibe-data
+# cargo test -p hermes-vibe-backtest
 
 # 0py 守门：确保无 Python 依赖混入
 rg -i 'python|pyo3' crates/hermes-vibe*
@@ -666,7 +668,8 @@ rg -i 'python|pyo3' crates/hermes-vibe*
 cargo test -p hermes-parity-tests
 
 # Clippy
-clippy -p hermes-vibe -- -D warnings
+cargo clippy -p hermes-vibe -- -D warnings
+cargo clippy -p hermes-parity-tests -- -D warnings
 
 # 网络隔离测试：使用 wiremock mock 行情 API
 cargo test -p hermes-vibe --features test-mock
