@@ -901,6 +901,51 @@ pub fn resolve_prompt_cache_policy(
     (false, false)
 }
 
+fn prompt_cache_env_flag(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+/// Resolve the effective prompt-cache policy, layering a user opt-in on top of
+/// the built-in [`anthropic_prompt_cache_policy`].
+///
+/// The built-in policy only knows a fixed set of providers (native Anthropic,
+/// OpenRouter/Nous Claude+Qwen, MiniMax anthropic-wire, Alibaba/Qwen). Custom
+/// or self-hosted OpenAI-compatible endpoints that *do* support prompt caching
+/// are not covered, so this wrapper lets them opt in:
+///
+/// - `HERMES_FORCE_PROMPT_CACHING=1` force-enables the caching subsystem when
+///   the built-in policy declines (any provider, including `custom:`).
+/// - Layout defaults to the native Anthropic content-block layout only on the
+///   `anthropic_messages` wire; otherwise the envelope (chat_completions)
+///   layout is used. `HERMES_FORCE_PROMPT_CACHE_NATIVE=1` forces native layout
+///   regardless of wire — only set this if the endpoint speaks the Anthropic
+///   Messages schema.
+///
+/// Default off: sending `cache_control` markers to an endpoint that rejects
+/// unknown fields can break requests, so this is strictly opt-in.
+pub fn resolve_prompt_cache_policy(
+    provider: &str,
+    base_url: &str,
+    api_mode: &str,
+    model: &str,
+) -> (bool, bool) {
+    let (should_cache, native) = anthropic_prompt_cache_policy(provider, base_url, api_mode, model);
+    if should_cache {
+        return (should_cache, native);
+    }
+    if prompt_cache_env_flag("HERMES_FORCE_PROMPT_CACHING") {
+        let force_native = prompt_cache_env_flag("HERMES_FORCE_PROMPT_CACHE_NATIVE")
+            || api_mode == "anthropic_messages";
+        return (true, force_native);
+    }
+    (false, false)
+}
+
 // ---------------------------------------------------------------------------
 // Thinking-mode reasoning pad
 // ---------------------------------------------------------------------------
