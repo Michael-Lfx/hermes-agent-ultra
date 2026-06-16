@@ -14,8 +14,7 @@ use chrono::NaiveDate;
 use serde_json::Value;
 
 use hermes_trading::{
-    AutoRouter, BacktestEngine, DataSource, Interval, MockProvider, MockQuoteProvider,
-    OhlcvRequest, QuoteRouter, QuoteSource,
+    AutoRouter, BacktestEngine, Interval, MarketDataProvider, MockProvider, OhlcvRequest,
 };
 
 /// A single fixture file containing one or more cases.
@@ -57,9 +56,6 @@ fn load_fixtures() -> Vec<(PathBuf, FixtureFile)> {
         }
         let name = group_path.file_name().unwrap().to_string_lossy();
         if !name.starts_with("trading_") {
-            continue;
-        }
-        if name == "trading_research" || name == "trading_research_fetch" {
             continue;
         }
         for file_entry in fs::read_dir(&group_path).expect("read fixture group") {
@@ -120,51 +116,20 @@ fn mock_router() -> AutoRouter {
     AutoRouter::with_providers(mock.clone(), mock)
 }
 
-fn mock_quote_router() -> QuoteRouter {
-    let mock = MockQuoteProvider::new();
-    QuoteRouter::with_providers(mock.clone(), mock.clone(), mock)
-}
-
-fn quote_source_from_input(input: &Value) -> Result<QuoteSource, String> {
-    match input.get("source").and_then(|v| v.as_str()) {
-        None => Ok(QuoteSource::Auto),
-        Some(s) => QuoteSource::parse(s).map_err(|e| e.to_string()),
-    }
-}
-
-fn source_from_input(input: &Value) -> Result<DataSource, String> {
-    match input.get("source").and_then(|v| v.as_str()) {
-        None => Ok(DataSource::Auto),
-        Some(s) => DataSource::parse(s).map_err(|e| e.to_string()),
-    }
-}
-
 async fn run_case(case: &FixtureCase) -> Result<Value, String> {
     match case.op.as_str() {
         "get_market_data" => {
             let req = request_from_input(&case.input);
-            let source = source_from_input(&case.input)?;
-            let refresh = case
-                .input
-                .get("refresh")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
             let data = mock_router()
-                .fetch_ohlcv_with_source(&req, source, refresh)
+                .fetch_ohlcv(&req)
                 .await
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(&data).map_err(|e| e.to_string())
         }
         "run_backtest" => {
             let req = request_from_input(&case.input);
-            let source = source_from_input(&case.input)?;
-            let refresh = case
-                .input
-                .get("refresh")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
             let data = mock_router()
-                .fetch_ohlcv_with_source(&req, source, refresh)
+                .fetch_ohlcv(&req)
                 .await
                 .map_err(|e| e.to_string())?;
             let strategy = case
@@ -175,24 +140,6 @@ async fn run_case(case: &FixtureCase) -> Result<Value, String> {
             let params = case.input.get("params").cloned().unwrap_or_default();
             let card = BacktestEngine::run(&data, strategy, &params).map_err(|e| e.to_string())?;
             serde_json::to_value(&card).map_err(|e| e.to_string())
-        }
-        "get_quote" => {
-            let symbol = case
-                .input
-                .get("symbol")
-                .and_then(|v| v.as_str())
-                .expect("symbol required");
-            let source = quote_source_from_input(&case.input)?;
-            let refresh = case
-                .input
-                .get("refresh")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
-            let data = mock_quote_router()
-                .fetch_quote_with_source(symbol, source, refresh)
-                .await
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(&data).map_err(|e| e.to_string())
         }
         other => Err(format!("unknown op: {other}")),
     }
@@ -213,14 +160,6 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
             .and_then(|v| v.as_str())
             .unwrap_or("<missing>");
         assert_eq!(actual_interval, interval, "[{case_id}] interval mismatch");
-    }
-
-    if let Some(partial) = expected.get("partial_eq").and_then(|v| v.as_bool()) {
-        let actual_partial = actual
-            .get("partial")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        assert_eq!(actual_partial, partial, "[{case_id}] partial mismatch");
     }
 
     if let Some(min_rows) = expected.get("min_rows").and_then(|v| v.as_u64()) {
@@ -292,50 +231,6 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
         assert!(
             actual_dd <= max_dd,
             "[{case_id}] expected max_drawdown <= {max_dd}, got {actual_dd}"
-        );
-    }
-
-    if let Some(source) = expected.get("source_eq").and_then(|v| v.as_str()) {
-        let actual_source = actual
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<missing>");
-        assert_eq!(actual_source, source, "[{case_id}] source mismatch");
-    }
-
-    if let Some(price) = expected.get("price_eq").and_then(|v| v.as_f64()) {
-        let actual_price = actual.get("price").and_then(|v| v.as_f64()).expect("price");
-        assert!(
-            (actual_price - price).abs() < 1e-6,
-            "[{case_id}] expected price {price}, got {actual_price}"
-        );
-    }
-
-    if expected
-        .get("has_market_date")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        assert!(
-            actual
-                .get("market_date")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "[{case_id}] expected market_date"
-        );
-    }
-
-    if expected
-        .get("has_as_of")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        assert!(
-            actual
-                .get("as_of")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| !s.is_empty()),
-            "[{case_id}] expected as_of"
         );
     }
 }

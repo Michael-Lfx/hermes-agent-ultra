@@ -1,13 +1,19 @@
 //! 东方财富（Eastmoney）HTTP API provider for A-share (China) OHLCV data.
+//!
+//! Endpoint: `https://push2his.eastmoney.com/api/qt/stock/kline/get`
+//! No API key required for public market data.
 
 use async_trait::async_trait;
 use chrono::NaiveDate;
+use serde::Deserialize;
+use tracing::{debug, warn};
 
 use crate::error::TradingError;
-use crate::http::default_client;
 use crate::provider::MarketDataProvider;
-use crate::providers::eastmoney_http;
-use crate::types::{OhlcvData, OhlcvRequest, OhlcvRow, mark_partial};
+use crate::types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};
+
+/// Base URL for Eastmoney historical kline API.
+const EASTMONEY_BASE_URL: &str = "https://push2his.eastmoney.com/api/qt/stock/kline/get";
 
 /// Eastmoney market data provider for A-share stocks.
 ///
@@ -22,7 +28,7 @@ impl EastmoneyProvider {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            client: default_client(),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -34,9 +40,6 @@ impl EastmoneyProvider {
 
     /// Convert user-facing symbol to Eastmoney `secid` format.
 <<<<<<< HEAD
-=======
->>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
-    pub(crate) fn to_secid(symbol: &str) -> Result<String, TradingError> {
         let parts: Vec<&str> = symbol.split('.').collect();
         if parts.len() != 2 {
             return Err(TradingError::SymbolNotFound(format!(
@@ -55,6 +58,14 @@ impl EastmoneyProvider {
         };
         Ok(format!("{market}.{code}"))
     }
+
+    /// Map [`Interval`] to Eastmoney `klt` parameter.
+    fn to_klt(interval: Interval) -> &'static str {
+        match interval {
+            Interval::Daily => "101",
+            Interval::Weekly => "102",
+        }
+    }
 }
 
 impl Default for EastmoneyProvider {
@@ -63,8 +74,21 @@ impl Default for EastmoneyProvider {
     }
 }
 
+/// Top-level JSON response from Eastmoney.
+#[derive(Debug, Deserialize)]
+struct EastmoneyResponse {
+    data: Option<EastmoneyData>,
+}
+
+/// Nested `data` object containing the klines array.
+#[derive(Debug, Deserialize)]
+struct EastmoneyData {
+    klines: Vec<String>,
+}
+
 /// Parse a single kline CSV string:
 /// `"2025-01-02,10.50,10.80,10.90,10.30,123456,7890000"`
+/// Fields: date, open, close, high, low, volume, amount
 fn parse_kline(line: &str) -> Option<OhlcvRow> {
     let parts: Vec<&str> = line.split(',').collect();
     if parts.len() < 6 {
@@ -90,30 +114,68 @@ fn parse_kline(line: &str) -> Option<OhlcvRow> {
 impl MarketDataProvider for EastmoneyProvider {
     async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
         let secid = Self::to_secid(&req.symbol)?;
+        let klt = Self::to_klt(req.interval);
         let beg = req.start.format("%Y%m%d").to_string();
         let end = req.end.format("%Y%m%d").to_string();
 
-        let klines =
-            eastmoney_http::fetch_push2_klines(&self.client, &secid, req.interval, &beg, &end)
-                .await?;
+        debug!(
+            secid = %secid,
+            klt = %klt,
+            beg = %beg,
+            end = %end,
+            "Eastmoney kline request"
+        );
 
-        let rows: Vec<OhlcvRow> = klines.iter().filter_map(|line| parse_kline(line)).collect();
+        let resp = self
+            .client
+            .get(EASTMONEY_BASE_URL)
+            .query(&[
+                ("secid", secid.as_str()),
+                ("fields1", "f1,f2,f3,f4,f5,f6"),
+                ("fields2", "f51,f52,f53,f54,f55,f56,f57"),
+                ("klt", klt),
+                ("fqt", "1"),
+                ("beg", beg.as_str()),
+                ("end", end.as_str()),
+            ])
+            .send()
+            .await?;
 
-        if rows.is_empty() {
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            warn!(%status, body = %body, "Eastmoney API error");
             return Err(TradingError::InvalidResponse(format!(
-                "Eastmoney returned no kline rows for symbol {}",
-                req.symbol
+                "Eastmoney returned HTTP {status}: {body}"
             )));
         }
 
-        let mut data = OhlcvData {
+        let parsed: EastmoneyResponse = resp.json().await?;
+
+        let data = parsed.data.ok_or_else(|| {
+            TradingError::SymbolNotFound(format!(
+                "Eastmoney returned no data for symbol {}",
+                req.symbol
+            ))
+        })?;
+
+        let rows: Vec<OhlcvRow> = data
+            .klines
+            .iter()
+            .filter_map(|line| parse_kline(line))
+            .collect();
+
+        if rows.is_empty() {
+            return Err(TradingError::NoData);
+        }
+
+        debug!(rows = rows.len(), "Eastmoney klines parsed");
+
+        Ok(OhlcvData {
             symbol: req.symbol.clone(),
             interval: req.interval,
             rows,
-            partial: false,
-        };
-        mark_partial(&mut data, req);
-        Ok(data)
+        })
     }
 
     fn name(&self) -> &str {
@@ -144,11 +206,21 @@ mod tests {
     }
 
     #[test]
+    fn test_klt_mapping() {
+        assert_eq!(EastmoneyProvider::to_klt(Interval::Daily), "101");
+        assert_eq!(EastmoneyProvider::to_klt(Interval::Weekly), "102");
+    }
+
+    #[test]
     fn test_parse_kline() {
         let line = "2025-01-02,10.50,10.80,10.90,10.30,123456,7890000";
         let row = parse_kline(line).unwrap();
         assert_eq!(row.date, NaiveDate::from_ymd_opt(2025, 1, 2).unwrap());
         assert!((row.open - 10.50).abs() < f64::EPSILON);
+        assert!((row.close - 10.80).abs() < f64::EPSILON);
+        assert!((row.high - 10.90).abs() < f64::EPSILON);
+        assert!((row.low - 10.30).abs() < f64::EPSILON);
+        assert!((row.volume - 123_456.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -164,7 +236,7 @@ mod tests {
             symbol: "000001.SZ".into(),
             start: NaiveDate::from_ymd_opt(2025, 1, 1).unwrap(),
             end: NaiveDate::from_ymd_opt(2025, 1, 31).unwrap(),
-            interval: crate::types::Interval::Daily,
+            interval: Interval::Daily,
         };
         let data = provider.fetch_ohlcv(&req).await.unwrap();
         assert!(!data.is_empty());

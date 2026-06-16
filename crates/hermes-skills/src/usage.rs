@@ -540,7 +540,6 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "debugging-hermes-tui-commands",
     "design-md",
     "dogfood",
-    "equity-research",
     "dspy",
     "evaluating-llms-harness",
     "excalidraw",
@@ -601,18 +600,19 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "songwriting-and-ai-music",
     "spike",
     "spotify",
-    "spot-quote",
     "subagent-driven-development",
     "systematic-debugging",
     "technical-indicators",
     "teams-meeting-pipeline",
     "test-driven-development",
     "touchdesigner-mcp",
+<<<<<<< HEAD
     "trading-debate",
 <<<<<<< HEAD
     "trading-cron",
+=======
+>>>>>>> 930eea825 (refactor(trading): rename hermes-vibe to hermes-trading across workspace)
     "trading-research",
-    "vibe-research",
     "webhook-subscriptions",
     "weights-and-biases",
     "writing-plans",

@@ -26,13 +26,6 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "trading",
-            Arc::new(crate::tools::trading_quote::GetQuoteHandler::new()),
-            "💹",
-            vec![],
-        );
-        reg(
-            ctx,
-            "trading",
             Arc::new(crate::tools::trading_market_data::GetMarketDataHandler::new()),
             "📈",
             vec![],
@@ -71,10 +64,6 @@ pub fn register(ctx: &RegistryContext<'_>) {
             ctx,
             "trading",
 <<<<<<< HEAD
-=======
->>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
-            Arc::new(crate::tools::trading_analyze_stock::AnalyzeStockHandler::new()),
-            "📋",
             vec![],
         );
     }
