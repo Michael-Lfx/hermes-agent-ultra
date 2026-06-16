@@ -35,9 +35,6 @@ impl MockProvider {
             "BTC-USDT" => 50_000.0,
             "ETH-BTC" => 0.05,
             "000001.SZ" | "600519.SH" => 100.0,
-            s if s.ends_with(".HK") => 350.0,
-            s if s.ends_with(".US") => 180.0,
-            "AAPL" => 180.0,
             _ => 100.0,
         };
 
@@ -82,14 +79,12 @@ impl MarketDataProvider for MockProvider {
             )));
         }
 
-        let canonical = crate::symbol::normalize_symbol(&req.symbol);
-        let rows = Self::generate_rows(&canonical, req.start, req.end, req.interval);
+        let rows = Self::generate_rows(&req.symbol, req.start, req.end, req.interval);
 
         Ok(OhlcvData {
-            symbol: canonical,
+            symbol: req.symbol.clone(),
             interval: req.interval,
             rows,
-            partial: false,
         })
     }
 

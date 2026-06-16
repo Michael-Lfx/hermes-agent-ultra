@@ -18,7 +18,7 @@ Multi-factor strategy backtester for evaluating trading strategies against histo
 ## Capabilities
 
 - **Factor Definition**: Combine built-in indicators (SMA, EMA, RSI, MACD, Bollinger) into custom strategy signals
-- **Historical Backtesting**: Run strategies over OHLCV data fetched via `hermes-vibe`
+- **Historical Backtesting**: Run strategies over OHLCV data fetched via `hermes-trading`
 - **Performance Metrics**: Compute returns, drawdown, Sharpe-like ratios from strategy decisions
 - **Multi-Strategy Comparison**: Run multiple strategies side-by-side on the same data
 
@@ -38,7 +38,7 @@ Run my custom Bollinger squeeze strategy on the CSI 300 constituents and rank by
 
 ## Architecture
 
-- `hermes-vibe` — OHLCV data fetching (`MarketDataProvider` trait)
+- `hermes-trading` — OHLCV data fetching (`MarketDataProvider` trait)
 - `hermes-strategies` — `Strategy` trait, `Indicator` implementations, `Decision` output
 - `hermes-copilot-lite` — `CopilotLite::analyze()` orchestration and `AnalysisReport` generation
 

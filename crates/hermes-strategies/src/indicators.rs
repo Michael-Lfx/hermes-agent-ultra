@@ -115,7 +115,7 @@ impl Rsi {
 
 impl Indicator for Rsi {
     fn compute_series(&self, closes: &[f64]) -> Vec<Option<f64>> {
-        // Fix 2: Use Wilder's smoothing to match hermes_vibe::rsi().
+        // Fix 2: Use Wilder's smoothing to match hermes_trading::rsi().
         let n = closes.len();
         if self.period == 0 || n < self.period + 1 {
             return vec![None; n];
@@ -142,8 +142,16 @@ impl Indicator for Rsi {
         avg_loss /= self.period as f64;
 
         // RSI at index `period`.
-        let rs = if avg_loss == 0.0 { 100.0 } else { avg_gain / avg_loss };
-        let rsi_val = if avg_loss == 0.0 { 100.0 } else { 100.0 - 100.0 / (1.0 + rs) };
+        let rs = if avg_loss == 0.0 {
+            100.0
+        } else {
+            avg_gain / avg_loss
+        };
+        let rsi_val = if avg_loss == 0.0 {
+            100.0
+        } else {
+            100.0 - 100.0 / (1.0 + rs)
+        };
         result.push(Some(rsi_val));
 
         // Wilder's smoothing for the remaining bars.
@@ -155,7 +163,11 @@ impl Indicator for Rsi {
             avg_gain = (avg_gain * (self.period as f64 - 1.0) + gain) / self.period as f64;
             avg_loss = (avg_loss * (self.period as f64 - 1.0) + loss) / self.period as f64;
 
-            let r = if avg_loss == 0.0 { 100.0 } else { 100.0 - 100.0 / (1.0 + avg_gain / avg_loss) };
+            let r = if avg_loss == 0.0 {
+                100.0
+            } else {
+                100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+            };
             result.push(Some(r));
         }
 
@@ -234,7 +246,11 @@ impl Bollinger {
             .sum::<f64>()
             / self.period as f64;
         let std = variance.sqrt();
-        Some((middle - self.num_std * std, middle, middle + self.num_std * std))
+        Some((
+            middle - self.num_std * std,
+            middle,
+            middle + self.num_std * std,
+        ))
     }
 }
 

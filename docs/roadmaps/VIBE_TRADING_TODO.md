@@ -1,4 +1,4 @@
-# Vibe-Trading Rust 重写 — TODO 进度
+# trading-Trading Rust 重写 — TODO 进度
 
 > **更新时间**：2026-06-16  
 > **总体状态**：P0 ✅ 已完成，P1 部分完成（回测持久化、声明式策略框架、rsi_revert 已完成）→ 下一步继续 P1 剩余任务
@@ -8,9 +8,9 @@
 ## ✅ 已完成（P0 — MVP 可 demo）
 
 ### 工程基础
-- [x] `crates/hermes-vibe/` crate 创建 + workspace 配置
+- [x] `crates/hermes-trading/` crate 创建 + workspace 配置
 - [x] 根 `Cargo.toml` 添加 workspace member + dependency
-- [x] `hermes-tools/Cargo.toml` 添加 `vibe-research` feature（已包含在 `full` 中）
+- [x] `hermes-tools/Cargo.toml` 添加 `trading-research` feature（已包含在 `full` 中）
 
 ### 数据层
 - [x] `MarketDataProvider` trait 定义
@@ -26,15 +26,15 @@
 ### Tool Handler
 - [x] `get_market_data` ToolHandler — 返回 OHLCV JSON
 - [x] `run_backtest` ToolHandler — 返回 RunCard JSON
-- [x] `register/vibe.rs` 注册 + feature gate
+- [x] `register/trading.rs` 注册 + feature gate
 
 ### Skill & 测试
-- [x] `skills/finance/vibe-research/SKILL.md`
-- [x] Parity fixture + runner（`vibe_market_data/ohlcv.json` + `vibe_backtest/sma_cross.json`，`cargo test -p hermes-parity-tests` 通过，MockProvider 隔离网络）
-- [x] `hermes-vibe` 单元测试 27 通过，`hermes-parity-tests` 4 个 fixture case 通过；Clippy 零警告
+- [x] `skills/finance/trading-research/SKILL.md`
+- [x] Parity fixture + runner（`trading_market_data/ohlcv.json` + `trading_backtest/sma_cross.json`，`cargo test -p hermes-parity-tests` 通过，MockProvider 隔离网络）
+- [x] `hermes-trading` 单元测试 27 通过，`hermes-parity-tests` 4 个 fixture case 通过；Clippy 零警告
 
 ### P0 验收
-- [x] `cargo build -p hermes-cli` 自动包含 vibe tools
+- [x] `cargo build -p hermes-cli` 自动包含 trading tools
 - [x] `hermes chat` 中可用自然语言触发拉数据 + 回测
 
 ---
@@ -43,11 +43,11 @@
 
 **P1 总体验收目标**：
 - [ ] A-share / HK / US / crypto 四类市场各至少 1 个 symbol 能成功回测。
-- [x] 回测结果持久化为 `~/.hermes/vibe/runs/{id}/run_card.json`，并可通过 tool 读取复盘。
+- [x] 回测结果持久化为 `~/.hermes/trading/runs/{id}/run_card.json`，并可通过 tool 读取复盘。
 - [x] 新增 `rsi_revert` 策略模板，A 股 T+1 规则生效。
 - [x] 声明式策略框架：JSON 定义策略 + DSL 规则解析 + 运行时注册表 + create_strategy 工具。
-- [ ] `cargo test -p hermes-vibe` 和 `cargo test -p hermes-parity-tests` 全部通过。
-- [ ] `cargo clippy -p hermes-vibe -p hermes-parity-tests -- -D warnings` 通过。
+- [ ] `cargo test -p hermes-trading` 和 `cargo test -p hermes-parity-tests` 全部通过。
+- [ ] `cargo clippy -p hermes-trading -p hermes-parity-tests -- -D warnings` 通过。
 
 ### Tools 增强
 
@@ -59,8 +59,8 @@
 - [ ] 支持 HK / US 市场 symbol 格式（至少设计好路由规则）
   - 验收：`HK_00700` 或 `0700.HK` 格式能识别为待接入状态（可 mock）。
   - 验收：非法 market 返回清晰错误。
-- [ ] 实现 `VIBE_DATA_CACHE` 磁盘缓存
-  - 验收：缓存目录为 `~/.hermes/vibe/cache/`。
+- [ ] 实现 `TRADING_DATA_CACHE` 磁盘缓存
+  - 验收：缓存目录为 `~/.hermes/trading/cache/`。
   - 验收：缓存 key 格式为 `{source}-{symbol}-{interval}-{start}-{end}.json`。
   - 验收：默认缓存有效期 24h；过期后重新请求网络。
   - 验收：同一请求在缓存有效期内只触发一次网络调用（单测验证）。
@@ -70,7 +70,7 @@
 - [ ] 新增 `rsi_revert` 策略模板
   - 验收：默认参数 `rsi_period=14`, `oversold=30`, `overbought=70`。
   - 验收：在 mock 数据上产生至少 1 笔交易。
-  - 验收：新增 parity fixture `vibe_backtest/rsi_revert.json`。
+  - 验收：新增 parity fixture `trading_backtest/rsi_revert.json`。
 - [ ] A 股 T+1 规则
   - 验收：当日买入信号不成交，下一交易日开盘价成交。
   - 验收：卖出信号当日可成交（A 股 T+1 只限制买入后当日卖出）。
@@ -80,7 +80,7 @@
   - 验收：提供 `risk_free_rate` 参数，默认 0.0。
 
 #### `get_backtest_report`（可选）
-- [ ] 读取 `~/.hermes/vibe/runs/{id}/run_card.json`
+- [ ] 读取 `~/.hermes/trading/runs/{id}/run_card.json`
   - 验收：`{id}` 支持 UUID 或时间戳格式。
   - 验收：文件不存在时返回清晰错误。
   - 验收：返回 JSON 包含 run_card 全部字段。
@@ -92,7 +92,7 @@
   - 验收：重试失败后返回明确错误，不返回半成品数据。
 - [ ] API 限流与降级
   - 验收：Binance 429 时识别 `Retry-After` 并等待。
-  - 验收：Eastmoney 返回空数据或 403 时返回 `VibeError::InvalidResponse`。
+  - 验收：Eastmoney 返回空数据或 403 时返回 `TradingError::InvalidResponse`。
   - 验收：mock provider 可模拟 429 / 空数据场景用于测试。
 - [ ] 数据缺口处理
   - 验收：节假日/停牌导致某日期无数据时不 panic。
@@ -100,18 +100,18 @@
 
 ### Skills
 
-- [ ] 更新 `vibe-research` SKILL
+- [ ] 更新 `trading-research` SKILL
   - 验收：When to Use 增加 `rsi_revert` 说明。
   - 验收：增加 T+1 规则说明（A-share 回测默认启用）。
   - 验收：增加 `run_card.json` 保存路径说明。
   - 验收：验证示例 prompt 覆盖 `rsi_revert`。
-- [ ] 新建 `vibe-debate` SKILL
-  - 验收：路径 `skills/finance/vibe-debate/SKILL.md`。
-  - 验收：frontmatter `name: vibe-debate`。
+- [ ] 新建 `trading-debate` SKILL
+  - 验收：路径 `skills/finance/trading-debate/SKILL.md`。
+  - 验收：frontmatter `name: trading-debate`。
   - 验收：使用 `delegate_task` 触发 bull/bear 两个子 agent。
   - 验收：输出格式为 pros/cons 结论摘要。
 - [ ] 更新 `finance/stocks` SKILL
-  - 验收：When to Use 明确 “历史 OHLCV / 回测” 走 `vibe-research`。
+  - 验收：When to Use 明确 “历史 OHLCV / 回测” 走 `trading-research`。
   - 验收：保留 stocks skill 对 quote/company search 的职责。
 
 ### Hermes 能力启用
@@ -129,11 +129,11 @@
   - 验收：能提取上次回测的 symbol、strategy、total_return_pct。
 - [ ] 定时：`cronjob` 收盘复盘
   - 验收：支持 `hermes cron` 配置每日收盘后运行预设 symbol 回测。
-  - 验收：输出保存到 `~/.hermes/vibe/runs/`。
+  - 验收：输出保存到 `~/.hermes/trading/runs/`。
 
 ### 工程
 
-- [x] `run_card.json` 持久化到 `~/.hermes/vibe/runs/`
+- [x] `run_card.json` 持久化到 `~/.hermes/trading/runs/`
   - 验收：每次 `run_backtest` 成功后将 RunCard 写入 `{id}/run_card.json`。
   - 验收：`id` 生成规则明确（建议使用 `{symbol}-{strategy}-{timestamp}` 或 UUID）。
   - 验收：目录不存在时自动创建。
@@ -145,8 +145,8 @@
   - 验收：`StrategyRegistry` 运行时注册表支持内置策略 + 用户策略加载。
   - 验收：`create_strategy` 工具允许在对话中创建策略。
   - 验收：20 + 36 个单元测试全部通过，clippy 零警告。
-  - 验收：`vibe_backtest` 集成 StrategyRegistry，支持声明式和硬编码双路径。
-- [ ] 库拆分（可选）：`hermes-vibe` → `hermes-vibe-data` + `hermes-vibe-backtest`
+  - 验收：`trading_backtest` 集成 StrategyRegistry，支持声明式和硬编码双路径。
+- [ ] 库拆分（可选）：`hermes-trading` → `hermes-trading-data` + `hermes-trading-backtest`
   - 验收：如执行拆分，`hermes-tools` 依赖保持不变或更清晰。
   - 验收：拆不拆不影响 P1 总体验收。
 
@@ -164,13 +164,13 @@
 - [ ] `trading_account_read` — 券商只读账户/持仓（alpacars / ibapi）
 
 ### 新增 Skills
-- [ ] `vibe-journal` — CSV 路径 + analyze_trade_journal
-- [ ] `vibe-factor` — 何时 run_factor_ic；IC 局限
-- [ ] `vibe-cron` — cronjob 收盘/周报配方
-- [ ] 更新 `vibe-research` — benchmark、因子、只读账户
+- [ ] `trading-journal` — CSV 路径 + analyze_trade_journal
+- [ ] `trading-factor` — 何时 run_factor_ic；IC 局限
+- [ ] `trading-cron` — cronjob 收盘/周报配方
+- [ ] 更新 `trading-research` — benchmark、因子、只读账户
 
 ### MCP & 离线
-- [ ] `hermes mcp serve` 对外暴露 5–8 个 vibe tools
+- [ ] `hermes mcp serve` 对外暴露 5–8 个 trading tools
 - [ ] `hermes-mcp` client 连接 Robinhood MCP
 - [ ] `rustdx` 离线 Parquet 导入
 
@@ -187,9 +187,9 @@
 - [ ] `trading_place_order` — 下单（需 mandate 栈）
 
 ### Skills 候选
-- [ ] `vibe-shadow` — Shadow Account HTML 报告
-- [ ] `vibe-options` — 期权研究
-- [ ] `vibe-crypto-perp` — 永续合约/资金费率
+- [ ] `trading-shadow` — Shadow Account HTML 报告
+- [ ] `trading-options` — 期权研究
+- [ ] `trading-crypto-perp` — 永续合约/资金费率
 
 ---
 
@@ -211,19 +211,19 @@
 
 | 模块 | 路径 |
 |------|------|
-| Vibe 库 | `crates/hermes-vibe/src/` |
-| 数据提供者 | `crates/hermes-vibe/src/providers/` |
-| 回测引擎 | `crates/hermes-vibe/src/backtest.rs` |
+| Trading 库 | `crates/hermes-trading/src/` |
+| 数据提供者 | `crates/hermes-trading/src/providers/` |
+| 回测引擎 | `crates/hermes-trading/src/backtest.rs` |
 | 策略框架 | `crates/hermes-strategies/src/` |
 | 策略 DSL | `crates/hermes-strategies/src/dsl.rs` |
 | 策略实现 | `crates/hermes-strategies/src/declarative.rs` |
 | 内置策略 | `crates/hermes-strategies/src/builtin.rs` |
 | 策略注册表 | `crates/hermes-strategies/src/registry.rs` |
-| Tool Handler | `crates/hermes-tools/src/tools/vibe_market_data.rs` |
-| Tool Handler | `crates/hermes-tools/src/tools/vibe_backtest.rs` |
-| Tool Handler | `crates/hermes-tools/src/tools/vibe_create_strategy.rs` |
-| Tool Handler | `crates/hermes-tools/src/tools/vibe_strategies.rs` |
-| 注册 | `crates/hermes-tools/src/register/vibe.rs` |
-| Skill | `skills/finance/vibe-research/SKILL.md` |
-| Parity | `crates/hermes-parity-tests/fixtures/vibe_*/` |
+| Tool Handler | `crates/hermes-tools/src/tools/trading_market_data.rs` |
+| Tool Handler | `crates/hermes-tools/src/tools/trading_backtest.rs` |
+| Tool Handler | `crates/hermes-tools/src/tools/trading_create_strategy.rs` |
+| Tool Handler | `crates/hermes-tools/src/tools/trading_strategies.rs` |
+| 注册 | `crates/hermes-tools/src/register/trading.rs` |
+| Skill | `skills/finance/trading-research/SKILL.md` |
+| Parity | `crates/hermes-parity-tests/fixtures/trading_*/` |
 | 路线图 | `docs/roadmaps/VIBE_TRADING_RUST_REWRITE.md` |

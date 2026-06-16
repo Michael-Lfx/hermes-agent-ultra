@@ -7,7 +7,7 @@ repository.workspace = true
 description = "Golden parity fixtures between Python Hermes and Rust implementations"
 
 [dependencies]
-hermes-vibe = { workspace = true, features = ["test-mock"] }
+hermes-trading = { workspace = true, features = ["test-mock"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
@@ -15,4 +15,4 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
-hermes-vibe = { workspace = true, features = ["test-mock"] }
+hermes-trading = { workspace = true, features = ["test-mock"] }

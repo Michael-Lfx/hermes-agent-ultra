@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
+use hermes_trading::MarketDataProvider;
 
 #[derive(Default)]
 pub struct GetMarketDataHandler;
@@ -40,19 +41,6 @@ impl ToolHandler for GetMarketDataHandler {
             _ => hermes_trading::Interval::Daily,
         };
 
-        let source = params
-            .get("source")
-            .and_then(|v| v.as_str())
-            .map(hermes_trading::DataSource::parse)
-            .transpose()
-            .map_err(|e| ToolError::InvalidParams(e.to_string()))?
-            .unwrap_or(hermes_trading::DataSource::Auto);
-
-        let refresh = params
-            .get("refresh")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         let req = hermes_trading::OhlcvRequest {
             symbol: symbol.to_string(),
             start: start_date,
@@ -62,7 +50,7 @@ impl ToolHandler for GetMarketDataHandler {
 
         let router = hermes_trading::AutoRouter::new();
         let data = router
-            .fetch_ohlcv_with_source(&req, source, refresh)
+            .fetch_ohlcv(&req)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch market data: {e}")))?;
 
@@ -76,7 +64,7 @@ impl ToolHandler for GetMarketDataHandler {
             "symbol".into(),
             json!({
                 "type": "string",
-                "description": "Symbol identifier. Examples: 'BTC-USDT' (crypto), '000001.SZ' (A-share)"
+                "description": "Symbol identifier. Examples: 'BTC-USDT' (crypto), '000001.SZ' (Shenzhen A-share), '600519.SH' (Shanghai A-share)"
             }),
         );
         props.insert(
@@ -101,26 +89,11 @@ impl ToolHandler for GetMarketDataHandler {
                 "enum": ["daily", "weekly"]
             }),
         );
-        props.insert(
-            "source".into(),
-            json!({
-                "type": "string",
-                "description": "Data source: 'auto' (default), 'binance', or 'eastmoney'",
-                "enum": ["auto", "binance", "eastmoney"]
-            }),
-        );
-        props.insert(
-            "refresh".into(),
-            json!({
-                "type": "boolean",
-                "description": "Bypass disk cache and force network fetch (default: false)"
-            }),
-        );
 
         tool_schema(
             "get_market_data",
             "Fetch OHLCV (Open/High/Low/Close/Volume) market data for a symbol. \
-             Supports A-shares and crypto. US/HK historical data is not available — use get_quote for spot prices. \
+             Supports A-shares (e.g. 000001.SZ, 600519.SH) and crypto (e.g. BTC-USDT). \
              No API key required.",
             JsonSchema::object(props, vec!["symbol".into()]),
         )

@@ -28,7 +28,5 @@ pub mod tts;
 pub mod video;
 pub mod video_gen;
 pub mod vision;
-#[cfg(feature = "vibe-research")]
-pub mod vibe;
 #[cfg(feature = "web")]
 pub mod web;

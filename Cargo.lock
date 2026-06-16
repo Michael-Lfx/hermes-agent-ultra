@@ -2631,7 +2631,7 @@ dependencies = [
  "chrono",
  "hermes-market-watch",
  "hermes-strategies",
- "hermes-vibe",
+ "hermes-trading",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -2861,7 +2861,7 @@ version = "0.16.0"
 dependencies = [
  "async-trait",
  "chrono",
- "hermes-vibe",
+ "hermes-trading",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
@@ -2894,7 +2894,7 @@ name = "hermes-parity-tests"
 version = "0.16.0"
 dependencies = [
  "chrono",
- "hermes-vibe",
+ "hermes-trading",
  "serde",
  "serde_json",
  "tokio",
@@ -2956,7 +2956,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "hermes-config",
- "hermes-vibe",
+ "hermes-trading",
  "serde",
  "serde_json",
  "tempfile",
@@ -2998,7 +2998,7 @@ dependencies = [
  "hermes-intelligence",
  "hermes-skills",
  "hermes-strategies",
- "hermes-vibe",
+ "hermes-trading",
  "hex",
  "indexmap",
  "proptest",
@@ -3022,7 +3022,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hermes-vibe"
+name = "hermes-trading"
 version = "0.16.0"
 dependencies = [
  "async-trait",
