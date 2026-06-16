@@ -17,6 +17,18 @@ pub trait Indicator: Send + Sync {
     /// Minimum number of data points required before this indicator produces
     /// a value.
     fn min_periods(&self) -> usize;
+
+    /// Compute the indicator over an entire series at once.
+    ///
+    /// Returns a `Vec` of the same length as `values`. Entries where
+    /// insufficient lookback data is available are `None`.
+    ///
+    /// The default implementation calls `compute()` per bar, which is
+    /// correct but may be slow for O(n) indicators. Implementations may
+    /// override this with an optimized incremental version.
+    fn compute_series(&self, values: &[f64]) -> Vec<Option<f64>> {
+        (0..values.len()).map(|i| self.compute(values, i)).collect()
+    }
 }
 
 // ── Built-in indicators ──────────────────────────────────────────────────
@@ -74,8 +86,8 @@ impl Indicator for Ema {
         let start = index + 1 - self.period;
         let mut ema: f64 = closes[start..=index].iter().sum::<f64>() / self.period as f64;
         // Then apply EMA recurrence from start+1..=index.
-        for i in (start + 1)..=index {
-            ema = closes[i] * k + ema * (1.0 - k);
+        for val in closes.iter().take(index + 1).skip(start + 1) {
+            ema = *val * k + ema * (1.0 - k);
         }
         Some(ema)
     }
@@ -103,7 +115,7 @@ impl Rsi {
 
 impl Indicator for Rsi {
     fn compute(&self, closes: &[f64], index: usize) -> Option<f64> {
-        if index + 1 <= self.period || closes.len() <= index {
+        if index < self.period || closes.len() <= index {
             return None;
         }
         let start = index + 1 - self.period;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use tokio::sync::Mutex;
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 use hermes_vibe::MarketDataProvider;
@@ -13,11 +14,15 @@ use crate::backends::vibe::RunCardStore;
 
 pub struct RunBacktestHandler {
     store: Arc<dyn RunCardStore>,
+    strategy_registry: Arc<Mutex<hermes_strategies::StrategyRegistry>>,
 }
 
 impl RunBacktestHandler {
-    pub fn new(store: Arc<dyn RunCardStore>) -> Self {
-        Self { store }
+    pub fn new(
+        store: Arc<dyn RunCardStore>,
+        strategy_registry: Arc<Mutex<hermes_strategies::StrategyRegistry>>,
+    ) -> Self {
+        Self { store, strategy_registry }
     }
 }
 
@@ -62,9 +67,33 @@ impl ToolHandler for RunBacktestHandler {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to fetch market data: {e}")))?;
 
-        // Run backtest
-        let card = hermes_vibe::BacktestEngine::run(&data, strategy, &strategy_params)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Backtest failed: {e}")))?;
+        // Run backtest — try declarative strategy first, then fallback to hardcoded.
+        let strategy_name = strategy; // save before we shadow it
+        let card = {
+            let reg = self.strategy_registry.lock().await;
+            if let Some(strategy) = reg.get(strategy_name) {
+                // Declarative strategy path.
+                let decisions = strategy.run(&data).map_err(|e| {
+                    ToolError::ExecutionFailed(format!("Strategy execution failed: {e}"))
+                })?;
+                // Convert Decision → SignalKind.
+                let signals: Vec<hermes_vibe::SignalKind> = decisions
+                    .iter()
+                    .map(|d| match d.signal {
+                        hermes_strategies::Signal::Buy => hermes_vibe::SignalKind::Buy,
+                        hermes_strategies::Signal::Sell => hermes_vibe::SignalKind::Sell,
+                        hermes_strategies::Signal::Hold => hermes_vibe::SignalKind::Hold,
+                    })
+                    .collect();
+                drop(reg);
+                hermes_vibe::BacktestEngine::run_from_signals(&data, strategy_name, &strategy_params, &signals)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Backtest failed: {e}")))?
+            } else {
+                // Fallback to hardcoded strategies.
+                hermes_vibe::BacktestEngine::run(&data, strategy_name, &strategy_params)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Backtest failed: {e}")))?
+            }
+        };
 
         // Attach persistence metadata and save to disk.
         let now = chrono::Utc::now();
@@ -91,15 +120,14 @@ impl ToolHandler for RunBacktestHandler {
             "strategy".into(),
             json!({
                 "type": "string",
-                "description": "Strategy template name. Use list_strategies to see all available strategies.",
-                "enum": ["sma_cross", "rsi_revert"]
+                "description": "Strategy name. Use list_strategies to see all available strategies (built-in + user-created)."
             }),
         );
         props.insert(
             "params".into(),
             json!({
                 "type": "object",
-                "description": "Strategy parameters. sma_cross: {short_window, long_window}. rsi_revert: {rsi_period, oversold, overbought}",
+                "description": "Strategy parameters. Use list_strategies to see default params per strategy.",
                 "properties": {
                     "short_window": {"type": "integer", "description": "Short SMA window (sma_cross, default: 20)"},
                     "long_window": {"type": "integer", "description": "Long SMA window (sma_cross, default: 50)"},

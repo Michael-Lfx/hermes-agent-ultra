@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use hermes_trading::types::OhlcvData;
+use hermes_vibe::types::OhlcvData;
 
 use crate::dsl::{DeclarativeStrategyDef, IndicatorDef, RuleExpr, RuleOperand};
 use crate::error::StrategyError;
@@ -78,14 +78,11 @@ impl Strategy for DeclarativeStrategy {
                 closes.clone()
             } else {
                 // Use the output of a previously computed indicator.
-                // Fix 10: Log warning if source is not found instead of silently falling back.
+                // Replace None with 0.0 for computation purposes.
                 series_map
                     .get(source)
                     .map(|s| s.iter().map(|v| v.unwrap_or(0.0)).collect())
-                    .unwrap_or_else(|| {
-                        tracing::warn!(indicator = %id, source = %source, "Chained source not found, falling back to close prices");
-                        closes.clone()
-                    })
+                    .unwrap_or_else(|| closes.clone())
             };
             let series = indicator.compute_series(&input);
             series_map.insert(id.clone(), series);
@@ -94,8 +91,12 @@ impl Strategy for DeclarativeStrategy {
         // 2. Evaluate rules per bar.
         let mut decisions = Vec::with_capacity(n);
         for i in 0..n {
-            let (buy_signal, sell_signal) =
-                evaluate_rules_at_bar(i, &self.buy_rule, &self.sell_rule, &series_map);
+            let (buy_signal, sell_signal) = evaluate_rules_at_bar(
+                i,
+                &self.buy_rule,
+                &self.sell_rule,
+                &series_map,
+            );
 
             let signal = if buy_signal {
                 Signal::Buy
@@ -141,13 +142,6 @@ fn instantiate_indicator(def: &IndicatorDef) -> Result<Box<dyn Indicator>, Strat
                         def.id
                     ))
                 })? as usize;
-            // Fix 7: Validate period > 0 to prevent division by zero.
-            if period == 0 {
-                return Err(StrategyError::InvalidParams(format!(
-                    "SMA indicator '{}' period must be > 0",
-                    def.id
-                )));
-            }
             Ok(Box::new(Sma::new(period)))
         }
         "ema" => {
@@ -161,13 +155,6 @@ fn instantiate_indicator(def: &IndicatorDef) -> Result<Box<dyn Indicator>, Strat
                         def.id
                     ))
                 })? as usize;
-            // Fix 7: Validate period > 0.
-            if period == 0 {
-                return Err(StrategyError::InvalidParams(format!(
-                    "EMA indicator '{}' period must be > 0",
-                    def.id
-                )));
-            }
             Ok(Box::new(Ema::new(period)))
         }
         "rsi" => {
@@ -181,13 +168,6 @@ fn instantiate_indicator(def: &IndicatorDef) -> Result<Box<dyn Indicator>, Strat
                         def.id
                     ))
                 })? as usize;
-            // Fix 7: Validate period > 0.
-            if period == 0 {
-                return Err(StrategyError::InvalidParams(format!(
-                    "RSI indicator '{}' period must be > 0",
-                    def.id
-                )));
-            }
             Ok(Box::new(Rsi::new(period)))
         }
         "macd" => {
@@ -263,13 +243,9 @@ fn evaluate_rule_at_bar(
 ) -> bool {
     match rule {
         RuleExpr::CrossesAbove { left, right } => {
-            // Fix 3: Require bar_index > 0 for cross detection (need previous bar).
-            if bar_index == 0 {
-                return false;
-            }
-            let prev = get_value(left, bar_index - 1, series_map);
+            let prev = get_value(left, bar_index.saturating_sub(1), series_map);
             let cur = get_value(left, bar_index, series_map);
-            let prev_right = get_operand_value(right, bar_index - 1, series_map);
+            let prev_right = get_operand_value(right, bar_index.saturating_sub(1), series_map);
             let cur_right = get_operand_value(right, bar_index, series_map);
             match (prev, cur, prev_right, cur_right) {
                 (Some(p), Some(c), Some(pr), Some(cr)) => p <= pr && c > cr,
@@ -277,13 +253,9 @@ fn evaluate_rule_at_bar(
             }
         }
         RuleExpr::CrossesBelow { left, right } => {
-            // Fix 3: Require bar_index > 0 for cross detection (need previous bar).
-            if bar_index == 0 {
-                return false;
-            }
-            let prev = get_value(left, bar_index - 1, series_map);
+            let prev = get_value(left, bar_index.saturating_sub(1), series_map);
             let cur = get_value(left, bar_index, series_map);
-            let prev_right = get_operand_value(right, bar_index - 1, series_map);
+            let prev_right = get_operand_value(right, bar_index.saturating_sub(1), series_map);
             let cur_right = get_operand_value(right, bar_index, series_map);
             match (prev, cur, prev_right, cur_right) {
                 (Some(p), Some(c), Some(pr), Some(cr)) => p >= pr && c < cr,
@@ -315,9 +287,7 @@ fn get_value(
     bar_index: usize,
     series_map: &HashMap<String, Vec<Option<f64>>>,
 ) -> Option<f64> {
-    series_map
-        .get(id)
-        .and_then(|s| s.get(bar_index).copied().flatten())
+    series_map.get(id).and_then(|s| s.get(bar_index).copied().flatten())
 }
 
 /// Get the value of a rule operand (indicator or literal) at a bar index.
@@ -336,8 +306,8 @@ fn get_operand_value(
 mod tests {
     use super::*;
     use crate::dsl::{IndicatorDef, RulesDef};
+    use hermes_vibe::types::{Interval, OhlcvRow};
     use chrono::NaiveDate;
-    use hermes_trading::types::{Interval, OhlcvRow};
 
     fn mock_ohlcv(days: usize) -> OhlcvData {
         let base_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -358,7 +328,6 @@ mod tests {
             symbol: "MOCK-USD".to_string(),
             interval: Interval::Daily,
             rows,
-            partial: false,
         }
     }
 
@@ -396,10 +365,7 @@ mod tests {
         let decisions = strategy.run(&data).unwrap();
         assert_eq!(decisions.len(), 120);
         let buy_count = decisions.iter().filter(|d| d.signal == Signal::Buy).count();
-        let sell_count = decisions
-            .iter()
-            .filter(|d| d.signal == Signal::Sell)
-            .count();
+        let sell_count = decisions.iter().filter(|d| d.signal == Signal::Sell).count();
         assert!(buy_count > 0, "Expected at least 1 buy signal");
         assert!(sell_count > 0, "Expected at least 1 sell signal");
     }
