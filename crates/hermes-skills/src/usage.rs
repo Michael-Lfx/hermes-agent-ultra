@@ -612,6 +612,7 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
 <<<<<<< HEAD
     "trading-cron",
     "trading-research",
+    "vibe-research",
     "webhook-subscriptions",
     "weights-and-biases",
     "writing-plans",
