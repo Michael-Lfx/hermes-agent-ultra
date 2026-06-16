@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
-use crate::backends::vibe::RunCardStore;
+use crate::backends::trading::RunCardStore;
 
 pub struct GetBacktestReportHandler {
     store: Arc<dyn RunCardStore>,

@@ -1,5 +1,5 @@
 ---
-name: vibe-research
+name: trading-research
 description: Quantitative research with real market data and backtesting. No API key required.
 version: 0.1.0
 author: Hermes Agent
@@ -12,7 +12,7 @@ metadata:
     related_skills: [stocks]
 ---
 
-# Vibe Research Skill
+# Trading Research Skill
 
 Pure Rust quantitative research — fetch real OHLCV market data and run template
 backtests without any API key or Python dependency.

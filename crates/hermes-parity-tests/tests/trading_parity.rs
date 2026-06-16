@@ -1,7 +1,7 @@
-//! Vibe Research parity tests.
+//! Trading parity tests.
 //!
-//! Loads golden fixtures from `crates/hermes-parity-tests/fixtures/vibe_*/`
-//! and validates Rust `hermes-vibe` output against the expected shape.
+//! Loads golden fixtures from `crates/hermes-parity-tests/fixtures/trading_*/`
+//! and validates Rust `hermes-trading` output against the expected shape.
 //!
 //! All network calls are replaced by `MockProvider`, so these tests are
 //! deterministic and do not require API keys.
@@ -13,7 +13,9 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 use serde_json::Value;
 
-use hermes_vibe::{AutoRouter, BacktestEngine, Interval, MarketDataProvider, MockProvider, OhlcvRequest};
+use hermes_trading::{
+    AutoRouter, BacktestEngine, Interval, MarketDataProvider, MockProvider, OhlcvRequest,
+};
 
 /// A single fixture file containing one or more cases.
 #[derive(Debug, serde::Deserialize)]
@@ -53,7 +55,7 @@ fn load_fixtures() -> Vec<(PathBuf, FixtureFile)> {
             continue;
         }
         let name = group_path.file_name().unwrap().to_string_lossy();
-        if !name.starts_with("vibe_") {
+        if !name.starts_with("trading_") {
             continue;
         }
         for file_entry in fs::read_dir(&group_path).expect("read fixture group") {
@@ -82,7 +84,11 @@ fn request_from_input(input: &Value) -> OhlcvRequest {
         .and_then(|v| v.as_str())
         .map(parse_date)
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
-    let start_days_back = if input.get("strategy").is_some() { 180 } else { 30 };
+    let start_days_back = if input.get("strategy").is_some() {
+        180
+    } else {
+        30
+    };
     let start_date = input
         .get("start_date")
         .and_then(|v| v.as_str())
@@ -132,8 +138,7 @@ async fn run_case(case: &FixtureCase) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .expect("strategy required");
             let params = case.input.get("params").cloned().unwrap_or_default();
-            let card = BacktestEngine::run(&data, strategy, &params)
-                .map_err(|e| e.to_string())?;
+            let card = BacktestEngine::run(&data, strategy, &params).map_err(|e| e.to_string())?;
             serde_json::to_value(&card).map_err(|e| e.to_string())
         }
         other => Err(format!("unknown op: {other}")),
@@ -146,10 +151,7 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
             .get("symbol")
             .and_then(|v| v.as_str())
             .unwrap_or("<missing>");
-        assert_eq!(
-            actual_symbol, symbol,
-            "[{case_id}] symbol mismatch"
-        );
+        assert_eq!(actual_symbol, symbol, "[{case_id}] symbol mismatch");
     }
 
     if let Some(interval) = expected.get("has_interval").and_then(|v| v.as_str()) {
@@ -157,14 +159,14 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
             .get("interval")
             .and_then(|v| v.as_str())
             .unwrap_or("<missing>");
-        assert_eq!(
-            actual_interval, interval,
-            "[{case_id}] interval mismatch"
-        );
+        assert_eq!(actual_interval, interval, "[{case_id}] interval mismatch");
     }
 
     if let Some(min_rows) = expected.get("min_rows").and_then(|v| v.as_u64()) {
-        let rows = actual.get("rows").and_then(|v| v.as_array()).expect("rows array");
+        let rows = actual
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .expect("rows array");
         assert!(
             rows.len() >= min_rows as usize,
             "[{case_id}] expected at least {min_rows} rows, got {}",
@@ -177,7 +179,10 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
             .iter()
             .map(|v| v.as_str().expect("column name string").to_string())
             .collect();
-        let rows = actual.get("rows").and_then(|v| v.as_array()).expect("rows array");
+        let rows = actual
+            .get("rows")
+            .and_then(|v| v.as_array())
+            .expect("rows array");
         let first = rows.first().expect("at least one row");
         let first_obj = first.as_object().expect("row object");
         for col in &cols {
@@ -204,10 +209,7 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
             .get("strategy")
             .and_then(|v| v.as_str())
             .unwrap_or("<missing>");
-        assert_eq!(
-            actual_strategy, strategy,
-            "[{case_id}] strategy mismatch"
-        );
+        assert_eq!(actual_strategy, strategy, "[{case_id}] strategy mismatch");
     }
 
     if let Some(min_trades) = expected.get("trade_count_gte").and_then(|v| v.as_u64()) {
@@ -234,11 +236,11 @@ fn assert_expected(case_id: &str, actual: &Value, expected: &Value) {
 }
 
 #[tokio::test]
-async fn run_all_vibe_fixtures() {
+async fn run_all_trading_fixtures() {
     let fixtures = load_fixtures();
     assert!(
         !fixtures.is_empty(),
-        "no vibe fixture files found under {:?}",
+        "no trading fixture files found under {:?}",
         fixture_dir()
     );
 
@@ -285,8 +287,8 @@ async fn run_all_vibe_fixtures() {
 
     assert!(
         ran > 0,
-        "no vibe cases were run (all skipped); fixtures loaded from {:?}",
+        "no trading cases were run (all skipped); fixtures loaded from {:?}",
         fixture_dir()
     );
-    println!("vibe parity: {ran} cases ran, {skipped} skipped");
+    println!("trading parity: {ran} cases ran, {skipped} skipped");
 }

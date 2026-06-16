@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use hermes_vibe::types::OhlcvData;
+use hermes_trading::types::OhlcvData;
 
 use crate::error::StrategyError;
 

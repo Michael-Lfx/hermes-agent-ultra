@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::error::VibeError;
+use crate::error::TradingError;
 use crate::indicators::{rsi, sma};
 use crate::types::OhlcvData;
 
@@ -119,11 +119,11 @@ impl BacktestEngine {
         data: &OhlcvData,
         strategy: &str,
         params: &serde_json::Value,
-    ) -> Result<RunCard, VibeError> {
+    ) -> Result<RunCard, TradingError> {
         match strategy {
             "sma_cross" => Self::run_sma_cross(data, params),
             "rsi_revert" => Self::run_rsi_revert(data, params),
-            _ => Err(VibeError::UnsupportedStrategy(strategy.to_string())),
+            _ => Err(TradingError::UnsupportedStrategy(strategy.to_string())),
         }
     }
 
@@ -137,9 +137,9 @@ impl BacktestEngine {
         strategy_name: &str,
         params: &serde_json::Value,
         signals: &[SignalKind],
-    ) -> Result<RunCard, VibeError> {
+    ) -> Result<RunCard, TradingError> {
         if signals.len() != data.len() {
-            return Err(VibeError::Backtest(format!(
+            return Err(TradingError::Backtest(format!(
                 "Signal length {} does not match data length {}",
                 signals.len(),
                 data.len()
@@ -148,7 +148,9 @@ impl BacktestEngine {
 
         // Fix 6: Defensive check for empty data to prevent panic on .first().unwrap().
         if data.is_empty() {
-            return Err(VibeError::Backtest("Cannot run backtest on empty data".into()));
+            return Err(TradingError::Backtest(
+                "Cannot run backtest on empty data".into(),
+            ));
         }
 
         let trades = simulate_trades_from_signals(data, signals);
@@ -182,7 +184,7 @@ impl BacktestEngine {
     fn run_sma_cross(
         data: &OhlcvData,
         params: &serde_json::Value,
-    ) -> Result<RunCard, VibeError> {
+    ) -> Result<RunCard, TradingError> {
         let short_window = params
             .get("short_window")
             .and_then(|v| v.as_u64())
@@ -193,7 +195,7 @@ impl BacktestEngine {
             .unwrap_or(50) as usize;
 
         if data.len() < long_window {
-            return Err(VibeError::Backtest(format!(
+            return Err(TradingError::Backtest(format!(
                 "Insufficient data: have {} rows, need at least {long_window}",
                 data.len()
             )));
@@ -221,7 +223,8 @@ impl BacktestEngine {
                     entry_price = Some(closes[i]);
                 }
                 // Death cross: short crosses below long
-                if ps >= pl && cs < cl
+                if ps >= pl
+                    && cs < cl
                     && let Some(ep) = entry_price.take()
                 {
                     trades.push(Trade {
@@ -300,7 +303,7 @@ impl BacktestEngine {
     fn run_rsi_revert(
         data: &OhlcvData,
         params: &serde_json::Value,
-    ) -> Result<RunCard, VibeError> {
+    ) -> Result<RunCard, TradingError> {
         let rsi_period = params
             .get("rsi_period")
             .and_then(|v| v.as_u64())
@@ -316,7 +319,7 @@ impl BacktestEngine {
 
         let min_rows = rsi_period + 2;
         if data.len() < min_rows {
-            return Err(VibeError::Backtest(format!(
+            return Err(TradingError::Backtest(format!(
                 "Insufficient data: have {} rows, need at least {min_rows}",
                 data.len()
             )));
@@ -337,7 +340,8 @@ impl BacktestEngine {
                     entry_price = Some(closes[i]);
                 }
                 // Sell: RSI crosses below overbought from above.
-                if pr >= overbought && cr < overbought
+                if pr >= overbought
+                    && cr < overbought
                     && let Some(ep) = entry_price.take()
                 {
                     trades.push(Trade {
@@ -428,10 +432,7 @@ fn compute_sharpe(equity: &[f64]) -> f64 {
     if equity.len() < 2 {
         return 0.0;
     }
-    let returns: Vec<f64> = equity
-        .windows(2)
-        .map(|w| (w[1] - w[0]) / w[0])
-        .collect();
+    let returns: Vec<f64> = equity.windows(2).map(|w| (w[1] - w[0]) / w[0]).collect();
     let n = returns.len() as f64;
     let mean = returns.iter().sum::<f64>() / n;
     let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
@@ -508,7 +509,13 @@ fn compute_metrics(trades: &[Trade]) -> (f64, f64, f64, usize, f64) {
         0.0
     };
 
-    (total_return_pct, max_drawdown_pct, sharpe_ratio, trade_count, win_rate_pct)
+    (
+        total_return_pct,
+        max_drawdown_pct,
+        sharpe_ratio,
+        trade_count,
+        win_rate_pct,
+    )
 }
 
 #[cfg(test)]
@@ -553,10 +560,7 @@ mod tests {
             "Expected at least 1 trade, got {}",
             card.trade_count
         );
-        assert!(
-            card.max_drawdown_pct <= 0.0,
-            "Max drawdown should be <= 0"
-        );
+        assert!(card.max_drawdown_pct <= 0.0, "Max drawdown should be <= 0");
         assert!(
             card.win_rate_pct >= 0.0 && card.win_rate_pct <= 100.0,
             "Win rate out of range: {}",
@@ -574,7 +578,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
-            VibeError::UnsupportedStrategy(_)
+            TradingError::UnsupportedStrategy(_)
         ));
     }
 
@@ -584,7 +588,7 @@ mod tests {
         let params = serde_json::json!({"short_window": 5, "long_window": 10});
         let result = BacktestEngine::run(&data, "sma_cross", &params);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VibeError::Backtest(_)));
+        assert!(matches!(result.unwrap_err(), TradingError::Backtest(_)));
     }
 
     #[test]
@@ -704,7 +708,11 @@ mod tests {
         let card = BacktestEngine::run(&data, "rsi_revert", &params).unwrap();
         assert_eq!(card.strategy, "rsi_revert");
         assert_eq!(card.symbol, "MOCK-USD");
-        assert!(card.trade_count >= 1, "Expected at least 1 trade, got {}", card.trade_count);
+        assert!(
+            card.trade_count >= 1,
+            "Expected at least 1 trade, got {}",
+            card.trade_count
+        );
         assert!(card.max_drawdown_pct <= 0.0, "Max drawdown should be <= 0");
         assert!(card.win_rate_pct >= 0.0 && card.win_rate_pct <= 100.0);
     }
@@ -715,7 +723,7 @@ mod tests {
         let params = serde_json::json!({"rsi_period": 14});
         let result = BacktestEngine::run(&data, "rsi_revert", &params);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VibeError::Backtest(_)));
+        assert!(matches!(result.unwrap_err(), TradingError::Backtest(_)));
     }
 
     #[test]

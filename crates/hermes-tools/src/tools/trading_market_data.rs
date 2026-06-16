@@ -5,7 +5,7 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
-use hermes_vibe::MarketDataProvider;
+use hermes_trading::MarketDataProvider;
 
 #[derive(Default)]
 pub struct GetMarketDataHandler;
@@ -37,18 +37,18 @@ impl ToolHandler for GetMarketDataHandler {
             .unwrap_or_else(|| end_date - chrono::Duration::days(30));
 
         let interval = match params.get("interval").and_then(|v| v.as_str()) {
-            Some("weekly") => hermes_vibe::Interval::Weekly,
-            _ => hermes_vibe::Interval::Daily,
+            Some("weekly") => hermes_trading::Interval::Weekly,
+            _ => hermes_trading::Interval::Daily,
         };
 
-        let req = hermes_vibe::OhlcvRequest {
+        let req = hermes_trading::OhlcvRequest {
             symbol: symbol.to_string(),
             start: start_date,
             end: end_date,
             interval,
         };
 
-        let router = hermes_vibe::AutoRouter::new();
+        let router = hermes_trading::AutoRouter::new();
         let data = router
             .fetch_ohlcv(&req)
             .await

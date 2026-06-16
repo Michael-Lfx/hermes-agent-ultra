@@ -1,4 +1,4 @@
-//! Vibe Research: 0py market data and backtesting library for Hermes Agent.
+//! Trading: 0py market data and backtesting library for Hermes Agent.
 //!
 //! This crate provides:
 //! - `MarketDataProvider` trait and implementations for fetching OHLCV data
@@ -14,10 +14,10 @@ pub mod providers;
 pub mod types;
 
 pub use backtest::{BacktestEngine, Period, RunCard, SignalKind, StrategyInfo, StrategyRegistry};
-pub use error::VibeError;
+pub use error::TradingError;
 pub use indicators::{rsi, sma};
 pub use provider::MarketDataProvider;
-pub use providers::{AutoRouter, BinanceProvider, EastmoneyProvider};
 #[cfg(any(test, feature = "test-mock"))]
 pub use providers::MockProvider;
+pub use providers::{AutoRouter, BinanceProvider, EastmoneyProvider};
 pub use types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};

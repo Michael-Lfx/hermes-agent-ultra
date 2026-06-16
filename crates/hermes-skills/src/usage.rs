@@ -606,7 +606,7 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "teams-meeting-pipeline",
     "test-driven-development",
     "touchdesigner-mcp",
-    "vibe-research",
+    "trading-research",
     "webhook-subscriptions",
     "weights-and-biases",
     "writing-plans",
@@ -927,7 +927,10 @@ mod tests {
         write_skill(skills, "yuanbao", None);
         // Restore refuses to shadow an existing skill (protected or not).
         let (ok, msg) = store.restore_skill("yuanbao").unwrap();
-        assert!(!ok, "restore should refuse because yuanbao dir already exists");
+        assert!(
+            !ok,
+            "restore should refuse because yuanbao dir already exists"
+        );
         assert!(msg.contains("shadow") || msg.contains("shadow") || msg.contains("Refusing"));
         // Archiving a protected skill is allowed — only curator operations
         // are blocked on protected skills.

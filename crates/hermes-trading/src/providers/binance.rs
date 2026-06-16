@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use crate::error::VibeError;
+use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
 use crate::types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};
 
@@ -82,7 +82,7 @@ struct BinanceKline(
 
 #[async_trait]
 impl MarketDataProvider for BinanceProvider {
-    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, VibeError> {
+    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
         let symbol = Self::to_binance_symbol(&req.symbol);
         let interval = Self::to_binance_interval(req.interval);
         let start_ms = Self::date_to_ms(req.start);
@@ -114,7 +114,7 @@ impl MarketDataProvider for BinanceProvider {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             warn!(%status, body = %body, "Binance API error");
-            return Err(VibeError::InvalidResponse(format!(
+            return Err(TradingError::InvalidResponse(format!(
                 "Binance returned HTTP {status}: {body}"
             )));
         }
@@ -124,8 +124,7 @@ impl MarketDataProvider for BinanceProvider {
         let rows: Vec<OhlcvRow> = klines
             .into_iter()
             .filter_map(|k| {
-                let date = chrono::DateTime::from_timestamp_millis(k.0)?
-                    .date_naive();
+                let date = chrono::DateTime::from_timestamp_millis(k.0)?.date_naive();
                 let parse = |s: &str| -> Option<f64> { s.parse().ok() };
                 Some(OhlcvRow {
                     date,
@@ -139,7 +138,7 @@ impl MarketDataProvider for BinanceProvider {
             .collect();
 
         if rows.is_empty() {
-            return Err(VibeError::NoData);
+            return Err(TradingError::NoData);
         }
 
         debug!(rows = rows.len(), "Binance klines parsed");

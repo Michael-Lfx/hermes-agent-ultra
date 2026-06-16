@@ -1,10 +1,10 @@
-//! Error types for the hermes-vibe crate.
+//! Error types for the hermes-trading crate.
 
 use thiserror::Error;
 
-/// Errors that can occur in the Vibe Research library.
+/// Errors that can occur in the trading library.
 #[derive(Debug, Error)]
-pub enum VibeError {
+pub enum TradingError {
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 

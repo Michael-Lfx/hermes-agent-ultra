@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use hermes_vibe::types::OhlcvData;
+use hermes_trading::types::OhlcvData;
 
 use crate::dsl::{DeclarativeStrategyDef, IndicatorDef, RuleExpr, RuleOperand};
 use crate::error::StrategyError;
@@ -94,12 +94,8 @@ impl Strategy for DeclarativeStrategy {
         // 2. Evaluate rules per bar.
         let mut decisions = Vec::with_capacity(n);
         for i in 0..n {
-            let (buy_signal, sell_signal) = evaluate_rules_at_bar(
-                i,
-                &self.buy_rule,
-                &self.sell_rule,
-                &series_map,
-            );
+            let (buy_signal, sell_signal) =
+                evaluate_rules_at_bar(i, &self.buy_rule, &self.sell_rule, &series_map);
 
             let signal = if buy_signal {
                 Signal::Buy
@@ -268,7 +264,9 @@ fn evaluate_rule_at_bar(
     match rule {
         RuleExpr::CrossesAbove { left, right } => {
             // Fix 3: Require bar_index > 0 for cross detection (need previous bar).
-            if bar_index == 0 { return false; }
+            if bar_index == 0 {
+                return false;
+            }
             let prev = get_value(left, bar_index - 1, series_map);
             let cur = get_value(left, bar_index, series_map);
             let prev_right = get_operand_value(right, bar_index - 1, series_map);
@@ -280,7 +278,9 @@ fn evaluate_rule_at_bar(
         }
         RuleExpr::CrossesBelow { left, right } => {
             // Fix 3: Require bar_index > 0 for cross detection (need previous bar).
-            if bar_index == 0 { return false; }
+            if bar_index == 0 {
+                return false;
+            }
             let prev = get_value(left, bar_index - 1, series_map);
             let cur = get_value(left, bar_index, series_map);
             let prev_right = get_operand_value(right, bar_index - 1, series_map);
@@ -315,7 +315,9 @@ fn get_value(
     bar_index: usize,
     series_map: &HashMap<String, Vec<Option<f64>>>,
 ) -> Option<f64> {
-    series_map.get(id).and_then(|s| s.get(bar_index).copied().flatten())
+    series_map
+        .get(id)
+        .and_then(|s| s.get(bar_index).copied().flatten())
 }
 
 /// Get the value of a rule operand (indicator or literal) at a bar index.
@@ -334,8 +336,8 @@ fn get_operand_value(
 mod tests {
     use super::*;
     use crate::dsl::{IndicatorDef, RulesDef};
-    use hermes_vibe::types::{Interval, OhlcvRow};
     use chrono::NaiveDate;
+    use hermes_trading::types::{Interval, OhlcvRow};
 
     fn mock_ohlcv(days: usize) -> OhlcvData {
         let base_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
@@ -393,7 +395,10 @@ mod tests {
         let decisions = strategy.run(&data).unwrap();
         assert_eq!(decisions.len(), 120);
         let buy_count = decisions.iter().filter(|d| d.signal == Signal::Buy).count();
-        let sell_count = decisions.iter().filter(|d| d.signal == Signal::Sell).count();
+        let sell_count = decisions
+            .iter()
+            .filter(|d| d.signal == Signal::Sell)
+            .count();
         assert!(buy_count > 0, "Expected at least 1 buy signal");
         assert!(sell_count > 0, "Expected at least 1 sell signal");
     }

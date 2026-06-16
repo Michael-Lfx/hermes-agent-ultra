@@ -1,6 +1,6 @@
-//! RunCard persistence backend for vibe research.
+//! RunCard persistence backend for trading research.
 //!
-//! Stores backtest run cards to `{HERMES_HOME}/vibe/runs/{id}/run_card.json`
+//! Stores backtest run cards to `{HERMES_HOME}/trading/runs/{id}/run_card.json`
 //! and loads them back by ID.
 
 use std::path::PathBuf;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 use hermes_core::ToolError;
-use hermes_vibe::RunCard;
+use hermes_trading::RunCard;
 
 /// Trait for RunCard persistence operations.
 #[async_trait]
@@ -22,7 +22,7 @@ pub trait RunCardStore: Send + Sync {
 
 /// File-based RunCard store.
 ///
-/// Root directory: `{HERMES_HOME}/vibe/runs/`
+/// Root directory: `{HERMES_HOME}/trading/runs/`
 /// Each RunCard is stored at: `{root}/{id}/run_card.json`
 #[derive(Debug, Clone)]
 pub struct FileRunCardStore {
@@ -37,7 +37,7 @@ impl FileRunCardStore {
 
     /// Create a store using the default path under HERMES_HOME.
     pub fn default_path() -> Self {
-        let dir = hermes_config::hermes_home().join("vibe").join("runs");
+        let dir = hermes_config::hermes_home().join("trading").join("runs");
         Self::new(dir)
     }
 
@@ -68,13 +68,13 @@ impl RunCardStore for FileRunCardStore {
         let tmp = dir.join("run_card.json.tmp");
         let path = dir.join("run_card.json");
 
-        tokio::fs::write(&tmp, &json).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to write run_card: {e}"))
-        })?;
+        tokio::fs::write(&tmp, &json)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write run_card: {e}")))?;
 
-        tokio::fs::rename(&tmp, &path).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to rename run_card: {e}"))
-        })?;
+        tokio::fs::rename(&tmp, &path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to rename run_card: {e}")))?;
 
         tracing::info!(
             id = %card.id,
@@ -96,20 +96,19 @@ impl RunCardStore for FileRunCardStore {
             )));
         }
 
-        let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to read run_card: {e}"))
-        })?;
+        let content = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read run_card: {e}")))?;
 
-        serde_json::from_str(&content).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to parse run_card: {e}"))
-        })
+        serde_json::from_str(&content)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse run_card: {e}")))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hermes_vibe::{Period, RunCard};
+    use hermes_trading::{Period, RunCard};
 
     fn sample_card() -> RunCard {
         RunCard {

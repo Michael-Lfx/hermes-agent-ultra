@@ -10,7 +10,7 @@ description = "Strategy engine and technical indicators for Vibe Research"
 default = []
 
 [dependencies]
-hermes-vibe = { workspace = true }
+hermes-trading = { workspace = true }
 hermes-config = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

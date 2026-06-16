@@ -14,11 +14,10 @@ pub enum StrategyError {
     #[error("Strategy execution failed: {0}")]
     ExecutionFailed(String),
 
-    #[error("Vibe error: {0}")]
-    Vibe(#[from] hermes_vibe::VibeError),
+    #[error("Trading error: {0}")]
+    Trading(#[from] hermes_trading::TradingError),
 
     // --- Declarative strategy errors ---
-
     #[error("Strategy definition error: {0}")]
     DefinitionError(String),
 

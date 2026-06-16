@@ -1,7 +1,7 @@
 //! Runtime strategy registry.
 //!
 //! Manages built-in and user-defined strategies. On construction, it loads
-//! built-in strategies, then scans `$HERMES_HOME/vibe/strategies/` for
+//! built-in strategies, then scans `$HERMES_HOME/trading/strategies/` for
 //! user-defined JSON files.
 
 use std::collections::HashMap;
@@ -172,7 +172,11 @@ impl StrategyRegistry {
     /// Returns `true` if the strategy was found and removed.
     pub fn unregister(&mut self, name: &str) -> bool {
         // Fix 5: Check info first to prevent bypassing builtin protection.
-        if self.info.get(name).is_some_and(|m| m.info.author == "builtin") {
+        if self
+            .info
+            .get(name)
+            .is_some_and(|m| m.info.author == "builtin")
+        {
             return false;
         }
         let removed_s = self.strategies.remove(name).is_some();

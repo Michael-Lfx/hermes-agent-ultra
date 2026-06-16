@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use tracing::debug;
 
-use crate::error::VibeError;
+use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
 use crate::types::{OhlcvData, OhlcvRequest};
 
@@ -45,7 +45,7 @@ impl AutoRouter {
     }
 
     /// Determine which provider to use based on the symbol format.
-    fn select<'a>(&'a self, symbol: &str) -> Result<&'a dyn MarketDataProvider, VibeError> {
+    fn select<'a>(&'a self, symbol: &str) -> Result<&'a dyn MarketDataProvider, TradingError> {
         let upper = symbol.to_uppercase();
         if upper.ends_with(".SZ") || upper.ends_with(".SH") {
             debug!(symbol = %symbol, provider = "eastmoney", "AutoRouter selected");
@@ -54,7 +54,7 @@ impl AutoRouter {
             debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
             Ok(&self.binance)
         } else {
-            Err(VibeError::SymbolNotFound(format!(
+            Err(TradingError::SymbolNotFound(format!(
                 "Cannot determine provider for symbol '{symbol}'. \
                  Use 'XXX-YYY' for crypto (Binance) or 'XXXXXX.SZ/.SH' for A-shares (Eastmoney)."
             )))
@@ -70,7 +70,7 @@ impl Default for AutoRouter {
 
 #[async_trait]
 impl MarketDataProvider for AutoRouter {
-    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, VibeError> {
+    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
         let provider = self.select(&req.symbol)?;
         provider.fetch_ohlcv(req).await
     }

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "fixture_group": "vibe_backtest",
-  "python_module": "N/A (Rust-native hermes-vibe)",
+  "fixture_group": "trading_backtest",
+  "python_module": "N/A (Rust-native hermes-trading)",
   "cases": [
     {
       "id": "btc_sma_cross_20_50",

@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use chrono::{Duration, NaiveDate};
 
-use crate::error::VibeError;
+use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
 use crate::types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};
 
@@ -25,7 +25,12 @@ impl MockProvider {
     }
 
     /// Generate deterministic rows for the requested date range.
-    fn generate_rows(symbol: &str, start: NaiveDate, end: NaiveDate, _interval: Interval) -> Vec<OhlcvRow> {
+    fn generate_rows(
+        symbol: &str,
+        start: NaiveDate,
+        end: NaiveDate,
+        _interval: Interval,
+    ) -> Vec<OhlcvRow> {
         let base_price = match symbol {
             "BTC-USDT" => 50_000.0,
             "ETH-BTC" => 0.05,
@@ -40,7 +45,8 @@ impl MockProvider {
             let t = i as f64;
             // Smooth sine overlay on a slight upward drift produces both
             // uptrends and downtrends, triggering golden/death crosses.
-            let close = base_price + 0.1 * t + base_price * 0.1 * (t * std::f64::consts::PI / 30.0).sin();
+            let close =
+                base_price + 0.1 * t + base_price * 0.1 * (t * std::f64::consts::PI / 30.0).sin();
             let open = close * (1.0 + 0.005 * ((i + 1) as f64 * 0.3).sin());
             let high = close.max(open) * 1.02;
             let low = close.min(open) * 0.98;
@@ -65,9 +71,9 @@ impl MockProvider {
 
 #[async_trait]
 impl MarketDataProvider for MockProvider {
-    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, VibeError> {
+    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
         if req.symbol == "INVALID_XYZ" {
-            return Err(VibeError::SymbolNotFound(format!(
+            return Err(TradingError::SymbolNotFound(format!(
                 "Symbol '{}' not found",
                 req.symbol
             )));
@@ -118,6 +124,9 @@ mod tests {
         let result = provider.fetch_ohlcv(&req).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not found"), "expected 'not found' in error: {err}");
+        assert!(
+            err.contains("not found"),
+            "expected 'not found' in error: {err}"
+        );
     }
 }

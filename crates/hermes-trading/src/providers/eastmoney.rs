@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use crate::error::VibeError;
+use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
 use crate::types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};
 
@@ -42,10 +42,10 @@ impl EastmoneyProvider {
     ///
     /// - `"000001.SZ"` → `"0.000001"` (深市 / Shenzhen = market 0)
     /// - `"600519.SH"` → `"1.600519"` (沪市 / Shanghai = market 1)
-    fn to_secid(symbol: &str) -> Result<String, VibeError> {
+    fn to_secid(symbol: &str) -> Result<String, TradingError> {
         let parts: Vec<&str> = symbol.split('.').collect();
         if parts.len() != 2 {
-            return Err(VibeError::SymbolNotFound(format!(
+            return Err(TradingError::SymbolNotFound(format!(
                 "Invalid A-share symbol format (expected XXXXXX.SZ or XXXXXX.SH): {symbol}"
             )));
         }
@@ -54,7 +54,7 @@ impl EastmoneyProvider {
             "SZ" => "0",
             "SH" => "1",
             other => {
-                return Err(VibeError::SymbolNotFound(format!(
+                return Err(TradingError::SymbolNotFound(format!(
                     "Unknown market suffix '.{other}' (expected .SZ or .SH)"
                 )));
             }
@@ -115,7 +115,7 @@ fn parse_kline(line: &str) -> Option<OhlcvRow> {
 
 #[async_trait]
 impl MarketDataProvider for EastmoneyProvider {
-    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, VibeError> {
+    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
         let secid = Self::to_secid(&req.symbol)?;
         let klt = Self::to_klt(req.interval);
         let beg = req.start.format("%Y%m%d").to_string();
@@ -148,7 +148,7 @@ impl MarketDataProvider for EastmoneyProvider {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             warn!(%status, body = %body, "Eastmoney API error");
-            return Err(VibeError::InvalidResponse(format!(
+            return Err(TradingError::InvalidResponse(format!(
                 "Eastmoney returned HTTP {status}: {body}"
             )));
         }
@@ -156,7 +156,7 @@ impl MarketDataProvider for EastmoneyProvider {
         let parsed: EastmoneyResponse = resp.json().await?;
 
         let data = parsed.data.ok_or_else(|| {
-            VibeError::SymbolNotFound(format!(
+            TradingError::SymbolNotFound(format!(
                 "Eastmoney returned no data for symbol {}",
                 req.symbol
             ))
@@ -169,7 +169,7 @@ impl MarketDataProvider for EastmoneyProvider {
             .collect();
 
         if rows.is_empty() {
-            return Err(VibeError::NoData);
+            return Err(TradingError::NoData);
         }
 
         debug!(rows = rows.len(), "Eastmoney klines parsed");

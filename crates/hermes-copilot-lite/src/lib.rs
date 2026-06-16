@@ -1,6 +1,6 @@
 //! Copilot Lite: lightweight orchestration for Vibe Research workflows.
 //!
-//! This crate ties together `hermes-vibe`, `hermes-strategies`, and
+//! This crate ties together `hermes-trading`, `hermes-strategies`, and
 //! `hermes-market-watch` into a simple copilot interface for:
 //! - Running strategies against live or historical data
 //! - Monitoring watchlists and generating alerts

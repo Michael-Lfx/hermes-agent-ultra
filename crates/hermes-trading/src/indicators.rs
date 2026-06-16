@@ -60,8 +60,16 @@ pub fn rsi(values: &[f64], period: usize) -> Vec<Option<f64>> {
     avg_loss /= period as f64;
 
     // RSI at index `period`.
-    let rs = if avg_loss == 0.0 { 100.0 } else { avg_gain / avg_loss };
-    let rsi_val = if avg_loss == 0.0 { 100.0 } else { 100.0 - 100.0 / (1.0 + rs) };
+    let rs = if avg_loss == 0.0 {
+        100.0
+    } else {
+        avg_gain / avg_loss
+    };
+    let rsi_val = if avg_loss == 0.0 {
+        100.0
+    } else {
+        100.0 - 100.0 / (1.0 + rs)
+    };
     result.push(Some(rsi_val));
 
     // Wilder's smoothing for the remaining bars.
@@ -73,7 +81,11 @@ pub fn rsi(values: &[f64], period: usize) -> Vec<Option<f64>> {
         avg_gain = (avg_gain * (period as f64 - 1.0) + gain) / period as f64;
         avg_loss = (avg_loss * (period as f64 - 1.0) + loss) / period as f64;
 
-        let r = if avg_loss == 0.0 { 100.0 } else { 100.0 - 100.0 / (1.0 + avg_gain / avg_loss) };
+        let r = if avg_loss == 0.0 {
+            100.0
+        } else {
+            100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
+        };
         result.push(Some(r));
     }
 
@@ -146,7 +158,10 @@ mod tests {
         // After period, all gains → RSI should be 100.
         for v in &result[14..] {
             let r = v.unwrap();
-            assert!((r - 100.0).abs() < 0.01, "Expected ~100 for all-up, got {r}");
+            assert!(
+                (r - 100.0).abs() < 0.01,
+                "Expected ~100 for all-up, got {r}"
+            );
         }
     }
 

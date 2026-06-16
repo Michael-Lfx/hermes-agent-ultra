@@ -60,21 +60,18 @@ impl ToolHandler for CreateStrategyHandler {
             description: description.to_string(),
             version: 1,
             author: "user".to_string(),
-            indicators: serde_json::from_value(indicators.clone()).map_err(|e| {
-                ToolError::InvalidParams(format!("Invalid indicators format: {e}"))
-            })?,
-            rules: serde_json::from_value(rules.clone()).map_err(|e| {
-                ToolError::InvalidParams(format!("Invalid rules format: {e}"))
-            })?,
+            indicators: serde_json::from_value(indicators.clone())
+                .map_err(|e| ToolError::InvalidParams(format!("Invalid indicators format: {e}")))?,
+            rules: serde_json::from_value(rules.clone())
+                .map_err(|e| ToolError::InvalidParams(format!("Invalid rules format: {e}")))?,
             default_params,
             position_sizing: position_sizing.to_string(),
             market_rules: vec![],
         };
 
         // Validate.
-        def.validate().map_err(|e| {
-            ToolError::InvalidParams(format!("Strategy validation failed: {e}"))
-        })?;
+        def.validate()
+            .map_err(|e| ToolError::InvalidParams(format!("Strategy validation failed: {e}")))?;
 
         // Check name uniqueness.
         {
@@ -87,30 +84,29 @@ impl ToolHandler for CreateStrategyHandler {
         }
 
         // Serialize and write to disk (atomic write).
-        let json = serde_json::to_string_pretty(&def).map_err(|e| {
-            ToolError::ExecutionFailed(format!("Serialization error: {e}"))
-        })?;
+        let json = serde_json::to_string_pretty(&def)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Serialization error: {e}")))?;
 
-        tokio::fs::create_dir_all(&self.strategies_dir).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to create strategies directory: {e}"))
-        })?;
+        tokio::fs::create_dir_all(&self.strategies_dir)
+            .await
+            .map_err(|e| {
+                ToolError::ExecutionFailed(format!("Failed to create strategies directory: {e}"))
+            })?;
 
         let path = self.strategies_dir.join(format!("{name}.json"));
         let tmp = self.strategies_dir.join(format!("{name}.json.tmp"));
 
-        tokio::fs::write(&tmp, &json).await.map_err(|e| {
-            ToolError::ExecutionFailed(format!("Failed to write strategy: {e}"))
-        })?;
+        tokio::fs::write(&tmp, &json)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write strategy: {e}")))?;
 
         tokio::fs::rename(&tmp, &path).await.map_err(|e| {
             ToolError::ExecutionFailed(format!("Failed to rename strategy file: {e}"))
         })?;
 
         // Compile and register.
-        let strategy =
-            hermes_strategies::DeclarativeStrategy::from_def(def.clone()).map_err(|e| {
-                ToolError::ExecutionFailed(format!("Strategy compilation failed: {e}"))
-            })?;
+        let strategy = hermes_strategies::DeclarativeStrategy::from_def(def.clone())
+            .map_err(|e| ToolError::ExecutionFailed(format!("Strategy compilation failed: {e}")))?;
 
         let info = hermes_strategies::StrategyInfo {
             name: def.name.clone(),
@@ -196,7 +192,10 @@ impl ToolHandler for CreateStrategyHandler {
              The strategy is saved to disk and immediately available for run_backtest. \
              Example: create a MACD crossover strategy with indicators [{id:'macd_line',type:'macd',params:{fast:12,slow:26}}] \
              and rules {buy:'macd_line crosses_above signal_line', sell:'macd_line crosses_below signal_line'}.",
-            JsonSchema::object(props, vec!["name".into(), "indicators".into(), "rules".into()]),
+            JsonSchema::object(
+                props,
+                vec!["name".into(), "indicators".into(), "rules".into()],
+            ),
         )
     }
 }

@@ -1,6 +1,6 @@
 //! Built-in strategy definitions (sma_cross, rsi_revert).
 //!
-//! These are the same strategies that were hardcoded in `hermes-vibe/backtest.rs`,
+//! These are the same strategies that were hardcoded in `hermes-trading/backtest.rs`,
 //! now expressed as declarative definitions that go through the same execution
 //! path as user-defined strategies.
 
@@ -72,7 +72,11 @@ mod tests {
     #[test]
     fn test_builtin_defs_are_valid() {
         for def in all_builtin_defs() {
-            assert!(def.validate().is_ok(), "Built-in '{}' failed validation", def.name);
+            assert!(
+                def.validate().is_ok(),
+                "Built-in '{}' failed validation",
+                def.name
+            );
         }
     }
 }

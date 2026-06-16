@@ -6,7 +6,7 @@ use tracing::info;
 
 use hermes_market_watch::{AlertEngine, AlertTrigger, Quote, Watchlist};
 use hermes_strategies::{Decision, Strategy};
-use hermes_vibe::{MarketDataProvider, OhlcvData, OhlcvRequest};
+use hermes_trading::{MarketDataProvider, OhlcvData, OhlcvRequest};
 
 use crate::error::CopilotError;
 use crate::report::AnalysisReport;
@@ -60,10 +60,7 @@ impl CopilotLite {
     /// Fetch OHLCV data and run all registered strategies, producing a
     /// combined analysis report.
     pub async fn analyze(&self, req: &OhlcvRequest) -> Result<AnalysisReport, CopilotError> {
-        let provider = self
-            .provider
-            .as_ref()
-            .ok_or(CopilotError::NoProvider)?;
+        let provider = self.provider.as_ref().ok_or(CopilotError::NoProvider)?;
 
         if self.strategies.is_empty() {
             return Err(CopilotError::NoStrategy);
