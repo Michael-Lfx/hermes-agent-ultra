@@ -176,10 +176,9 @@ pub fn has_direct_modal_credentials() -> bool {
         .or_else(|| std::env::var("USERPROFILE").ok())
         .map(PathBuf::from);
     if let Some(home) = home
-        && home.join(".modal.toml").exists()
-    {
-        return true;
-    }
+        && home.join(".modal.toml").exists() {
+            return true;
+        }
     false
 }
 

@@ -112,7 +112,8 @@ impl Default for SessionResetPolicy {
 // ---------------------------------------------------------------------------
 
 /// Session management configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SessionConfig {
     /// Policy for when to reset the session context.
     #[serde(default)]
@@ -134,6 +135,7 @@ pub struct SessionConfig {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub session_type_overrides: HashMap<SessionType, SessionResetPolicy>,
 }
+
 
 impl SessionConfig {
     /// Round-trip serialize to serde_json::Value.
