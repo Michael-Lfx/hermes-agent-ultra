@@ -13,7 +13,7 @@ pub mod provider;
 pub mod providers;
 pub mod types;
 
-pub use backtest::{BacktestEngine, Period, RunCard, StrategyInfo, StrategyRegistry};
+pub use backtest::{BacktestEngine, Period, RunCard, SignalKind, StrategyInfo, StrategyRegistry};
 pub use error::VibeError;
 pub use indicators::{rsi, sma};
 pub use provider::MarketDataProvider;

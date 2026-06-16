@@ -11,6 +11,7 @@ default = []
 
 [dependencies]
 hermes-vibe = { workspace = true }
+hermes-config = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,3 +22,4 @@ async-trait = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
+tempfile = "3"

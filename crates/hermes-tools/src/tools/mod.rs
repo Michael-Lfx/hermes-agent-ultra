@@ -59,6 +59,8 @@ pub mod web;
 #[cfg(feature = "vibe-research")]
 pub mod vibe_backtest;
 #[cfg(feature = "vibe-research")]
+pub mod vibe_create_strategy;
+#[cfg(feature = "vibe-research")]
 pub mod vibe_market_data;
 #[cfg(feature = "vibe-research")]
 pub mod vibe_report;

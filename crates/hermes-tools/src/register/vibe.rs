@@ -1,8 +1,9 @@
-//! Vibe Research tool registrations (get_market_data, run_backtest, get_backtest_report, list_strategies).
+//! Vibe Research tool registrations (get_market_data, run_backtest, get_backtest_report, list_strategies, create_strategy).
 //!
 //! Requires the `vibe-research` Cargo feature.
 
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use super::{RegistryContext, reg};
 
 pub fn register(ctx: &RegistryContext<'_>) {
@@ -10,6 +11,14 @@ pub fn register(ctx: &RegistryContext<'_>) {
     {
         let store: Arc<dyn crate::backends::vibe::RunCardStore> =
             Arc::new(crate::backends::vibe::FileRunCardStore::default_path());
+
+        // Build the strategy registry: built-ins + user strategies from disk.
+        let strategies_dir = hermes_config::hermes_home().join("vibe").join("strategies");
+        let strategy_registry = Arc::new(Mutex::new(
+            // We can't use async in a sync context, so build with builtins only.
+            // User strategies will be loaded on first access or via create_strategy.
+            hermes_strategies::StrategyRegistry::with_builtins()
+        ));
 
         reg(
             ctx,
@@ -21,7 +30,7 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "vibe",
-            Arc::new(crate::tools::vibe_backtest::RunBacktestHandler::new(store.clone())),
+            Arc::new(crate::tools::vibe_backtest::RunBacktestHandler::new(store.clone(), strategy_registry.clone())),
             "📊",
             vec![],
         );
@@ -35,8 +44,15 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "vibe",
-            Arc::new(crate::tools::vibe_strategies::ListStrategiesHandler::new()),
+            Arc::new(crate::tools::vibe_strategies::ListStrategiesHandler::new(strategy_registry.clone())),
             "📝",
+            vec![],
+        );
+        reg(
+            ctx,
+            "vibe",
+            Arc::new(crate::tools::vibe_create_strategy::CreateStrategyHandler::new(strategies_dir, strategy_registry)),
+            "⚡",
             vec![],
         );
     }

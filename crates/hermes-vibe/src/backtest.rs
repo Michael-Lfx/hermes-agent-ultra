@@ -101,6 +101,18 @@ struct Trade {
     exit_price: f64,
 }
 
+/// Trading signal type, used to bridge from `hermes-strategies::Decision`
+/// to `BacktestEngine` without creating a circular dependency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalKind {
+    /// Buy signal.
+    Buy,
+    /// Sell signal.
+    Sell,
+    /// No action.
+    Hold,
+}
+
 impl BacktestEngine {
     /// Run a named strategy on the given OHLCV data.
     pub fn run(
@@ -113,6 +125,49 @@ impl BacktestEngine {
             "rsi_revert" => Self::run_rsi_revert(data, params),
             _ => Err(VibeError::UnsupportedStrategy(strategy.to_string())),
         }
+    }
+
+    /// Run backtest from pre-computed signals.
+    ///
+    /// This is the bridge method for the declarative strategy framework:
+    /// `hermes-tools` converts `hermes-strategies::Decision` → `SignalKind`,
+    /// then calls this method to run the trade simulation.
+    pub fn run_from_signals(
+        data: &OhlcvData,
+        strategy_name: &str,
+        params: &serde_json::Value,
+        signals: &[SignalKind],
+    ) -> Result<RunCard, VibeError> {
+        if signals.len() != data.len() {
+            return Err(VibeError::Backtest(format!(
+                "Signal length {} does not match data length {}",
+                signals.len(),
+                data.len()
+            )));
+        }
+
+        let trades = simulate_trades_from_signals(data, signals);
+        let (total_return_pct, max_drawdown_pct, sharpe_ratio, trade_count, win_rate_pct) =
+            compute_metrics(&trades);
+
+        let period = Period {
+            start: data.rows.first().unwrap().date.to_string(),
+            end: data.rows.last().unwrap().date.to_string(),
+        };
+
+        Ok(RunCard {
+            id: String::new(),
+            created_at: String::new(),
+            symbol: data.symbol.clone(),
+            strategy: strategy_name.to_string(),
+            params: params.clone(),
+            total_return_pct,
+            max_drawdown_pct,
+            trade_count,
+            sharpe_ratio,
+            win_rate_pct,
+            period,
+        })
     }
 
     /// SMA crossover strategy.
@@ -380,6 +435,75 @@ fn compute_sharpe(equity: &[f64]) -> f64 {
         return 0.0;
     }
     mean / std_dev * (252.0_f64).sqrt()
+}
+
+/// Simulate trades from a signal sequence.
+///
+/// Buy → enter position; Sell → exit position.
+/// If still holding at the end, close at last price.
+fn simulate_trades_from_signals(data: &OhlcvData, signals: &[SignalKind]) -> Vec<Trade> {
+    let closes: Vec<f64> = data.rows.iter().map(|r| r.close).collect();
+    let mut trades = Vec::new();
+    let mut entry_price: Option<f64> = None;
+
+    for (i, signal) in signals.iter().enumerate() {
+        match signal {
+            SignalKind::Buy if entry_price.is_none() => {
+                entry_price = Some(closes[i]);
+            }
+            SignalKind::Sell
+                if entry_price.is_some()
+                    && let Some(ep) = entry_price.take() =>
+            {
+                trades.push(Trade {
+                    entry_price: ep,
+                    exit_price: closes[i],
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // If still holding at the end, close at last price.
+    if let Some(ep) = entry_price {
+        trades.push(Trade {
+            entry_price: ep,
+            exit_price: *closes.last().unwrap(),
+        });
+    }
+
+    trades
+}
+
+/// Compute metrics from a list of trades.
+///
+/// Returns `(total_return_pct, max_drawdown_pct, sharpe_ratio, trade_count, win_rate_pct)`.
+fn compute_metrics(trades: &[Trade]) -> (f64, f64, f64, usize, f64) {
+    let initial_capital = 10_000.0_f64;
+    let mut capital = initial_capital;
+    let mut equity_curve = vec![capital];
+    let mut wins = 0usize;
+
+    for t in trades {
+        let ret = (t.exit_price - t.entry_price) / t.entry_price;
+        capital *= 1.0 + ret;
+        equity_curve.push(capital);
+        if t.exit_price > t.entry_price {
+            wins += 1;
+        }
+    }
+
+    let total_return_pct = (capital / initial_capital - 1.0) * 100.0;
+    let max_drawdown_pct = compute_max_drawdown(&equity_curve);
+    let sharpe_ratio = compute_sharpe(&equity_curve);
+    let trade_count = trades.len();
+    let win_rate_pct = if trade_count > 0 {
+        wins as f64 / trade_count as f64 * 100.0
+    } else {
+        0.0
+    };
+
+    (total_return_pct, max_drawdown_pct, sharpe_ratio, trade_count, win_rate_pct)
 }
 
 #[cfg(test)]
