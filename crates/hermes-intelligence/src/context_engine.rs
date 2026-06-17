@@ -83,10 +83,6 @@ pub struct DefaultContextEngine {
     /// Whether auto-compaction is currently paused due to stuck detection.
     /// Resets to false when a subsequent compression succeeds.
     pub compact_stuck: AtomicBool,
-    /// Token estimation ratio. Default 0.25 = ~4 chars/token.
-    /// CJK-heavy text may benefit from 0.5–1.0.
-    /// Ported from Reasonix compact.go tokPerChar.
-    pub tokens_per_char: f64,
 }
 
 impl DefaultContextEngine {
@@ -96,17 +92,11 @@ impl DefaultContextEngine {
             use_llm_summary: false,
             consecutive_compacts: AtomicU32::new(0),
             compact_stuck: AtomicBool::new(false),
-            tokens_per_char: 0.25,
         }
     }
 
     pub fn with_keep_ratio(mut self, ratio: f64) -> Self {
         self.keep_ratio = ratio.clamp(0.1, 0.9);
-        self
-    }
-
-    pub fn with_tokens_per_char(mut self, ratio: f64) -> Self {
-        self.tokens_per_char = ratio.clamp(0.05, 2.0);
         self
     }
 
@@ -296,19 +286,6 @@ impl Default for DefaultContextEngine {
 
 #[async_trait]
 impl ContextEngine for DefaultContextEngine {
-    /// Override: use per-instance tokens_per_char ratio instead of the
-    /// hardcoded estimate_tokens_rough default.  CJK-heavy conversations
-    /// can configure a higher ratio for more accurate token budgeting.
-    fn estimate_tokens(&self, messages: &[Value]) -> u64 {
-        messages
-            .iter()
-            .map(|m| {
-                let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
-                (content.len() as f64 * self.tokens_per_char) as u64
-            })
-            .sum()
-    }
-
     async fn compress(
         &self,
         messages: &[Value],
@@ -334,13 +311,14 @@ impl ContextEngine for DefaultContextEngine {
             return Ok(messages.to_vec());
         }
 
-        // Count leading compression summaries + first user turn that must
-        // never enter the removed region (Reasonix pinnedPrefixLen).
-        // A later fold that re-summarizes an earlier digest would silently
-        // drop user facts and destroy the byte-stable cache prefix.
-        // The first user turn carries the user's original goal/constraints;
-        // keeping it verbatim ensures those facts survive all compactions.
-        let pinned = pinned_prefix_len(messages, target_tokens);
+        // Count leading compaction summaries that must never enter the
+        // removed region (Reasonix pinnedPrefixLen).  A later fold that
+        // re-summarizes an earlier digest would silently drop user facts
+        // and destroy the byte-stable cache prefix.
+        let pinned = messages
+            .iter()
+            .take_while(|m| is_compression_summary(m))
+            .count();
 
         // Keep the last `keep_ratio` fraction of messages, but never
         // fewer than `pinned` (protects existing digests).
@@ -360,23 +338,13 @@ impl ContextEngine for DefaultContextEngine {
             // Nothing left to remove after protecting digests.
             return Ok(messages.to_vec());
         };
-
-        // Fold economics: skip compaction when the foldable region is too
-        // small to justify the summarizer API call (≈400 tokens minimum).
-        // Ported from Reasonix compact.go foldEconomics.
-        const MIN_FOLD_TOKENS: u64 = 400;
-        let foldable_tokens: u64 = messages[remove_start..remove_end]
+        let removed_tokens: u64 = messages[remove_start..remove_end]
             .iter()
             .map(|m| {
                 let content = m.get("content").and_then(|c| c.as_str()).unwrap_or("");
                 estimate_tokens_rough(content)
             })
             .sum();
-        if foldable_tokens < MIN_FOLD_TOKENS {
-            return Ok(messages.to_vec());
-        }
-
-        let removed_tokens: u64 = foldable_tokens;
 
         let summary = self
             .maybe_generate_summary(
@@ -460,56 +428,6 @@ fn is_compression_summary(msg: &Value) -> bool {
         && msg.get("content")
             .and_then(|c| c.as_str())
             .is_some_and(|c| c.trim_start().starts_with("<compression-summary>"))
-}
-
-/// Compute the leading prefix length that must never be compacted.
-///
-/// This mirrors Reasonix `pinnedPrefixLen()`:
-///   1. system prompt (index 0) — always pinned
-///   2. first user turn — pinned if ≤ 1500 tokens AND ≤ 15% of target window
-///   3. prior compression summaries — pinned to prevent re-summarization
-fn pinned_prefix_len(messages: &[Value], target_tokens: u64) -> usize {
-    let mut i = 0;
-    let n = messages.len();
-
-    // 1. System prompt is always first, always pinned.
-    if i < n
-        && messages[i]
-            .get("role")
-            .and_then(|r| r.as_str())
-            == Some("system")
-    {
-        i += 1;
-    }
-
-    // 2. First user turn — pin verbatim if it fits within budget.
-    const MAX_PINNED_FIRST_USER_TOKENS: u64 = 1500;
-    const PINNED_FIRST_USER_WINDOW_FRAC: f64 = 0.15;
-    let max_tok = MAX_PINNED_FIRST_USER_TOKENS
-        .min((target_tokens as f64 * PINNED_FIRST_USER_WINDOW_FRAC) as u64);
-    if i < n
-        && messages[i]
-            .get("role")
-            .and_then(|r| r.as_str())
-            == Some("user")
-        && !is_compression_summary(&messages[i])
-    {
-        let content = messages[i]
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
-        if estimate_tokens_rough(content) <= max_tok {
-            i += 1;
-        }
-    }
-
-    // 3. Prior compression summaries — identified by the
-    //    <compression-summary> marker, always pinned.
-    while i < n && is_compression_summary(&messages[i]) {
-        i += 1;
-    }
-
-    i
 }
 
 // ---------------------------------------------------------------------------
@@ -706,11 +624,9 @@ mod tests {
     #[tokio::test]
     async fn test_default_engine_compress() {
         let engine = DefaultContextEngine::new();
-        // foldEconomics requires >= 400 tokens in the foldable region.
-        // 40 messages × ~20 tokens each = ~800 tokens → passes threshold.
-        let messages = make_messages(40);
-        let result = engine.compress(&messages, 200).await.unwrap();
-        assert!(result.len() < 40);
+        let messages = make_messages(20);
+        let result = engine.compress(&messages, 100).await.unwrap();
+        assert!(result.len() < 20);
         assert!(
             result[0]
                 .get("content")

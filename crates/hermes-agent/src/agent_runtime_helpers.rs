@@ -510,11 +510,10 @@ pub fn drop_thinking_only_and_merge_users(messages: Vec<Message>) -> Vec<Message
         }
         merged.push(m);
     }
-    // debug!(
-    //     dropped,
-    //     merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
-    // );
-    let _ = (dropped, merges);
+    debug!(
+        dropped,
+        merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
+    );
     merged
 }
 
@@ -852,51 +851,6 @@ pub fn anthropic_prompt_cache_policy(
     let is_deepseek_host = base_url_host_matches(base_url, "api.deepseek.com");
     if provider_lower == "deepseek" || is_deepseek_host || model_lower.contains("deepseek") {
         return (true, false);
-    }
-    (false, false)
-}
-
-fn prompt_cache_env_flag(name: &str) -> bool {
-    std::env::var(name).ok().is_some_and(|v| {
-        matches!(
-            v.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
-/// Resolve the effective prompt-cache policy, layering a user opt-in on top of
-/// the built-in [`anthropic_prompt_cache_policy`].
-///
-/// The built-in policy only knows a fixed set of providers (native Anthropic,
-/// OpenRouter/Nous Claude+Qwen, MiniMax anthropic-wire, Alibaba/Qwen). Custom
-/// or self-hosted OpenAI-compatible endpoints that *do* support prompt caching
-/// are not covered, so this wrapper lets them opt in:
-///
-/// - `HERMES_FORCE_PROMPT_CACHING=1` force-enables the caching subsystem when
-///   the built-in policy declines (any provider, including `custom:`).
-/// - Layout defaults to the native Anthropic content-block layout only on the
-///   `anthropic_messages` wire; otherwise the envelope (chat_completions)
-///   layout is used. `HERMES_FORCE_PROMPT_CACHE_NATIVE=1` forces native layout
-///   regardless of wire — only set this if the endpoint speaks the Anthropic
-///   Messages schema.
-///
-/// Default off: sending `cache_control` markers to an endpoint that rejects
-/// unknown fields can break requests, so this is strictly opt-in.
-pub fn resolve_prompt_cache_policy(
-    provider: &str,
-    base_url: &str,
-    api_mode: &str,
-    model: &str,
-) -> (bool, bool) {
-    let (should_cache, native) = anthropic_prompt_cache_policy(provider, base_url, api_mode, model);
-    if should_cache {
-        return (should_cache, native);
-    }
-    if prompt_cache_env_flag("HERMES_FORCE_PROMPT_CACHING") {
-        let force_native = prompt_cache_env_flag("HERMES_FORCE_PROMPT_CACHE_NATIVE")
-            || api_mode == "anthropic_messages";
-        return (true, force_native);
     }
     (false, false)
 }
@@ -1400,25 +1354,13 @@ pub fn prepare_wire_messages_for_api(
     if !is_deepseek {
         reapply_reasoning_echo_for_provider(&mut out, needs_pad);
     } else {
-        // Strip reasoning_content for DeepSeek prefix caching.
+        // Strip reasoning_content from all messages for DeepSeek.
         // Re-sending reasoning is billable prompt input with no cache
         // or coherence gain — and it changes the byte prefix, destroying
         // the service-side automatic prefix cache.
-        //
-        // EXCEPTION: tool-call turns keep reasoning_content. DeepSeek
-        // reasoner (thinking mode) requires reasoning_content on tool-call
-        // turns to avoid HTTP 400 on cache miss ("reasoning_content for
-        // the same message must be passed back"). Non-tool-call assistant
-        // messages strip reasoning as before.
         for msg in &mut out {
             if msg.role == MessageRole::Assistant {
-                let has_tool_calls = msg
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|tc| !tc.is_empty());
-                if !has_tool_calls {
-                    msg.reasoning_content = None;
-                }
+                msg.reasoning_content = None;
             }
         }
     }
