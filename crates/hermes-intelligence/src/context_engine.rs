@@ -98,8 +98,6 @@ impl DefaultContextEngine {
             compact_stuck: AtomicBool::new(false),
             tokens_per_char: 0.25,
 >>>>>>> 5a68f1ecc (parity(cache): Phase 2 — absorb Reasonix epsilon improvements)
-=======
->>>>>>> c4fc5c16b (parity(cache): absorb Reasonix DeepSeek prefix-caching advantages)
 // ---------------------------------------------------------------------------
 // ImportanceBasedEngine — token budget with message scoring
 // ---------------------------------------------------------------------------
@@ -294,9 +292,11 @@ mod tests {
     #[tokio::test]
     async fn test_default_engine_compress() {
         let engine = DefaultContextEngine::new();
-        let messages = make_messages(20);
-        let result = engine.compress(&messages, 100).await.unwrap();
-        assert!(result.len() < 20);
+        // foldEconomics requires >= 400 tokens in the foldable region.
+        // 40 messages × ~20 tokens each = ~800 tokens → passes threshold.
+        let messages = make_messages(40);
+        let result = engine.compress(&messages, 200).await.unwrap();
+        assert!(result.len() < 40);
         assert!(
             result[0]
                 .get("content")
