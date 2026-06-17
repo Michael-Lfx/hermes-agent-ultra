@@ -3,6 +3,8 @@
 //! Routing rules:
 //! - Symbols containing `-` (e.g. `"BTC-USDT"`, `"ETH-BTC"`) → [`BinanceProvider`]
 //! - Symbols ending in `.SZ` or `.SH` (e.g. `"000001.SZ"`) → [`EastmoneyProvider`]
+//! - Symbols ending in `.HK` or `HK_XXXXX` → [`StubProvider`] (mock until API wired)
+//! - Symbols ending in `.US` or plain tickers (`AAPL`) → [`StubProvider`] (mock until API wired)
 
 use async_trait::async_trait;
 use tracing::debug;
@@ -11,10 +13,12 @@ use crate::cache::DiskCache;
 use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
 use crate::settlement::is_a_share;
+use crate::symbol::{is_hk_share, is_us_share, normalize_symbol};
 use crate::types::{OhlcvData, OhlcvRequest};
 
 use super::binance::BinanceProvider;
 use super::eastmoney::EastmoneyProvider;
+use super::stub::StubProvider;
 
 /// Explicit data source for market data requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,17 +27,19 @@ pub enum DataSource {
     Auto,
     Binance,
     Eastmoney,
+    Stub,
 }
 
 impl DataSource {
-    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`).
+    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`, `stub`).
     pub fn parse(value: &str) -> Result<Self, TradingError> {
         match value.to_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
             "binance" => Ok(Self::Binance),
             "eastmoney" => Ok(Self::Eastmoney),
+            "stub" => Ok(Self::Stub),
             other => Err(TradingError::SymbolNotFound(format!(
-                "Unknown data source '{other}'. Use auto, binance, or eastmoney."
+                "Unknown data source '{other}'. Use auto, binance, eastmoney, or stub."
             ))),
         }
     }
@@ -45,6 +51,7 @@ impl DataSource {
 pub struct AutoRouter {
     binance: Box<dyn MarketDataProvider>,
     eastmoney: Box<dyn MarketDataProvider>,
+    stub: Box<dyn MarketDataProvider>,
     cache: DiskCache,
 }
 
@@ -55,6 +62,7 @@ impl AutoRouter {
         Self::with_providers_and_cache(
             BinanceProvider::new(),
             EastmoneyProvider::new(),
+            StubProvider::new(),
             DiskCache::default_path(),
         )
     }
@@ -64,8 +72,9 @@ impl AutoRouter {
     pub fn with_providers(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
+        stub: impl MarketDataProvider + 'static,
     ) -> Self {
-        Self::with_providers_and_cache(binance, eastmoney, DiskCache::disabled())
+        Self::with_providers_and_cache(binance, eastmoney, stub, DiskCache::disabled())
     }
 
     /// Create with pre-configured providers and an explicit cache.
@@ -73,11 +82,13 @@ impl AutoRouter {
     pub fn with_providers_and_cache(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
+        stub: impl MarketDataProvider + 'static,
         cache: DiskCache,
     ) -> Self {
         Self {
             binance: Box::new(binance),
             eastmoney: Box::new(eastmoney),
+            stub: Box::new(stub),
             cache,
         }
     }
@@ -91,10 +102,14 @@ impl AutoRouter {
         } else if symbol.contains('-') {
             debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
             Ok(&self.binance)
+        } else if is_hk_share(symbol) || is_us_share(symbol) {
+            debug!(symbol = %symbol, provider = "stub", "AutoRouter selected");
+            Ok(&self.stub)
         } else {
             Err(TradingError::SymbolNotFound(format!(
                 "Cannot determine provider for symbol '{symbol}'. \
-                 Use 'XXX-YYY' for crypto (Binance) or 'XXXXXX.SZ/.SH' for A-shares (Eastmoney)."
+                 Use 'XXX-YYY' for crypto, 'XXXXXX.SZ/.SH' for A-shares, \
+                 '0700.HK'/'HK_00700' for HK, or 'AAPL'/'AAPL.US' for US."
             )))
         }
     }
@@ -175,6 +190,22 @@ mod tests {
         let router = AutoRouter::new();
         assert_eq!(router.select("000001.SZ").unwrap().name(), "eastmoney");
         assert_eq!(router.select("600519.SH").unwrap().name(), "eastmoney");
+    }
+
+    #[test]
+    fn test_router_selects_stub_hk_us() {
+        let router = AutoRouter::new();
+        assert_eq!(router.select("0700.HK").unwrap().name(), "stub");
+        assert_eq!(router.select("HK_00700").unwrap().name(), "stub");
+        assert_eq!(router.select("AAPL").unwrap().name(), "stub");
+        assert_eq!(router.select("AAPL.US").unwrap().name(), "stub");
+    }
+
+    #[test]
+    fn test_unknown_symbol_errors() {
+        let router = AutoRouter::new();
+        assert!(router.select("INVALID_XYZ").is_err());
+        assert!(router.select("NOT_A_SYMBOL!!!").is_err());
     }
 
     #[test]

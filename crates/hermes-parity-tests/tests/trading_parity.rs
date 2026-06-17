@@ -113,7 +113,7 @@ fn request_from_input(input: &Value) -> OhlcvRequest {
 
 fn mock_router() -> AutoRouter {
     let mock = MockProvider::new();
-    AutoRouter::with_providers(mock.clone(), mock)
+    AutoRouter::with_providers(mock.clone(), mock.clone(), mock)
 }
 
 fn source_from_input(input: &Value) -> Result<DataSource, String> {

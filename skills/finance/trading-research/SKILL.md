@@ -1,15 +1,15 @@
 ---
 name: trading-research
 description: Quantitative research with real market data and backtesting. No API key required.
-version: 0.3.0
+version: 0.5.0
 author: Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [Finance, Quantitative, Backtest, Market-Data, A-Share, Crypto]
+    tags: [Finance, Quantitative, Backtest, Market-Data, A-Share, Crypto, HK, US]
     category: finance
-    related_skills: [stocks]
+    related_skills: [stocks, trading-debate]
 ---
 
 # Trading Research Skill
@@ -22,17 +22,18 @@ backtests without any API key or Python dependency.
 - User asks for historical K-line / candlestick / OHLCV data
 - User wants to backtest SMA crossover or RSI mean-reversion strategies
 - User wants to create a custom declarative strategy (`create_strategy`)
-- User asks about A-share (沪深股票) or crypto (BTC/ETH) price history
+- User asks about A-share (沪深股票), HK/US stocks, or crypto (BTC/ETH) price history
 - User wants quantitative performance metrics (return, drawdown, Sharpe)
 - User wants to retrieve a previous backtest report (`get_backtest_report`)
 
 ## When NOT to Use
 
 - User asks for **news or research reports** → use `web_search`
-- User asks for **real-time quote only** (no history needed) → `get_market_data` with 1-day range is fine
+- User asks for **real-time quote only** (no backtest/history pipeline) → use **`stocks`** skill (`quote`) if installed; otherwise `web_search`
+- User asks for **investment-committee bull/bear debate** → use **`trading-debate`** (after `run_backtest`)
 - User asks to **place orders or trade** → not supported
 - User asks about **fundamentals** (PE, revenue) → use `web_search`
-- User asks about markets not supported (futures, options, forex, HK/US) → inform limitation
+- User asks about markets not supported (futures, options, forex) → inform limitation
 
 ## Available Tools
 
@@ -43,20 +44,30 @@ Fetch OHLCV data for a symbol over a date range.
 **Parameters:**
 | Param | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `symbol` | ✅ | — | `BTC-USDT`, `000001.SZ`, `600519.SH` |
+| `symbol` | ✅ | — | `BTC-USDT`, `000001.SZ`, `0700.HK`, `AAPL` |
 | `start_date` | — | 30 days ago | `YYYY-MM-DD` |
 | `end_date` | — | today | `YYYY-MM-DD` |
 | `interval` | — | `daily` | `daily` or `weekly` |
-| `source` | — | `auto` | `auto`, `binance`, or `eastmoney` |
+| `source` | — | `auto` | `auto`, `binance`, `eastmoney`, or `stub` |
 | `refresh` | — | `false` | Bypass disk cache and force network fetch |
 
 **Disk cache:** Responses are cached at `{HERMES_HOME}/trading/cache/` for 24h (key: `{source}-{symbol}-{interval}-{dates}.json`). Delete files manually to clear cache.
 
 **Response field `partial`:** `true` when returned rows do not fully cover the requested date range (holidays, suspensions).
 
-**Supported Markets:**
-- A-shares: Shenzhen (`.SZ`) and Shanghai (`.SH`) via EastMoney
-- Crypto: Any pair on Binance (e.g. `BTC-USDT`, `ETH-USDT`)
+**Supported Markets (auto-routing):**
+- A-shares: `XXXXXX.SZ` / `XXXXXX.SH` → EastMoney (live)
+- Crypto: `XXX-YYY` pairs → Binance (live)
+- Hong Kong: `0700.HK`, `HK_00700` → stub (mock OHLCV; live API pending)
+- US: `AAPL`, `AAPL.US` → stub (mock OHLCV; live API pending)
+
+**Symbol routing rules:**
+| Format | Market | Provider |
+|--------|--------|----------|
+| `000001.SZ`, `600519.SH` | A-share | eastmoney |
+| `BTC-USDT`, `ETH-USDT` | Crypto | binance |
+| `0700.HK`, `HK_00700` | Hong Kong | stub |
+| `AAPL`, `MSFT.US` | US | stub |
 
 ### `run_backtest`
 
@@ -102,7 +113,8 @@ Load a previously saved RunCard by `id` from `~/.hermes/trading/runs/{id}/run_ca
 2. Backtest → `run_backtest` (fetches data internally; saves run card)
 3. Review past run → `get_backtest_report` with `id` from prior `run_backtest`
 4. Custom strategy → `create_strategy`, then `run_backtest` with new name
-5. Never fabricate numbers — always use tool output
+5. Bull/bear debate after backtest → switch to **`trading-debate`** skill
+6. Never fabricate numbers — always use tool output
 
 ## Critical Rules
 
@@ -133,10 +145,14 @@ Expected: `memory(action="add", target="user", content="Trading risk preference:
 
 Ask: "上次回测 BTC 结论是什么"
 Expected: `session_search(query="run_backtest BTC-USDT", limit=5)`; report symbol, strategy, total_return_pct from results.
-=======
-| Backtest | ✅ | — |
-| Quick US stock quote (no history) | — | ✅ |
 | Company search by name | — | ✅ |
+| `stocks` not installed | `web_search` for spot price | — |
+
+## Relationship with `trading-debate` Skill
+
+After `run_backtest` produces a RunCard, hand off to **`trading-debate`** when the user
+wants bull/bear analysis or an investment-committee style verdict. Do not run debate
+logic inside this skill — delegate per `trading-debate` workflow.
 
 ## Verification
 
@@ -152,9 +168,12 @@ Expected: Agent calls `run_backtest` with symbol="000001.SZ", strategy="sma_cros
 params={"short_window":20,"long_window":50}, returns RunCard JSON.
 >>>>>>> 930eea825 (refactor(trading): rename hermes-vibe to hermes-trading across workspace)
 
+Ask: "AAPL 现在多少钱"
+Expected: Agent uses **`stocks`** skill or `web_search` — **not** `get_market_data` / `run_backtest`.
+
 ## Limitations
 
-- HK/US markets not yet supported (planned)
+- HK/US use stub mock data until live APIs are integrated (backtests still run end-to-end)
 - Disk cache TTL is 24h; use `refresh=true` to force fresh data
 - No order placement capability
 - Crypto data from Binance only

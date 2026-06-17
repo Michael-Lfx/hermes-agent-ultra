@@ -10,6 +10,7 @@ pub mod eastmoney;
 #[cfg(any(test, feature = "test-mock"))]
 pub mod mock;
 pub mod router;
+pub mod stub;
 
 <<<<<<< HEAD
 pub mod stub;

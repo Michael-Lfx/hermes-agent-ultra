@@ -1,8 +1,6 @@
 //! Symbol format detection and normalization for multi-market routing.
 
 use crate::error::TradingError;
-=======
-
 /// Whether a symbol is an A-share (Shenzhen `.SZ` or Shanghai `.SH`).
 #[must_use]
 pub fn is_a_share(symbol: &str) -> bool {
