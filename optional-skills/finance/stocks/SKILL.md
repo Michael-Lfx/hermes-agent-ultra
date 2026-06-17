@@ -1,7 +1,7 @@
 ---
 name: stocks
 description: Stock quotes, history, search, compare, crypto via Yahoo.
-version: 0.1.0
+version: 0.2.0
 author: Mibay (Mibayy), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -9,7 +9,8 @@ metadata:
   hermes:
     tags: [Stocks, Finance, Market, Crypto, Investing]
     category: finance
-    related_skills: [dcf-model, comps-analysis, lbo-model]
+    related_skills: [trading-research, trading-debate, dcf-model, comps-analysis, lbo-model]
+    requires_toolsets: [terminal]
 ---
 
 # Stocks Skill
@@ -18,13 +19,39 @@ Read-only market data via Yahoo Finance. Five commands: `quote`, `search`,
 `history`, `compare`, `crypto`. Python stdlib only — no API key, no pip
 installs. Yahoo's endpoint is unofficial and may rate-limit or change.
 
+**Install:** This skill lives in `optional-skills/`. Use `skills_install` (or copy
+to `~/.hermes/skills/finance/stocks/`) before first use. Requires `terminal`
+toolset and Python 3 on the host.
+
 ## When to Use
 
-- User asks for a current stock price (AAPL, TSLA, MSFT, ...)
-- User wants to look up a ticker by company name
-- User wants OHLCV history or performance over a date range
-- User wants to compare several tickers side by side
-- User asks for a crypto price (BTC, ETH, SOL, ...)
+- User asks for a **current stock price** (AAPL, TSLA, MSFT, ...)
+- User wants to **look up a ticker by company name** (`search`)
+- User wants to **compare several tickers** side by side (`compare`)
+- User asks for a **crypto spot price** via Yahoo (`crypto` — pass `BTC`, script appends `-USD`)
+- User wants a **quick price history browse** (`history` — light Yahoo chart only; see routing table)
+
+## When NOT to Use
+
+- User wants **historical OHLCV for backtesting**, Sharpe, drawdown, or T+1 rules → use **`trading-research`** (`get_market_data` / `run_backtest`)
+- User wants **A-share research with Eastmoney live data** → **`trading-research`**
+- User wants **HK/US/A-share/crypto unified backtest pipeline** → **`trading-research`**
+- User wants **investment-committee bull/bear debate** after a backtest → **`trading-debate`**
+- User wants **news, fundamentals, or research reports** → `web_search`
+
+## Skill routing (stocks vs trading-research)
+
+| User intent | Skill | Tool / command |
+|-------------|-------|----------------|
+| 「苹果现在多少钱」 | **stocks** | `terminal` → `stocks_client.py quote AAPL` |
+| 「特斯拉代码是什么」 | **stocks** | `search "Tesla"` |
+| 「比一下 AAPL MSFT GOOGL」 | **stocks** | `compare` |
+| 「拉 000001.SZ 180 天日 K 并回测 RSI」 | **trading-research** | `run_backtest` |
+| 「0700.HK / AAPL 历史回测」 | **trading-research** | `get_market_data` + `run_backtest` |
+| 「BTC-USDT 最近 30 天 K 线」 | **trading-research** | `get_market_data` |
+
+If this skill is **not installed**, suggest `skills_install` for quick quotes, or use
+`web_search` / `trading-research` as fallback depending on intent.
 
 ## Prerequisites
 
@@ -69,6 +96,8 @@ Find tickers by company name. Returns top 5: symbol, name, exchange, type.
 Daily OHLCV plus stats (min, max, avg, total return %). Ranges: `1mo`,
 `3mo`, `6mo`, `1y`, `5y`. Default: `1mo`.
 
+**Note:** For backtests or multi-market research, use **`trading-research`** instead.
+
 ### `compare SYMBOL1 SYMBOL2 [...]`
 
 Side-by-side: price, change%, 52-week performance.
@@ -76,6 +105,8 @@ Side-by-side: price, change%, 52-week performance.
 ### `crypto SYMBOL [SYMBOL2 ...]`
 
 Crypto prices. Pass `BTC` (the script appends `-USD` automatically).
+
+For crypto **backtests**, use **`trading-research`** with `BTC-USDT`.
 
 ## Pitfalls
 
@@ -93,3 +124,6 @@ python3 ~/.hermes/skills/finance/stocks/scripts/stocks_client.py quote AAPL
 ```
 
 Returns a JSON object with `symbol: "AAPL"` and a numeric `price` field.
+
+Ask: "AAPL 现在多少钱"
+Expected: Agent uses this skill (`quote AAPL`) or prompts to install if missing — **not** `run_backtest`.

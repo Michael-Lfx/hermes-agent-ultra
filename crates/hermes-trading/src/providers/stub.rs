@@ -1,53 +1,46 @@
-//! Mock market data provider for tests and parity fixtures.
+//! Stub market data provider for HK/US symbols pending real API integration.
 //!
-//! Returns deterministic synthetic OHLCV data without network calls.
+//! Returns deterministic synthetic OHLCV so backtests can run end-to-end.
 
 use async_trait::async_trait;
 use chrono::{Duration, NaiveDate};
+use tracing::info;
 
 use crate::error::TradingError;
 use crate::provider::MarketDataProvider;
+use crate::symbol::{is_hk_share, is_us_share, normalize_symbol};
 use crate::types::{Interval, OhlcvData, OhlcvRequest, OhlcvRow};
 
-/// Mock provider that synthesizes OHLCV data for known symbols.
-///
-/// Use this in tests and parity fixtures to avoid hitting external APIs
-/// (Binance, Eastmoney). It produces enough price oscillation to generate
-/// SMA crossovers for backtest scenarios.
+/// Stub provider for HK/US markets — mock OHLCV until live APIs are wired.
 #[derive(Debug, Clone, Default)]
-pub struct MockProvider;
+pub struct StubProvider;
 
-impl MockProvider {
-    /// Create a new mock provider.
+impl StubProvider {
     #[must_use]
     pub fn new() -> Self {
         Self
     }
 
-    /// Generate deterministic rows for the requested date range.
+    fn base_price(symbol: &str) -> f64 {
+        match symbol {
+            s if s.ends_with(".HK") => 350.0,
+            s if s.ends_with(".US") => 180.0,
+            _ => 100.0,
+        }
+    }
+
     fn generate_rows(
         symbol: &str,
         start: NaiveDate,
         end: NaiveDate,
         _interval: Interval,
     ) -> Vec<OhlcvRow> {
-        let base_price = match symbol {
-            "BTC-USDT" => 50_000.0,
-            "ETH-BTC" => 0.05,
-            "000001.SZ" | "600519.SH" => 100.0,
-            s if s.ends_with(".HK") => 350.0,
-            s if s.ends_with(".US") => 180.0,
-            "AAPL" => 180.0,
-            _ => 100.0,
-        };
-
+        let base_price = Self::base_price(symbol);
         let mut rows = Vec::new();
         let mut date = start;
         let mut i = 0;
         while date <= end {
             let t = i as f64;
-            // Smooth sine overlay on a slight upward drift produces both
-            // uptrends and downtrends, triggering golden/death crosses.
             let close =
                 base_price + 0.1 * t + base_price * 0.1 * (t * std::f64::consts::PI / 30.0).sin();
             let open = close * (1.0 + 0.005 * ((i + 1) as f64 * 0.3).sin());
@@ -67,22 +60,27 @@ impl MockProvider {
             date += Duration::days(1);
             i += 1;
         }
-
         rows
     }
 }
 
 #[async_trait]
-impl MarketDataProvider for MockProvider {
+impl MarketDataProvider for StubProvider {
     async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
-        if req.symbol == "INVALID_XYZ" {
+        if !is_hk_share(&req.symbol) && !is_us_share(&req.symbol) {
             return Err(TradingError::SymbolNotFound(format!(
-                "Symbol '{}' not found",
+                "Symbol '{}' is not a supported HK/US format. \
+                 Use '0700.HK', 'HK_00700', 'AAPL', or 'AAPL.US'.",
                 req.symbol
             )));
         }
 
-        let canonical = crate::symbol::normalize_symbol(&req.symbol);
+        let canonical = normalize_symbol(&req.symbol);
+        info!(
+            symbol = %canonical,
+            "HK/US stub data (real API pending integration)"
+        );
+
         let rows = Self::generate_rows(&canonical, req.start, req.end, req.interval);
 
         Ok(OhlcvData {
@@ -94,7 +92,7 @@ impl MarketDataProvider for MockProvider {
     }
 
     fn name(&self) -> &str {
-        "mock"
+        "stub"
     }
 }
 
@@ -103,35 +101,28 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn mock_returns_rows_for_btc() {
-        let provider = MockProvider::new();
+    async fn stub_returns_hk_rows() {
+        let provider = StubProvider::new();
         let req = OhlcvRequest {
-            symbol: "BTC-USDT".to_string(),
+            symbol: "0700.HK".to_string(),
             start: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
             end: NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(),
             interval: Interval::Daily,
         };
         let data = provider.fetch_ohlcv(&req).await.unwrap();
-        assert_eq!(data.symbol, "BTC-USDT");
-        assert_eq!(data.interval, Interval::Daily);
+        assert_eq!(data.symbol, "0700.HK");
         assert_eq!(data.len(), 10);
     }
 
     #[tokio::test]
-    async fn mock_returns_error_for_invalid_symbol() {
-        let provider = MockProvider::new();
+    async fn stub_rejects_crypto() {
+        let provider = StubProvider::new();
         let req = OhlcvRequest {
-            symbol: "INVALID_XYZ".to_string(),
+            symbol: "BTC-USDT".to_string(),
             start: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-            end: NaiveDate::from_ymd_opt(2026, 5, 10).unwrap(),
+            end: NaiveDate::from_ymd_opt(2026, 5, 5).unwrap(),
             interval: Interval::Daily,
         };
-        let result = provider.fetch_ohlcv(&req).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("not found"),
-            "expected 'not found' in error: {err}"
-        );
+        assert!(provider.fetch_ohlcv(&req).await.is_err());
     }
 }
