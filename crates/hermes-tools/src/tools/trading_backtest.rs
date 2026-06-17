@@ -191,8 +191,8 @@ impl ToolHandler for RunBacktestHandler {
             "source".into(),
             json!({
                 "type": "string",
-                "description": "Data source: 'auto' (default), 'binance', or 'eastmoney'",
-                "enum": ["auto", "binance", "eastmoney"]
+                "description": "Data source: 'auto' (default), 'binance', 'eastmoney', or 'stub'",
+                "enum": ["auto", "binance", "eastmoney", "stub"]
             }),
         );
         props.insert(

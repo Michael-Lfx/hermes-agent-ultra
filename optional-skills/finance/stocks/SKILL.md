@@ -37,24 +37,6 @@ and Python 3 on the host.
 - User asks for a **current stock price** (AAPL, TSLA, MSFT, ...) → use built-in **`get_quote`**
 - User asks **多少钱 / 股价 / 现价** for a ticker → use **`get_quote`**
 
-- User wants **historical OHLCV for backtesting**, Sharpe, drawdown, or T+1 rules → use **`trading-research`** (`get_market_data` / `run_backtest`)
-- User wants **A-share research with Eastmoney live data** → **`trading-research`**
-- User wants **HK/US/A-share/crypto unified backtest pipeline** → **`trading-research`**
-- User wants **investment-committee bull/bear debate** after a backtest → **`trading-debate`**
-- User wants **news, fundamentals, or research reports** → `web_search`
-
-## Skill routing (stocks vs trading-research)
-
-| User intent | Skill | Tool / command |
-|-------------|-------|----------------|
-| 「苹果现在多少钱」 | **`get_quote`** (built-in) | `get_quote(symbol="AAPL")` |
-| 「特斯拉代码是什么」 | **stocks** | `search "Tesla"` |
-| 「比一下 AAPL MSFT GOOGL」 | **stocks** | `compare` |
-| 「拉 000001.SZ 180 天日 K 并回测 RSI」 | **trading-research** | `run_backtest` |
-| 「0700.HK / AAPL 历史回测」 | **not supported** | use **`get_quote`** for spot; backtest A-share/crypto only |
-| 「BTC-USDT 最近 30 天 K 线」 | **trading-research** | `get_market_data` |
-
-If `terminal` or Yahoo fails, fall back to `web_search` — **not** `execute_code` with ad-hoc yfinance.
 
 ## Prerequisites
 

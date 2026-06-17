@@ -33,6 +33,7 @@ pub mod quote_mock;
 pub mod quote_router;
 
 pub mod router;
+pub mod stub;
 
 pub mod stub;
 

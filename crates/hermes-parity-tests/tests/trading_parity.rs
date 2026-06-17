@@ -132,18 +132,6 @@ fn quote_source_from_input(input: &Value) -> Result<QuoteSource, String> {
     }
 }
 
-fn mock_quote_router() -> QuoteRouter {
-    let mock = MockQuoteProvider::new();
-    QuoteRouter::with_providers(mock.clone(), mock.clone(), mock)
-}
-
-fn quote_source_from_input(input: &Value) -> Result<QuoteSource, String> {
-    match input.get("source").and_then(|v| v.as_str()) {
-        None => Ok(QuoteSource::Auto),
-        Some(s) => QuoteSource::parse(s).map_err(|e| e.to_string()),
-    }
-}
-
 fn source_from_input(input: &Value) -> Result<DataSource, String> {
     match input.get("source").and_then(|v| v.as_str()) {
         None => Ok(DataSource::Auto),

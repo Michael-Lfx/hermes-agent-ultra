@@ -17,6 +17,7 @@ use crate::types::{OhlcvData, OhlcvRequest};
 
 use super::binance::BinanceProvider;
 use super::eastmoney::EastmoneyProvider;
+use super::stub::StubProvider;
 
 /// Explicit data source for market data requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -25,10 +26,11 @@ pub enum DataSource {
     Auto,
     Binance,
     Eastmoney,
+    Stub,
 }
 
 impl DataSource {
-    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`).
+    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`, `stub`).
     pub fn parse(value: &str) -> Result<Self, TradingError> {
         match value.to_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
@@ -38,7 +40,7 @@ impl DataSource {
                 "source=stub is no longer supported. Use auto, binance, or eastmoney.".into(),
             )),
             other => Err(TradingError::SymbolNotFound(format!(
-                "Unknown data source '{other}'. Use auto, binance, or eastmoney."
+                "Unknown data source '{other}'. Use auto, binance, eastmoney, or stub."
             ))),
         }
     }
@@ -50,6 +52,7 @@ impl DataSource {
 pub struct AutoRouter {
     binance: Box<dyn MarketDataProvider>,
     eastmoney: Box<dyn MarketDataProvider>,
+    stub: Box<dyn MarketDataProvider>,
     cache: DiskCache,
 }
 
@@ -60,6 +63,7 @@ impl AutoRouter {
         Self::with_providers_and_cache(
             BinanceProvider::new(),
             EastmoneyProvider::new(),
+            StubProvider::new(),
             DiskCache::default_path(),
         )
     }
@@ -69,8 +73,9 @@ impl AutoRouter {
     pub fn with_providers(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
+        stub: impl MarketDataProvider + 'static,
     ) -> Self {
-        Self::with_providers_and_cache(binance, eastmoney, DiskCache::disabled())
+        Self::with_providers_and_cache(binance, eastmoney, stub, DiskCache::disabled())
     }
 
     /// Create with pre-configured providers and an explicit cache.
@@ -78,11 +83,13 @@ impl AutoRouter {
     pub fn with_providers_and_cache(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
+        stub: impl MarketDataProvider + 'static,
         cache: DiskCache,
     ) -> Self {
         Self {
             binance: Box::new(binance),
             eastmoney: Box::new(eastmoney),
+            stub: Box::new(stub),
             cache,
         }
     }
@@ -97,6 +104,9 @@ impl AutoRouter {
         } else if symbol.contains('-') {
             // debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
             Ok(&self.binance)
+        } else if is_hk_share(symbol) || is_us_share(symbol) {
+            debug!(symbol = %symbol, provider = "stub", "AutoRouter selected");
+            Ok(&self.stub)
         } else {
             Err(TradingError::SymbolNotFound(format!(
                 "Cannot determine provider for symbol '{symbol}'. \
@@ -134,6 +144,16 @@ impl AutoRouter {
                     )))
                 }
             }
+            DataSource::Stub => {
+                if is_hk_share(symbol) || is_us_share(symbol) {
+                    Ok(&self.stub)
+                } else {
+                    Err(TradingError::SymbolNotFound(format!(
+                        "Symbol '{symbol}' is not compatible with source=stub. \
+                         Use HK ('0700.HK', 'HK_00700') or US ('AAPL', 'AAPL.US') symbols."
+                    )))
+                }
+            }
         }
     }
 
@@ -156,98 +176,6 @@ impl AutoRouter {
 
         ensure_ohlcv_supported(&normalized_req.symbol)?;
 
-        let provider = self.resolve_provider(&normalized_req.symbol, source)?;
-        let cache_key = DiskCache::cache_key(provider.name(), &normalized_req);
-
-        if !refresh && let Some(cached) = self.cache.get(&cache_key).await {
-            debug!(key = %cache_key, "DiskCache hit");
-            return Ok(cached);
-        }
-
-        let data = provider.fetch_ohlcv(&normalized_req).await?;
-        if let Err(e) = self.cache.put(&cache_key, &data).await {
-            tracing::warn!(error = %e, key = %cache_key, "Failed to write disk cache");
-        }
-        Ok(data)
-    }
-}
-
-impl Default for AutoRouter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl MarketDataProvider for AutoRouter {
-    async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
-        self.fetch_ohlcv_with_source(req, DataSource::Auto, false)
-            .await
-    }
-
-    fn name(&self) -> &str {
-        "auto-router"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    use chrono::NaiveDate;
-
-    use super::*;
-    use crate::providers::mock::MockProvider;
-    use crate::types::Interval;
-
-    #[derive(Debug)]
-    struct CountingProvider {
-        count: Arc<AtomicUsize>,
-    }
-
-    #[async_trait]
-    impl MarketDataProvider for CountingProvider {
-        async fn fetch_ohlcv(&self, req: &OhlcvRequest) -> Result<OhlcvData, TradingError> {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            MockProvider::new().fetch_ohlcv(req).await
-        }
-
-        fn name(&self) -> &str {
-            "mock"
-        }
-    }
-
-    fn sample_req() -> OhlcvRequest {
-        OhlcvRequest {
-            symbol: "BTC-USDT".to_string(),
-            start: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-            end: NaiveDate::from_ymd_opt(2026, 5, 5).unwrap(),
-            interval: Interval::Daily,
-        }
-    }
-
-    #[test]
-    fn test_router_selects_binance() {
-        let router = AutoRouter::new();
-        assert_eq!(router.select("BTC-USDT").unwrap().name(), "binance");
-        assert_eq!(router.select("ETH-BTC").unwrap().name(), "binance");
-    }
-
-    #[test]
-    fn test_router_selects_eastmoney() {
-        let router = AutoRouter::new();
-        assert_eq!(router.select("000001.SZ").unwrap().name(), "eastmoney");
-        assert_eq!(router.select("600519.SH").unwrap().name(), "eastmoney");
-    }
-
-    #[test]
-    fn test_router_rejects_hk_us() {
-        let router = AutoRouter::new();
-        assert!(router.select("0700.HK").is_err());
-        assert!(router.select("HK_00700").is_err());
-        assert!(router.select("AAPL").is_err());
-        assert!(router.select("AAPL.US").is_err());
     }
 
     #[test]
@@ -278,6 +206,16 @@ mod tests {
     }
 
     #[test]
+    fn test_forced_stub_rejects_a_share() {
+        let router = AutoRouter::new();
+        assert!(
+            router
+                .resolve_provider("000001.SZ", DataSource::Stub)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn test_data_source_parse() {
         assert_eq!(DataSource::parse("auto").unwrap(), DataSource::Auto);
         assert_eq!(DataSource::parse("binance").unwrap(), DataSource::Binance);
@@ -295,6 +233,9 @@ mod tests {
         let router = AutoRouter::with_providers_and_cache(
             counter(),
             counter(),
+=======
+            counter(),
+>>>>>>> ecc1ce61e (feat(trading): HK/US symbol routing with stub mock provider)
             DiskCache::with_dir(dir.path().to_path_buf()),
         );
         let req = sample_req();
@@ -319,6 +260,7 @@ mod tests {
         let router = AutoRouter::with_providers_and_cache(
             counter(),
             counter(),
+<<<<<<< HEAD
             DiskCache::with_dir(dir.path().to_path_buf()),
         );
         let req = sample_req();
