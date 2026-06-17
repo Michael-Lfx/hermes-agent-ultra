@@ -510,11 +510,10 @@ pub fn drop_thinking_only_and_merge_users(messages: Vec<Message>) -> Vec<Message
         }
         merged.push(m);
     }
-    // debug!(
-    //     dropped,
-    //     merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
-    // );
-    let _ = (dropped, merges);
+    debug!(
+        dropped,
+        merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
+    );
     merged
 }
 
@@ -1355,25 +1354,13 @@ pub fn prepare_wire_messages_for_api(
     if !is_deepseek {
         reapply_reasoning_echo_for_provider(&mut out, needs_pad);
     } else {
-        // Strip reasoning_content for DeepSeek prefix caching.
+        // Strip reasoning_content from all messages for DeepSeek.
         // Re-sending reasoning is billable prompt input with no cache
         // or coherence gain — and it changes the byte prefix, destroying
         // the service-side automatic prefix cache.
-        //
-        // EXCEPTION: tool-call turns keep reasoning_content. DeepSeek
-        // reasoner (thinking mode) requires reasoning_content on tool-call
-        // turns to avoid HTTP 400 on cache miss ("reasoning_content for
-        // the same message must be passed back"). Non-tool-call assistant
-        // messages strip reasoning as before.
         for msg in &mut out {
             if msg.role == MessageRole::Assistant {
-                let has_tool_calls = msg
-                    .tool_calls
-                    .as_ref()
-                    .is_some_and(|tc| !tc.is_empty());
-                if !has_tool_calls {
-                    msg.reasoning_content = None;
-                }
+                msg.reasoning_content = None;
             }
         }
     }
