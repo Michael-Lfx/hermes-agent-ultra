@@ -100,17 +100,6 @@ pub const TOOLSET_FEISHU: &[&str] = &[
 pub const TOOLSET_CAPTURE: &[&str] = &["capture"];
 /// Live spot quote (no backtest / OHLCV).
 pub const TOOLSET_TRADING_QUOTE: &[&str] = &["get_quote"];
-/// Full quantitative research tools (OHLCV, backtest, strategies).
-pub const TOOLSET_TRADING: &[&str] = &[
-    "get_quote",
-    "resolve_a_share_symbol",
-    "get_market_data",
-    "run_backtest",
-    "get_backtest_report",
-    "list_strategies",
-    "create_strategy",
-    "analyze_stock",
-];
 
 // ---------------------------------------------------------------------------
 // Toolset
@@ -342,10 +331,6 @@ impl ToolsetManager {
                 .map(|s| s.to_string())
                 .collect(),
         ));
-        self.register(Toolset::new(
-            "trading",
-            TOOLSET_TRADING.iter().map(|s| s.to_string()).collect(),
-        ));
 
         // Platform composite toolsets
         self.register(Toolset::with_includes(
@@ -374,7 +359,6 @@ impl ToolsetManager {
                 "tts",
                 "computer_use",
                 "trading-quote",
-                "trading",
             ]
             .into_iter()
             .map(String::from)
@@ -746,7 +730,6 @@ mod tests {
         assert!(tools.contains(&"ha_call_service".to_string()));
         assert!(tools.contains(&"cronjob".to_string()));
         assert!(tools.contains(&"get_quote".to_string()));
-        assert!(tools.contains(&"run_backtest".to_string()));
     }
 
     #[test]
