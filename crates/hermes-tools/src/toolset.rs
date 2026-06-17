@@ -104,14 +104,6 @@ pub const TOOLSET_TRADING_QUOTE: &[&str] = &["get_quote"];
 pub const TOOLSET_TRADING: &[&str] = &[
     "get_quote",
     "resolve_a_share_symbol",
-=======
-    "get_market_data",
-    "run_backtest",
-    "get_backtest_report",
-    "list_strategies",
-    "create_strategy",
-    "analyze_stock",
-];
 
 // ---------------------------------------------------------------------------
 // Toolset
@@ -348,36 +340,6 @@ impl ToolsetManager {
             TOOLSET_TRADING.iter().map(|s| s.to_string()).collect(),
         ));
 >>>>>>> 7062cddeb (﻿feat(trading): equity research orchestration and full 19-dim report)
-
-        // Platform composite toolsets
-        self.register(Toolset::with_includes(
-            "hermes-cli",
-            vec![
-                "web",
-                "content",
-                "capture",
-                "terminal",
-                "file",
-                "browser",
-                "vision",
-                "image_gen",
-                "video_gen",
-                "spotify",
-                "skills",
-                "memory",
-                "session_search",
-                "todo",
-                "clarify",
-                "code_execution",
-                "delegation",
-                "cronjob",
-                "messaging",
-                "homeassistant",
-                "tts",
-                "computer_use",
-                "trading-quote",
-                "trading",
-<<<<<<< HEAD
     }
 
     #[test]

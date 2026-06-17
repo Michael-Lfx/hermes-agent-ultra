@@ -9,7 +9,7 @@ metadata:
   hermes:
     tags: [Finance, Quantitative, Backtest, Market-Data, A-Share, Crypto, HK, US]
     category: finance
-    related_skills: [stocks, trading-debate]
+    related_skills: [stocks, trading-debate, spot-quote]
 ---
 
 # Trading Research Skill
@@ -29,7 +29,7 @@ backtests without any API key or Python dependency.
 ## When NOT to Use
 
 - User asks for **news or research reports** → use `web_search`
-- User asks for **real-time quote only** (no backtest/history pipeline) → use **`stocks`** skill (`quote`) if installed; otherwise `web_search`
+- User asks for **real-time quote only** (no backtest/history pipeline) → use bundled **`spot-quote`** skill + **`get_quote`**; `web_search` only on failure (e.g. Yahoo blocked without VPN) or for retail goods (shoes, rent, etc.)
 - User asks for **investment-committee bull/bear debate** → use **`trading-debate`** (after `run_backtest`)
 - User asks to **place orders or trade** → not supported
 - User asks about **fundamentals** (PE, revenue) → use `web_search`
@@ -123,7 +123,7 @@ Load a previously saved RunCard by `id` from `~/.hermes/trading/runs/{id}/run_ca
 - If a tool returns an error, report the error honestly to the user.
 - Do not claim support for markets/strategies that are not implemented.
 
-## Relationship with `stocks` Skill
+## Relationship with `spot-quote`, `get_quote`, and optional `stocks` Skill
 
 | Scenario | Use this skill | Use `stocks` |
 |----------|---------------|--------------|
@@ -148,28 +148,11 @@ Expected: `session_search(query="run_backtest BTC-USDT", limit=5)`; report symbo
 | Company search by name | — | ✅ |
 | `stocks` not installed | `web_search` for spot price | — |
 
-## Relationship with `trading-debate` Skill
-
-After `run_backtest` produces a RunCard, hand off to **`trading-debate`** when the user
-wants bull/bear analysis or an investment-committee style verdict. Do not run debate
-logic inside this skill — delegate per `trading-debate` workflow.
-
-## Verification
-
-Ask: "拉 BTC-USDT 最近 30 天日 K 线"
-Expected: Agent calls `get_market_data` with symbol="BTC-USDT", returns OHLCV JSON.
-
-Ask: "回测 000001.SZ RSI 策略"
-Expected: Agent calls `run_backtest` with symbol="000001.SZ", strategy="rsi_revert",
-returns RunCard JSON with T+1-adjusted metrics.
-
-Ask: "回测 000001.SZ 20/50 均线策略"
-Expected: Agent calls `run_backtest` with symbol="000001.SZ", strategy="sma_cross",
-params={"short_window":20,"long_window":50}, returns RunCard JSON.
->>>>>>> 930eea825 (refactor(trading): rename hermes-vibe to hermes-trading across workspace)
-
 Ask: "AAPL 现在多少钱"
-Expected: Agent uses **`stocks`** skill or `web_search` — **not** `get_market_data` / `run_backtest`.
+Expected: Follow **`spot-quote`** — `get_quote(symbol="AAPL", source="auto")`, report `price`. Use `web_search` only if Yahoo fails — **not** `get_market_data` / `run_backtest` / `execute_code`.
+
+Ask: "000001.SZ 现在多少钱"
+Expected: Agent calls `get_quote(symbol="000001.SZ")`, reports `price` from JSON.
 
 ## Limitations
 

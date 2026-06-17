@@ -7,10 +7,15 @@ pub mod binance_quote;
 pub mod akshare;
 
 pub mod eastmoney;
+pub mod eastmoney_quote;
 #[cfg(any(test, feature = "test-mock"))]
 pub mod mock;
+#[cfg(any(test, feature = "test-mock"))]
+pub mod quote_mock;
+pub mod quote_router;
 pub mod router;
 pub mod stub;
+pub mod yahoo;
 
 <<<<<<< HEAD
 pub mod stub;
