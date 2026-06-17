@@ -236,7 +236,10 @@
 | 注册 | `crates/hermes-tools/src/register/trading.rs` |
 | Skill | `skills/finance/trading-research/SKILL.md` |
 | Skill | `skills/finance/trading-debate/SKILL.md` |
+<<<<<<< HEAD
 | Skill | `skills/finance/trading-cron/SKILL.md` |
+=======
+>>>>>>> 8548e3d3c (feat(trading): add trading-debate skill and update P1 TODO)
 | Skill | `optional-skills/finance/stocks/SKILL.md` |
 | Parity | `crates/hermes-parity-tests/fixtures/trading_*/` |
 | 路线图 | `docs/roadmaps/VIBE_TRADING_RUST_REWRITE.md` |
