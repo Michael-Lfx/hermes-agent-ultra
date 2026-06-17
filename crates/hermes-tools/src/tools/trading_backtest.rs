@@ -162,7 +162,7 @@ impl ToolHandler for RunBacktestHandler {
             "symbol".into(),
             json!({
                 "type": "string",
-                "description": "Symbol to backtest. Examples: 'BTC-USDT', '000001.SZ', '600519.SH'"
+                "description": "Symbol to backtest. Examples: 'BTC-USDT', '000001.SZ', '0700.HK', 'AAPL'"
             }),
         );
         props.insert(
@@ -191,8 +191,8 @@ impl ToolHandler for RunBacktestHandler {
             "source".into(),
             json!({
                 "type": "string",
-                "description": "Data source: 'auto' (default), 'binance', or 'eastmoney'",
-                "enum": ["auto", "binance", "eastmoney"]
+                "description": "Data source: 'auto' (default), 'binance', 'eastmoney', or 'stub'",
+                "enum": ["auto", "binance", "eastmoney", "stub"]
             }),
         );
         props.insert(
