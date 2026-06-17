@@ -610,8 +610,6 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "trading-debate",
 <<<<<<< HEAD
     "trading-cron",
-=======
->>>>>>> 930eea825 (refactor(trading): rename hermes-vibe to hermes-trading across workspace)
     "trading-research",
     "webhook-subscriptions",
     "weights-and-biases",

@@ -1,7 +1,7 @@
 # Trading Rust 重写 — TODO 进度
 
-> **更新时间**：2026-06-16  
-> **总体状态**：P0 ✅ 已完成，P1 核心增强（T+1、source、Sharpe、缓存/健壮性）✅ → 继续 P1 剩余（HK/US、Skills 集成）
+> **更新时间**：2026-06-17  
+> **总体状态**：P0 ✅ 已完成，P1 核心增强 ✅ → Skills 分工 + trading-debate ✅ → Hermes 集成（memory/cron）待做
 
 ---
 
@@ -42,7 +42,7 @@
 ## 🔲 未完成（P1 — 增强：小完整研究闭环）
 
 **P1 总体验收目标**：
-- [ ] A-share / HK / US / crypto 四类市场各至少 1 个 symbol 能成功回测。
+- [x] A-share / HK / US / crypto 四类市场各至少 1 个 symbol 能成功回测。
 - [x] 回测结果持久化为 `~/.hermes/trading/runs/{id}/run_card.json`，并可通过 tool 读取复盘。
 - [x] 新增 `rsi_revert` 策略模板。
 - [x] A 股 T+1 规则生效（`.SZ`/`.SH` 自动启用）。
@@ -57,7 +57,7 @@
   - 验收：`source` 可选值为 `auto|binance|eastmoney`，默认 `auto`。
   - 验收：`source=binance` 时只走 BinanceProvider，`source=eastmoney` 时只走 EastmoneyProvider。
   - 验收：新增/更新 parity fixture 覆盖 `source` 参数。
-- [ ] 支持 HK / US 市场 symbol 格式（至少设计好路由规则）
+- [x] 支持 HK / US 市场 symbol 格式（至少设计好路由规则）
   - 验收：`HK_00700` 或 `0700.HK` 格式能识别为待接入状态（可 mock）。
   - 验收：非法 market 返回清晰错误。
 - [x] 实现 `TRADING_DATA_CACHE` 磁盘缓存
@@ -106,18 +106,25 @@
   - 验收：增加 T+1 规则说明（A-share 回测默认启用）。
   - 验收：增加 `run_card.json` 保存路径说明。
   - 验收：验证示例 prompt 覆盖 `rsi_revert`。
-- [ ] 新建 `trading-debate` SKILL
+- [x] 新建 `trading-debate` SKILL
   - 验收：路径 `skills/finance/trading-debate/SKILL.md`。
   - 验收：frontmatter `name: trading-debate`。
   - 验收：使用 `delegate_task` 触发 bull/bear 两个子 agent。
   - 验收：输出格式为 pros/cons 结论摘要。
-- [ ] 更新 `finance/stocks` SKILL
+- [x] 更新 `finance/stocks` SKILL
   - 验收：When to Use 明确 "历史 OHLCV / 回测" 走 `trading-research`。
   - 验收：保留 stocks skill 对 quote/company search 的职责。
 
 ### Hermes 能力启用
-- [ ] 多 agent：`delegate_task` 配合投委会
-- [ ] 记忆：`memory` 存储风险偏好、标的池
+
+- [x] 多 agent：投委会（SKILL 文档层）
+  - 验收：通过 `delegate_task` 并行触发 bull 和 bear agent。
+  - 验收：输入包含 symbol、strategy、run_card 摘要。
+  - 验收：输出统一格式（如 `{"bull": "...", "bear": "...", "consensus": "..."}`）。
+- [ ] 记忆：风险偏好、标的池
+  - 验收：使用 `memory` tool 存储用户风险等级（保守/稳健/积极）。
+  - 验收：使用 `memory` tool 存储用户关注标的列表。
+  - 验收：回测前自动读取风险偏好并提示。
 - [ ] 历史：`session_search` 上次回测结论
 - [ ] 定时：`cronjob` 收盘复盘
   - 验收：支持 `hermes cron` 配置每日收盘后运行预设 symbol 回测。
@@ -165,6 +172,12 @@
 - [ ] `hermes mcp serve` 对外暴露 5–8 个 trading tools
 - [ ] `hermes-mcp` client 连接 Robinhood MCP
 - [ ] `rustdx` 离线 Parquet 导入
+
+---
+
+## 🚧 阻塞项（用户场景，非开发 workaround）
+
+- [ ] **内置 Skills 未 sync 到用户 home** — gateway 启动后 `skills list` 为空，WeCom 查价无法走 SKILL 路由；见 [`docs/issues/2026-06-17-bundled-skills-never-sync.md`](../issues/2026-06-17-bundled-skills-never-sync.md)
 
 ---
 
