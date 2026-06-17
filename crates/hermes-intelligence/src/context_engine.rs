@@ -87,16 +87,6 @@ pub struct DefaultContextEngine {
     /// CJK-heavy text may benefit from 0.5–1.0.
     /// Ported from Reasonix compact.go tokPerChar.
     pub tokens_per_char: f64,
-}
-
-impl DefaultContextEngine {
-    pub fn new() -> Self {
-        Self {
-            keep_ratio: 0.33,
-            use_llm_summary: false,
-            consecutive_compacts: AtomicU32::new(0),
-            compact_stuck: AtomicBool::new(false),
-            tokens_per_char: 0.25,
         }
     }
 
@@ -462,6 +452,7 @@ fn is_compression_summary(msg: &Value) -> bool {
             .is_some_and(|c| c.trim_start().starts_with("<compression-summary>"))
 }
 
+<<<<<<< HEAD
 /// Compute the leading prefix length that must never be compacted.
 ///
 /// This mirrors Reasonix `pinnedPrefixLen()`:
@@ -512,6 +503,8 @@ fn pinned_prefix_len(messages: &[Value], target_tokens: u64) -> usize {
     i
 }
 
+=======
+>>>>>>> 19bffab55 (parity(cache): absorb Reasonix DeepSeek prefix-caching advantages)
 // ---------------------------------------------------------------------------
 // ImportanceBasedEngine — token budget with message scoring
 // ---------------------------------------------------------------------------
