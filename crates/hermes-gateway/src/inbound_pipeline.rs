@@ -547,7 +547,9 @@ pub(crate) async fn dispatch_agent_route(
         // WeCom native stream flush: iLink API does not support message edits.
         && !incoming.platform.eq_ignore_ascii_case("weixin")
         // WhatsApp (wa-rs) "..." placeholder + edit is unreliable; use one-shot.
-        && !incoming.platform.eq_ignore_ascii_case("whatsapp");
+        && !incoming.platform.eq_ignore_ascii_case("whatsapp")
+        // AIPC Talk: one-shot WebSocket response; streaming edits are pointless.
+        && !incoming.platform.eq_ignore_ascii_case("aipc_talk");
 
     if incoming.platform.eq_ignore_ascii_case("wecom") {
         info!(

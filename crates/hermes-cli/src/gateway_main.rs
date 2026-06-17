@@ -245,7 +245,7 @@ pub(crate) fn matrix_home_room_for_platform(platform_cfg: &PlatformConfig) -> Op
 
 pub(crate) fn default_platform_dm_policy(platform: &str) -> &'static str {
     match platform.trim().to_ascii_lowercase().as_str() {
-        "wecom" | "weixin" | "qqbot" => "open",
+        "wecom" | "weixin" | "qqbot" | "aipc_talk" => "open",
         _ => "pairing",
     }
 }
