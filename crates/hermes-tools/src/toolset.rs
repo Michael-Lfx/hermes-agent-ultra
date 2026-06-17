@@ -104,13 +104,6 @@ pub const TOOLSET_TRADING_QUOTE: &[&str] = &["get_quote"];
 pub const TOOLSET_TRADING: &[&str] = &[
     "get_quote",
     "resolve_a_share_symbol",
-    "get_market_data",
-    "run_backtest",
-    "get_backtest_report",
-    "list_strategies",
-    "create_strategy",
-    "analyze_stock",
-];
 
         // Platform composite toolsets
         self.register(Toolset::with_includes(
@@ -140,6 +133,381 @@ pub const TOOLSET_TRADING: &[&str] = &[
                 "computer_use",
                 "trading-quote",
                 "trading",
+<<<<<<< HEAD
+=======
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-cron",
+            vec!["hermes-cli"].into_iter().map(String::from).collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-telegram",
+            vec!["hermes-cli"].into_iter().map(String::from).collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-discord",
+            vec!["hermes-telegram"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-whatsapp",
+            vec!["hermes-telegram"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-slack",
+            vec!["hermes-telegram"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        ));
+        self.register(Toolset::new(
+            "feishu",
+            TOOLSET_FEISHU.iter().map(|s| s.to_string()).collect(),
+        ));
+        self.register(Toolset::new(
+            "capture",
+            TOOLSET_CAPTURE.iter().map(|s| s.to_string()).collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-feishu",
+            vec!["hermes-cli", "feishu"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-weixin",
+            vec!["hermes-cli"].into_iter().map(String::from).collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-wecom",
+            vec!["hermes-cli"].into_iter().map(String::from).collect(),
+        ));
+        self.register(Toolset::with_includes(
+            "hermes-api-server",
+            vec![
+                "web",
+                "terminal",
+                "file",
+                "browser",
+                "vision",
+                "image_gen",
+                "memory",
+                "session_search",
+                "todo",
+                "code_execution",
+                "delegation",
+                "cronjob",
+                "homeassistant",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        ));
+    }
+
+    /// Register a toolset.
+    pub fn register(&mut self, toolset: Toolset) {
+        self.toolsets.insert(toolset.name.clone(), toolset);
+    }
+
+    /// Remove a toolset by name.
+    pub fn deregister(&mut self, name: &str) {
+        self.toolsets.remove(name);
+    }
+
+    /// Resolve a toolset name to a flat, deduplicated list of tool names.
+    ///
+    /// Handles:
+    /// - Recursive resolution of `includes`
+    /// - Cycle detection
+    /// - "all" or "*" resolves to the union of all registered toolsets
+    /// - Filters to only tools available in the registry (check_fn passes)
+    pub fn resolve_toolset(&self, name: &str) -> Result<Vec<String>, ToolsetError> {
+        let mut visited = HashSet::new();
+        self.resolve_inner(name, &mut visited)
+    }
+
+    fn resolve_inner(
+        &self,
+        name: &str,
+        visited: &mut HashSet<String>,
+    ) -> Result<Vec<String>, ToolsetError> {
+        // Handle "all" or "*" wildcard
+        if name == "all" || name == "*" {
+            let mut all_tools = HashSet::new();
+            for ts_name in self.toolsets.keys() {
+                // Each sub-toolset gets its own visited set to avoid
+                // false cycle detection across independent branches.
+                let mut sub_visited = HashSet::new();
+                let tools = self.resolve_inner(ts_name, &mut sub_visited)?;
+                all_tools.extend(tools);
+            }
+            let mut result: Vec<String> = all_tools.into_iter().collect();
+            result.sort();
+            return Ok(result);
+        }
+
+        // Cycle detection
+        if visited.contains(name) {
+            return Err(ToolsetError::CycleDetected(name.to_string()));
+        }
+        visited.insert(name.to_string());
+
+        // If the name is a live alias, resolve it and delegate to the registry.
+        {
+            let aliases = self.live_aliases.read().unwrap();
+            if let Some(canonical) = aliases.get(name) {
+                let canonical = canonical.clone();
+                drop(aliases);
+                let mut tools = self.registry.tool_names_for_toolset(&canonical, true);
+                tools.sort();
+                return Ok(tools);
+            }
+        }
+
+        let toolset = self
+            .toolsets
+            .get(name)
+            .ok_or_else(|| ToolsetError::NotFound(name.to_string()))?;
+
+        let mut resolved = HashSet::new();
+
+        // Add directly listed tools
+        for tool in &toolset.tools {
+            resolved.insert(tool.clone());
+        }
+
+        // Recursively resolve includes
+        for include in &toolset.includes {
+            let included_tools = self.resolve_inner(include, visited)?;
+            for tool in included_tools {
+                resolved.insert(tool);
+            }
+        }
+
+        // Filter to only available tools in registry
+        let available: Vec<String> = resolved
+            .into_iter()
+            .filter(|tool| self.registry.is_available(tool))
+            .collect();
+
+        let mut sorted = available;
+        sorted.sort();
+        Ok(sorted)
+    }
+
+    /// Resolve a toolset without availability filtering (includes all tools regardless of check_fn).
+    pub fn resolve_toolset_unfiltered(&self, name: &str) -> Result<Vec<String>, ToolsetError> {
+        let mut visited = HashSet::new();
+        self.resolve_inner_unfiltered(name, &mut visited)
+    }
+
+    fn resolve_inner_unfiltered(
+        &self,
+        name: &str,
+        visited: &mut HashSet<String>,
+    ) -> Result<Vec<String>, ToolsetError> {
+        if name == "all" || name == "*" {
+            let mut all_tools = HashSet::new();
+            for ts_name in self.toolsets.keys() {
+                // Each sub-toolset gets its own visited set to avoid
+                // false cycle detection across independent branches.
+                let mut sub_visited = HashSet::new();
+                let tools = self.resolve_inner_unfiltered(ts_name, &mut sub_visited)?;
+                all_tools.extend(tools);
+            }
+            let mut result: Vec<String> = all_tools.into_iter().collect();
+            result.sort();
+            return Ok(result);
+        }
+
+        if visited.contains(name) {
+            return Err(ToolsetError::CycleDetected(name.to_string()));
+        }
+        visited.insert(name.to_string());
+
+        let toolset = self
+            .toolsets
+            .get(name)
+            .ok_or_else(|| ToolsetError::NotFound(name.to_string()))?;
+
+        let mut resolved = HashSet::new();
+        for tool in &toolset.tools {
+            resolved.insert(tool.clone());
+        }
+        for include in &toolset.includes {
+            let included_tools = self.resolve_inner_unfiltered(include, visited)?;
+            for tool in included_tools {
+                resolved.insert(tool);
+            }
+        }
+
+        let mut sorted: Vec<String> = resolved.into_iter().collect();
+        sorted.sort();
+        Ok(sorted)
+    }
+
+    /// Create a custom toolset at runtime.
+    pub fn create_custom_toolset(&mut self, name: impl Into<String>, tools: Vec<String>) {
+        self.register(Toolset::new(name, tools));
+    }
+
+    /// Get the list of all registered toolset names.
+    pub fn list_toolsets(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.toolsets.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// Get a reference to a toolset by name.
+    pub fn get_toolset(&self, name: &str) -> Option<&Toolset> {
+        self.toolsets.get(name)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free helpers
+// ---------------------------------------------------------------------------
+
+/// Follow alias chains in the live alias map until a non-alias entry is reached.
+///
+/// Stops after 32 hops to break infinite alias cycles.
+fn resolve_live_alias(aliases: &HashMap<String, String>, name: &str) -> String {
+    let mut current = name.to_string();
+    for _ in 0..32 {
+        let Some(next) = aliases.get(&current) else {
+            break;
+        };
+        current = next.clone();
+    }
+    current
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during toolset resolution.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolsetError {
+    #[error("Toolset not found: {0}")]
+    NotFound(String),
+    #[error("Cycle detected in toolset resolution: {0}")]
+    CycleDetected(String),
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn empty_registry() -> Arc<ToolRegistry> {
+        Arc::new(ToolRegistry::new())
+    }
+
+    #[test]
+    fn test_default_toolsets_registered() {
+        let manager = ToolsetManager::new(empty_registry());
+        let names = manager.list_toolsets();
+        assert!(names.contains(&"web".to_string()));
+        assert!(names.contains(&"terminal".to_string()));
+        assert!(names.contains(&"file".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_hermes_feishu_includes_feishu_tools() {
+        let manager = ToolsetManager::new(empty_registry());
+        let tools = manager.resolve_toolset_unfiltered("hermes-feishu").unwrap();
+        assert!(tools.contains(&"feishu_calendar".to_string()));
+        assert!(tools.contains(&"browser_navigate".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_web_toolset() {
+        let manager = ToolsetManager::new(empty_registry());
+        // Unfiltered since no tools are registered
+        let tools = manager.resolve_toolset_unfiltered("web").unwrap();
+        assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"web_extract".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_all() {
+        let manager = ToolsetManager::new(empty_registry());
+        let tools = manager.resolve_toolset_unfiltered("all").unwrap();
+        // Should include tools from all toolsets
+        assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"terminal".to_string()));
+        assert!(tools.contains(&"read_file".to_string()));
+    }
+
+    #[test]
+    fn test_cycle_detection() {
+        let registry = empty_registry();
+        let mut manager = ToolsetManager::new(registry.clone());
+        // Create a cycle: a -> b -> a
+        manager.register(Toolset::with_includes(
+            "a_cycle",
+            vec!["b_cycle".to_string()],
+        ));
+        manager.register(Toolset::with_includes(
+            "b_cycle",
+            vec!["a_cycle".to_string()],
+        ));
+        let result = manager.resolve_toolset("a_cycle");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_not_found() {
+        let manager = ToolsetManager::new(empty_registry());
+        let result = manager.resolve_toolset("nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_custom_toolset() {
+        let mut manager = ToolsetManager::new(empty_registry());
+        manager.create_custom_toolset(
+            "my_custom",
+            vec!["tool_a".to_string(), "tool_b".to_string()],
+        );
+        let tools = manager.resolve_toolset_unfiltered("my_custom").unwrap();
+        assert_eq!(tools.len(), 2);
+    }
+
+    #[test]
+    fn test_hermes_cli_toolset() {
+        let manager = ToolsetManager::new(empty_registry());
+        let tools = manager.resolve_toolset_unfiltered("hermes-cli").unwrap();
+        // Should include tools from web, terminal, file, etc.
+        assert!(tools.contains(&"web_search".to_string()));
+        assert!(tools.contains(&"terminal".to_string()));
+        assert!(tools.contains(&"read_file".to_string()));
+        // Python parity core for CLI.
+        assert!(tools.contains(&"image_generate".to_string()));
+        assert!(tools.contains(&"session_search".to_string()));
+        assert!(tools.contains(&"text_to_speech".to_string()));
+        assert!(tools.contains(&"send_message".to_string()));
+        assert!(tools.contains(&"ha_call_service".to_string()));
+        assert!(tools.contains(&"cronjob".to_string()));
+        assert!(tools.contains(&"get_quote".to_string()));
+        assert!(tools.contains(&"run_backtest".to_string()));
+>>>>>>> e2ff093d6 (feat(trading): Hermes memory, session_search, and trading-cron integration)
     }
 
     #[test]

@@ -182,10 +182,23 @@ If `session_search` is inconclusive, fall back to `get_backtest_report` when the
 | Company search by name | — | optional **`stocks`** (`skills install stocks`) |
 | `get_quote` failed | — | `web_search` for spot price |
 | Scheduled close review | — | **`trading-cron`** → `cronjob` |
+<<<<<<< HEAD
+=======
 
 ## Relationship with `trading-cron` Skill
 
 Hand off when the user wants recurring after-close backtests. This skill covers one-shot research; **`trading-cron`** owns `cronjob` recipes and `enabled_toolsets`.
+>>>>>>> e2ff093d6 (feat(trading): Hermes memory, session_search, and trading-cron integration)
+
+## Relationship with `trading-cron` Skill
+
+Hand off when the user wants recurring after-close backtests. This skill covers one-shot research; **`trading-cron`** owns `cronjob` recipes and `enabled_toolsets`.
+
+Ask: "我比较保守，记住一下"
+Expected: `memory(action="add", target="user", content="Trading risk preference: 保守")`; confirm to user.
+
+Ask: "上次回测 BTC 结论是什么"
+Expected: `session_search(query="run_backtest BTC-USDT", limit=5)`; report symbol, strategy, total_return_pct from results.
 
 ## Limitations
 

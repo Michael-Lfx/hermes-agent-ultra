@@ -611,8 +611,6 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "trading-debate",
 <<<<<<< HEAD
     "trading-cron",
-=======
->>>>>>> 8548e3d3c (feat(trading): add trading-debate skill and update P1 TODO)
     "trading-research",
     "webhook-subscriptions",
     "weights-and-biases",
