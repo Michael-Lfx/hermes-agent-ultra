@@ -23,7 +23,7 @@ backtests without any API key or Python dependency.
 - User asks for historical K-line / candlestick / OHLCV data
 - User wants to backtest SMA crossover or RSI mean-reversion strategies
 - User wants to create a custom declarative strategy (`create_strategy`)
-- User asks about A-share (沪深股票), HK/US stocks, or crypto (BTC/ETH) price history
+- User asks about A-share (沪深股票) or crypto (BTC/ETH) price history
 - User wants quantitative performance metrics (return, drawdown, Sharpe)
 - User wants to retrieve a previous backtest report (`get_backtest_report`)
 - User asks to **remember risk preference or watchlist** for future backtests
@@ -59,7 +59,7 @@ Fetch OHLCV data for a symbol over a date range.
 | `start_date` | — | 30 days ago | `YYYY-MM-DD` |
 | `end_date` | — | today | `YYYY-MM-DD` |
 | `interval` | — | `daily` | `daily` or `weekly` |
-| `source` | — | `auto` | `auto`, `binance`, `eastmoney`, or `stub` |
+| `source` | — | `auto` | `auto`, `binance`, or `eastmoney` |
 | `refresh` | — | `false` | Bypass disk cache and force network fetch |
 
 **Disk cache:** Responses are cached at `{HERMES_HOME}/trading/cache/` for 24h (key: `{source}-{symbol}-{interval}-{dates}.json`). Delete files manually to clear cache.

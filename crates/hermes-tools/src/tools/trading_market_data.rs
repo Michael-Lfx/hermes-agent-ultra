@@ -105,8 +105,8 @@ impl ToolHandler for GetMarketDataHandler {
             "source".into(),
             json!({
                 "type": "string",
-                "description": "Data source: 'auto' (default), 'binance', 'eastmoney', or 'stub'",
-                "enum": ["auto", "binance", "eastmoney", "stub"]
+                "description": "Data source: 'auto' (default), 'binance', or 'eastmoney'",
+                "enum": ["auto", "binance", "eastmoney"]
             }),
         );
         props.insert(

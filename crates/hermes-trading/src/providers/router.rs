@@ -17,7 +17,6 @@ use crate::types::{OhlcvData, OhlcvRequest};
 
 use super::binance::BinanceProvider;
 use super::eastmoney::EastmoneyProvider;
-use super::stub::StubProvider;
 
 /// Explicit data source for market data requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,11 +25,10 @@ pub enum DataSource {
     Auto,
     Binance,
     Eastmoney,
-    Stub,
 }
 
 impl DataSource {
-    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`, `stub`).
+    /// Parse from tool parameter string (`auto`, `binance`, `eastmoney`).
     pub fn parse(value: &str) -> Result<Self, TradingError> {
         match value.to_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
@@ -40,7 +38,7 @@ impl DataSource {
                 "source=stub is no longer supported. Use auto, binance, or eastmoney.".into(),
             )),
             other => Err(TradingError::SymbolNotFound(format!(
-                "Unknown data source '{other}'. Use auto, binance, eastmoney, or stub."
+                "Unknown data source '{other}'. Use auto, binance, or eastmoney."
             ))),
         }
     }
@@ -52,7 +50,6 @@ impl DataSource {
 pub struct AutoRouter {
     binance: Box<dyn MarketDataProvider>,
     eastmoney: Box<dyn MarketDataProvider>,
-    stub: Box<dyn MarketDataProvider>,
     cache: DiskCache,
 }
 
@@ -63,7 +60,6 @@ impl AutoRouter {
         Self::with_providers_and_cache(
             BinanceProvider::new(),
             EastmoneyProvider::new(),
-            StubProvider::new(),
             DiskCache::default_path(),
         )
     }
@@ -73,9 +69,8 @@ impl AutoRouter {
     pub fn with_providers(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
-        stub: impl MarketDataProvider + 'static,
     ) -> Self {
-        Self::with_providers_and_cache(binance, eastmoney, stub, DiskCache::disabled())
+        Self::with_providers_and_cache(binance, eastmoney, DiskCache::disabled())
     }
 
     /// Create with pre-configured providers and an explicit cache.
@@ -83,13 +78,11 @@ impl AutoRouter {
     pub fn with_providers_and_cache(
         binance: impl MarketDataProvider + 'static,
         eastmoney: impl MarketDataProvider + 'static,
-        stub: impl MarketDataProvider + 'static,
         cache: DiskCache,
     ) -> Self {
         Self {
             binance: Box::new(binance),
             eastmoney: Box::new(eastmoney),
-            stub: Box::new(stub),
             cache,
         }
     }
@@ -104,9 +97,6 @@ impl AutoRouter {
         } else if symbol.contains('-') {
             // debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
             Ok(&self.binance)
-        } else if is_hk_share(symbol) || is_us_share(symbol) {
-            debug!(symbol = %symbol, provider = "stub", "AutoRouter selected");
-            Ok(&self.stub)
         } else {
             Err(TradingError::SymbolNotFound(format!(
                 "Cannot determine provider for symbol '{symbol}'. \
@@ -141,16 +131,6 @@ impl AutoRouter {
                     Err(TradingError::SymbolNotFound(format!(
                         "Symbol '{symbol}' is not compatible with source=eastmoney. \
                          Use an A-share symbol like 000001.SZ or 600519.SH."
-                    )))
-                }
-            }
-            DataSource::Stub => {
-                if is_hk_share(symbol) || is_us_share(symbol) {
-                    Ok(&self.stub)
-                } else {
-                    Err(TradingError::SymbolNotFound(format!(
-                        "Symbol '{symbol}' is not compatible with source=stub. \
-                         Use HK ('0700.HK', 'HK_00700') or US ('AAPL', 'AAPL.US') symbols."
                     )))
                 }
             }
@@ -206,16 +186,6 @@ impl AutoRouter {
     }
 
     #[test]
-    fn test_forced_stub_rejects_a_share() {
-        let router = AutoRouter::new();
-        assert!(
-            router
-                .resolve_provider("000001.SZ", DataSource::Stub)
-                .is_err()
-        );
-    }
-
-    #[test]
     fn test_data_source_parse() {
         assert_eq!(DataSource::parse("auto").unwrap(), DataSource::Auto);
         assert_eq!(DataSource::parse("binance").unwrap(), DataSource::Binance);
@@ -236,31 +206,6 @@ impl AutoRouter {
 =======
             counter(),
 >>>>>>> ecc1ce61e (feat(trading): HK/US symbol routing with stub mock provider)
-            DiskCache::with_dir(dir.path().to_path_buf()),
-        );
-        let req = sample_req();
-        router
-            .fetch_ohlcv_with_source(&req, DataSource::Binance, false)
-            .await
-            .unwrap();
-        router
-            .fetch_ohlcv_with_source(&req, DataSource::Binance, false)
-            .await
-            .unwrap();
-        assert_eq!(count.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn refresh_bypasses_cache_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let count = Arc::new(AtomicUsize::new(0));
-        let counter = || CountingProvider {
-            count: count.clone(),
-        };
-        let router = AutoRouter::with_providers_and_cache(
-            counter(),
-            counter(),
-<<<<<<< HEAD
             DiskCache::with_dir(dir.path().to_path_buf()),
         );
         let req = sample_req();
