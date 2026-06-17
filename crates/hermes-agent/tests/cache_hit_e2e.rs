@@ -113,16 +113,16 @@ fn anthropic_still_gets_reasoning_echo() {
 async fn compression_digest_is_never_re_summarized() {
     let engine = DefaultContextEngine::new();
 
-    // Create 20 messages — enough to trigger compression with a low target.
-    let msgs: Vec<Value> = (0..20)
+    // Create 40 messages to exceed the foldEconomics MIN_FOLD_TOKENS (400).
+    let msgs: Vec<Value> = (0..40)
         .map(|i| {
             json!({"role": if i % 2 == 0 { "user" } else { "assistant" }, "content": format!("message {i} with some extra padding text to consume tokens and push past the budget threshold")})
         })
         .collect();
 
     // First compression: should produce a digest.
-    let r1 = engine.compress(&msgs, 100).await.unwrap();
-    assert!(r1.len() < 20, "first compress should reduce count");
+    let r1 = engine.compress(&msgs, 200).await.unwrap();
+    assert!(r1.len() < 40, "first compress should reduce count");
 
     // Verify the digest has the compression-summary marker in user role.
     let first_summary = &r1[0];
@@ -137,7 +137,7 @@ async fn compression_digest_is_never_re_summarized() {
 
     // Second compression over the already-compressed result:
     // the existing digest must NOT be re-summarized.
-    let r2 = engine.compress(&r1, 100).await.unwrap();
+    let r2 = engine.compress(&r1, 200).await.unwrap();
     let second_first = &r2[0];
     assert_eq!(second_first["role"], "user");
     // The first digest should still be the leading message, unchanged.
@@ -152,8 +152,8 @@ async fn compression_digest_is_never_re_summarized() {
 async fn stuck_guard_pauses_after_two_consecutive_failures() {
     let engine = DefaultContextEngine::new();
 
-    // 20 bulky messages, target so low no compression can meet it.
-    let msgs: Vec<Value> = (0..20)
+    // 60 bulky messages to exceed foldEconomics MIN_FOLD_TOKENS (400).
+    let msgs: Vec<Value> = (0..60)
         .map(|i| {
             json!({"role": "user", "content": format!("very long message number {i} with lots of padding text to ensure tokens always exceed budget regardless of compression")})
         })
