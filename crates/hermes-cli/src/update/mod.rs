@@ -158,6 +158,8 @@ pub async fn perform_update(opts: UpdateOptions) -> Result<(), AgentError> {
     // Cleanup temp file
     let _ = std::fs::remove_file(&new_binary);
 
+    crate::commands::skills::reconcile_bundled_after_update();
+
     // 8. Success message
     println!("\nSuccessfully updated to v{}!", info.version);
     if cfg!(windows) {

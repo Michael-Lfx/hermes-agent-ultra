@@ -179,7 +179,7 @@
 
 ## 🚧 阻塞项（用户场景，非开发 workaround）
 
-- [ ] **内置 Skills 未 sync 到用户 home** — gateway 启动后 `skills list` 为空，WeCom 查价无法走 SKILL 路由；见 [`docs/issues/2026-06-17-bundled-skills-never-sync.md`](../issues/2026-06-17-bundled-skills-never-sync.md)
+- [x] **内置 Skills 未 sync 到用户 home** — layered runtime + release 打包；见 [`docs/issues/2026-06-17-bundled-skills-never-sync.md`](../issues/2026-06-17-bundled-skills-never-sync.md)
 
 ---
 

@@ -13,7 +13,6 @@ use hermes_cron::{
     CronCompletionEvent, CronError, CronRunner, CronScheduler, FileJobPersistence,
     cron_scheduler_for_data_dir,
 };
-use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::ToolRegistry;
 use hmac::Mac;
 use hmac::{Hmac, KeyInit};
@@ -35,9 +34,9 @@ fn build_live_cron_scheduler(cli: &Cli, data_dir: &Path) -> Result<CronScheduler
 
     let tool_registry = Arc::new(ToolRegistry::new());
     let terminal_backend = build_terminal_backend(&config);
-    let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-    let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-        Arc::new(SkillManager::new(skill_store));
+    let skill_provider = hermes_cli::skills_runtime::build_skill_provider(true)
+        .map_err(|e| AgentError::Config(e.to_string()))?
+        .provider;
     hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
 
     let runner = Arc::new(CronRunner::new(

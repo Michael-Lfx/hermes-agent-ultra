@@ -2,29 +2,53 @@ use std::path::Path;
 
 use bytes::Bytes;
 use hermes_core::AgentError;
+use hermes_skills::{BundledLayout, reset_bundled_skill};
 
 use crate::commands::skills_infra;
 
-pub(crate) fn run_reset(name: Option<String>, skills_dir: &Path) -> Result<(), AgentError> {
+pub(crate) fn run_reset(
+    name: Option<String>,
+    extra: Option<&str>,
+    _skills_dir: &std::path::Path,
+) -> Result<(), AgentError> {
     let skill_name = name.ok_or_else(|| {
-        AgentError::Config("Missing skill name. Usage: hermes skills reset <name>".into())
+        AgentError::Config(
+            "Missing skill name. Usage: hermes skills reset <name> [--restore]".into(),
+        )
     })?;
-    let target = skills_dir.join(&skill_name);
-    if target.exists() {
-        std::fs::remove_dir_all(&target)
-            .map_err(|e| AgentError::Io(format!("Failed to remove skill dir: {}", e)))?;
+    let restore = extra.is_some_and(|e| e.split_whitespace().any(|t| t == "--restore"));
+    if restore {
+        let confirm =
+            extra.is_some_and(|e| e.split_whitespace().any(|t| t == "--yes" || t == "-y"));
+        if !confirm {
+            println!(
+                "Restore will delete your local copy of '{}' and re-copy the bundled version.",
+                skill_name
+            );
+            println!("Re-run with --restore --yes to confirm.");
+            return Ok(());
+        }
     }
-    std::fs::create_dir_all(&target)
-        .map_err(|e| AgentError::Io(format!("Failed to create skill dir: {}", e)))?;
-    std::fs::write(
-        target.join("SKILL.md"),
-        format!(
-            "# {}\n\nReset by CLI. Replace with canonical skill contents.\n",
-            skill_name
-        ),
-    )
-    .map_err(|e| AgentError::Io(format!("Failed to write SKILL.md: {}", e)))?;
-    println!("Skill '{}' reset at {}", skill_name, target.display());
+    let layout = BundledLayout::resolve();
+    if !layout.bundled_exists() {
+        return Err(AgentError::Config(
+            "Bundled skills directory not found; cannot reset bundled skill.".into(),
+        ));
+    }
+    let result = reset_bundled_skill(&layout.sync_config(), &skill_name, restore)
+        .map_err(|e| AgentError::Config(e.to_string()))?;
+    if result.ok {
+        println!("{}", result.message);
+        if let Some(synced) = result.synced {
+            println!(
+                "  synced: copied={}, updated={}",
+                synced.copied.len(),
+                synced.updated.len()
+            );
+        }
+    } else {
+        return Err(AgentError::Config(result.message));
+    }
     Ok(())
 }
 

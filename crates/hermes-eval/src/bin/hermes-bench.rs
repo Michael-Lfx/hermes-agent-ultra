@@ -17,7 +17,6 @@ use hermes_eval::{
     ConfiguredBenchmarkAdapter, EvalError, EvalResult, JsonReporter, Reporter, Runner,
     RunnerConfig, SmokeRollout,
 };
-use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::ToolRegistry;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -203,8 +202,9 @@ async fn run_agent_rollout(
 ) -> EvalResult<hermes_eval::RunRecord> {
     let tool_registry = Arc::new(ToolRegistry::new());
     let terminal_backend = hermes_cli::terminal_backend::build_terminal_backend(config);
-    let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-    let skill_provider: Arc<dyn SkillProvider> = Arc::new(SkillManager::new(skill_store));
+    let skill_provider = hermes_cli::skills_runtime::build_skill_provider(true)
+        .map_err(|e| EvalError::Other(e.to_string()))?
+        .provider;
     hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
     hermes_cli::runtime_tool_wiring::wire_stdio_clarify_backend(&tool_registry);
 

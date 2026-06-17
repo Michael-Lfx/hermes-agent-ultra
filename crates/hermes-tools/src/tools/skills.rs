@@ -199,29 +199,7 @@ impl ToolHandler for SkillViewHandler {
 }
 
 fn default_skill_roots() -> Vec<PathBuf> {
-    let mut roots = vec![hermes_config::skills_dir()];
-    if let Some(home) = user_home_dir() {
-        let legacy = home.join(hermes_config::LEGACY_HOME_DIR).join("skills");
-        if legacy.exists() {
-            roots.push(legacy);
-        }
-    }
-    // Canonical path always comes first — do NOT sort (sort breaks priority).
-    roots.dedup();
-    roots
-}
-
-fn user_home_dir() -> Option<PathBuf> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|v| !v.trim().is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .ok()
-                .filter(|v| !v.trim().is_empty())
-                .map(PathBuf::from)
-        })
+    hermes_skills::skill_search_roots()
 }
 
 fn has_traversal_component(path: &str) -> bool {

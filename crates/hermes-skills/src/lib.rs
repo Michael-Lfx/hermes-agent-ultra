@@ -4,11 +4,14 @@
 //! Provides skill management, local file storage, hub client, security
 //! validation, and versioning.
 
+mod bootstrap;
 mod curator;
 mod curator_prompt;
+mod distribution;
 mod guard;
 mod hub;
 mod hub_lock;
+mod layered_store;
 mod provenance;
 mod skill;
 mod skills_guard;
@@ -17,6 +20,9 @@ mod sync;
 mod usage;
 mod version;
 
+pub use bootstrap::{
+    SkillsBootstrapResult, bootstrap, reconcile_bundled_updates, skill_search_roots,
+};
 pub use curator::{
     AbsorbedDeclaration, ClassificationResult, ConsolidationEntry, CuratorConfig, CuratorError,
     CuratorReviewResult, CuratorRunCounts, CuratorRunRecord, CuratorRunReport, CuratorState,
@@ -26,6 +32,7 @@ pub use curator::{
     run_curator_review, save_curator_state, set_paused, should_run_now, write_curator_report,
 };
 pub use curator_prompt::CURATOR_REVIEW_PROMPT;
+pub use distribution::{BundledLayout, BundledSource};
 pub use guard::{
     MAX_SINGLE_SKILL_FILE_BYTES, MAX_SKILL_FILE_COUNT, SkillGuard, SkillScanFinding,
     SkillScanReport, SkillScanVerdict, SkillTrustLevel, check_skill_structure,
@@ -42,6 +49,7 @@ pub use hub_lock::{
     HUB_LOCK_FILE, HUB_LOCK_VERSION, HUB_STATE_DIR, SkillHubInstalledEntry, SkillsHubLock,
     hub_lock_path, read_hub_lock, resolve_scan_source,
 };
+pub use layered_store::LayeredSkillStore;
 pub use provenance::{
     ASSISTANT_TOOL, BACKGROUND_REVIEW, FOREGROUND, WriteOriginGuard, get_current_write_origin,
     is_background_review, normalize_write_origin, set_current_write_origin,

@@ -16,7 +16,6 @@ use hermes_config::{
     load_user_config_file, save_config_yaml, user_config_field_display, validate_config,
 };
 use hermes_core::AgentError;
-use hermes_skills::{FileSkillStore, SkillManager};
 
 use crate::gateway_main::prompt_yes_no;
 use crate::gateway_runtime::run_gateway_setup;
@@ -113,9 +112,9 @@ pub(crate) async fn run_tools(
         load_config(cli.config_dir.as_deref()).map_err(|e| AgentError::Config(e.to_string()))?;
     let registry = Arc::new(hermes_tools::ToolRegistry::new());
     let terminal_backend = build_terminal_backend(&runtime_config);
-    let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-    let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-        Arc::new(SkillManager::new(skill_store));
+    let skill_provider = hermes_cli::skills_runtime::build_skill_provider(true)
+        .map_err(|e| AgentError::Config(e.to_string()))?
+        .provider;
     hermes_tools::register_builtin_tools(&registry, terminal_backend, skill_provider);
     let tools = registry.list_tools();
     let base: PathBuf = cli
@@ -218,9 +217,9 @@ async fn run_tools_setup_wizard(cli: &Cli) -> Result<(), AgentError> {
         load_config(cli.config_dir.as_deref()).map_err(|e| AgentError::Config(e.to_string()))?;
     let registry = Arc::new(hermes_tools::ToolRegistry::new());
     let terminal_backend = build_terminal_backend(&runtime_config);
-    let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-    let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-        Arc::new(SkillManager::new(skill_store));
+    let skill_provider = hermes_cli::skills_runtime::build_skill_provider(true)
+        .map_err(|e| AgentError::Config(e.to_string()))?
+        .provider;
     hermes_tools::register_builtin_tools(&registry, terminal_backend, skill_provider);
     let mut tools = registry.list_tools();
     if tools.is_empty() {
