@@ -99,6 +99,58 @@
         "error_contains": "not compatible with source=binance"
       },
       "skip": false
+    },
+    {
+      "id": "hk_share_daily",
+      "op": "get_market_data",
+      "input": {
+        "symbol": "0700.HK",
+        "start_date": "2026-05-01",
+        "end_date": "2026-05-10",
+        "interval": "daily"
+      },
+      "expected": {
+        "has_symbol": "0700.HK",
+        "has_interval": "daily",
+        "partial_eq": false,
+        "min_rows": 5,
+        "columns": ["date", "open", "high", "low", "close", "volume"]
+      },
+      "skip": false
+    },
+    {
+      "id": "hk_underscore_daily",
+      "op": "get_market_data",
+      "input": {
+        "symbol": "HK_00700",
+        "start_date": "2026-05-01",
+        "end_date": "2026-05-10",
+        "interval": "daily"
+      },
+      "expected": {
+        "has_symbol": "0700.HK",
+        "has_interval": "daily",
+        "min_rows": 5
+      },
+      "skip": false
+    },
+    {
+      "id": "us_share_daily",
+      "op": "get_market_data",
+      "input": {
+        "symbol": "AAPL",
+        "start_date": "2026-05-01",
+        "end_date": "2026-05-10",
+        "interval": "daily"
+      },
+      "expected": {
+        "has_symbol": "AAPL",
+        "has_interval": "daily",
+        "partial_eq": false,
+        "min_rows": 5,
+        "columns": ["date", "open", "high", "low", "close", "volume"]
+      },
+      "skip": false
     }
   ]
 }
