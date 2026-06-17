@@ -28,7 +28,6 @@ use hermes_gateway::platforms::telegram::TelegramAdapter;
 use hermes_gateway::platforms::webhook::WebhookPayload;
 use hermes_gateway::platforms::whatsapp::{WhatsAppConfig, is_paired};
 use hermes_gateway::tool_backends::ClarifyDispatcher;
-use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::ToolRegistry;
 use tokio::sync::{broadcast, mpsc};
 
@@ -247,9 +246,9 @@ pub(crate) async fn run_gateway(
             let _p6 = _metrics.phase("tools_and_backends");
             let tool_registry = Arc::new(ToolRegistry::new());
             let terminal_backend = build_terminal_backend(&config);
-            let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-            let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-                Arc::new(SkillManager::new(skill_store));
+            let skills_runtime = hermes_cli::skills_runtime::build_skill_provider(true)
+                .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?;
+            let skill_provider = skills_runtime.provider.clone();
             hermes_cli::gateway_inbound_wiring::wire_gateway_inbound_vision(
                 &gateway,
                 &tool_registry,

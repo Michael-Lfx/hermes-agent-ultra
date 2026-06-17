@@ -3,6 +3,7 @@ mod install;
 mod lifecycle;
 mod list;
 mod search;
+pub(crate) mod sync_cmd;
 
 use hermes_core::AgentError;
 
@@ -36,7 +37,10 @@ pub async fn handle_cli_skills(
         "browse" => list::run_browse(&skills_dir),
         "search" => search::run_search(name, &skills_dir).await,
         "install" => install::run_install(name, extra, &skills_dir).await,
-        "reset" => lifecycle::run_reset(name, &skills_dir),
+        "sync" => sync_cmd::run_sync(false),
+        "reset" => lifecycle::run_reset(name, extra.as_deref(), &skills_dir),
+        "opt-out" => sync_cmd::run_opt_out(),
+        "opt-in" => sync_cmd::run_opt_in(extra.as_deref()),
         "subscribe" => lifecycle::run_subscribe(name, extra, &skills_dir),
         "inspect" => lifecycle::run_inspect(name, &skills_dir),
         "uninstall" => lifecycle::run_uninstall(name, &skills_dir),
@@ -51,7 +55,7 @@ pub async fn handle_cli_skills(
         other => {
             println!("Skills action '{}' is not recognized.", other);
             println!(
-                "Available actions: list, browse, search, install, inspect, uninstall, check, update, publish, snapshot, tap, config, quality, audit"
+                "Available actions: list, browse, search, install, sync, reset, opt-out, opt-in, inspect, uninstall, check, update, publish, snapshot, tap, config, quality, audit"
             );
             Ok(())
         }

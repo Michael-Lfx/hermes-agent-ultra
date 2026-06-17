@@ -43,6 +43,7 @@ pub mod providers;
 pub mod runtime_dep_install;
 pub mod runtime_tool_wiring;
 pub mod skills_config;
+pub mod skills_runtime;
 pub mod skin_engine;
 pub mod startup_metrics;
 pub mod systems;

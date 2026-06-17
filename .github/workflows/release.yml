@@ -130,13 +130,17 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-          tar -C dist -czf ${{ matrix.artifact }} ${{ matrix.binary }}
+          cp -r skills dist/skills
+          cp -r optional-skills dist/optional-skills
+          tar -C dist -czf ${{ matrix.artifact }} ${{ matrix.binary }} skills optional-skills
       - name: Package artifact (zip)
         if: contains(matrix.artifact, '.zip')
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/${{ matrix.binary }} dist/
-          cd dist && zip ../${{ matrix.artifact }} ${{ matrix.binary }}
+          cp -r skills dist/skills
+          cp -r optional-skills dist/optional-skills
+          cd dist && zip -r ../${{ matrix.artifact }} ${{ matrix.binary }} skills optional-skills
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -184,7 +188,9 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/hermes dist/
-          tar -C dist -czf ${{ matrix.artifact }} hermes
+          cp -r skills dist/skills
+          cp -r optional-skills dist/optional-skills
+          tar -C dist -czf ${{ matrix.artifact }} hermes skills optional-skills
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:

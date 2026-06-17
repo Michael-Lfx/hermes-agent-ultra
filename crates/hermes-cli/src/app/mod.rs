@@ -15,7 +15,6 @@ use hermes_agent::{AgentLoop, InterruptController, SessionPersistence};
 use hermes_config::{hermes_home as hermes_home_dir, load_config, state_dir};
 use hermes_core::AgentError;
 use hermes_cron::cron_scheduler_for_data_dir;
-use hermes_skills::{FileSkillStore, SkillManager};
 use hermes_tools::ToolRegistry;
 use hermes_tools::tools::messaging::MessagingSessionContext;
 
@@ -218,9 +217,9 @@ impl App {
         let stream_handle_shared: Arc<StdMutex<Option<StreamHandle>>> =
             Arc::new(StdMutex::new(None));
         let terminal_backend = build_terminal_backend(&config);
-        let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-        let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-            Arc::new(SkillManager::new(skill_store));
+        let skill_provider = crate::skills_runtime::build_skill_provider(true)
+            .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?
+            .provider;
         hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
         crate::moa_wiring::wire_mixture_of_agents_backend(&tool_registry, Arc::new(config.clone()));
         let live_count =

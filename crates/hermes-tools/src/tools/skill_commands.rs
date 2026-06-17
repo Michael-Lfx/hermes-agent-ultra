@@ -151,17 +151,7 @@ impl Default for SkillCommandRegistry {
 
 /// Default installed skill roots shared by CLI and gateway surfaces.
 pub fn default_skill_roots() -> Vec<PathBuf> {
-    let mut roots = vec![hermes_config::skills_dir()];
-    if let Some(home) = std::env::var("HOME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from)
-    {
-        roots.push(home.join(".hermes").join("skills"));
-    }
-    roots.sort();
-    roots.dedup();
-    roots
+    hermes_skills::skill_search_roots()
 }
 
 fn normalize_selector(raw: &str) -> String {

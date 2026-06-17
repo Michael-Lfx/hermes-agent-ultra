@@ -132,7 +132,6 @@ pub async fn handle_cli_chat(
     use hermes_config::load_config;
     use hermes_core::MessageRole;
     use hermes_cron::cron_scheduler_for_data_dir;
-    use hermes_skills::{FileSkillStore, SkillManager};
     use hermes_tools::ToolRegistry;
 
     if let Some(skill) = &preload_skill {
@@ -171,9 +170,9 @@ pub async fn handle_cli_chat(
     let tool_registry = Arc::new(ToolRegistry::new());
     let tool_schemas = if tools_enabled {
         let terminal_backend = build_terminal_backend(&config);
-        let skill_store = Arc::new(FileSkillStore::new(FileSkillStore::default_dir()));
-        let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-            Arc::new(SkillManager::new(skill_store));
+        let skills_runtime = crate::skills_runtime::build_skill_provider(true)
+            .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?;
+        let skill_provider = skills_runtime.provider;
         hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
         crate::moa_wiring::wire_mixture_of_agents_backend(&tool_registry, Arc::new(config.clone()));
         let live_count =

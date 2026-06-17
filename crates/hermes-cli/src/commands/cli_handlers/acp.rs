@@ -223,11 +223,9 @@ pub async fn handle_cli_acp(action: Option<String>) -> Result<(), hermes_core::A
 
             let tool_registry = Arc::new(hermes_tools::ToolRegistry::new());
             let terminal_backend = crate::terminal_backend::build_terminal_backend(&config);
-            let skill_store = Arc::new(hermes_skills::FileSkillStore::new(
-                hermes_skills::FileSkillStore::default_dir(),
-            ));
-            let skill_provider: Arc<dyn hermes_core::SkillProvider> =
-                Arc::new(hermes_skills::SkillManager::new(skill_store));
+            let skill_provider = crate::skills_runtime::build_skill_provider(true)
+                .map_err(|e| hermes_core::AgentError::Config(e.to_string()))?
+                .provider;
             hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
             crate::runtime_tool_wiring::wire_stdio_clarify_backend(&tool_registry);
             let cron_data_dir = hermes_config::cron_dir();
