@@ -610,6 +610,9 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
 <<<<<<< HEAD
     "trading-debate",
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 5fe790073 (feat(trading): Hermes memory, session_search, and trading-cron integration)
     "trading-cron",
     "trading-research",
     "webhook-subscriptions",
