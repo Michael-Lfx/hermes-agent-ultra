@@ -22,6 +22,8 @@ pub mod meta_search;
 pub mod session_search;
 pub mod spotify;
 pub mod todo;
+#[cfg(feature = "trading-research")]
+pub mod trading;
 pub mod tts;
 pub mod video;
 pub mod video_gen;

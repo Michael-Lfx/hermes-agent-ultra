@@ -19,9 +19,14 @@ members = [
     "crates/hermes-auth",
     "crates/hermes-telemetry",
     "crates/hermes-insights",
-    "crates/hermes-parity-tests",
+    "crates/hermes-server-client",
     "crates/hermes-acp-server",
     "crates/hermes-wiki",
+    "crates/hermes-trading",
+    "crates/hermes-parity-tests",
+    "crates/hermes-strategies",
+    "crates/hermes-market-watch",
+    "crates/hermes-copilot-lite",
 ]
 
 [workspace.package]
@@ -50,9 +55,14 @@ hermes-http = { path = "crates/hermes-http" }
 hermes-auth = { path = "crates/hermes-auth" }
 hermes-telemetry = { path = "crates/hermes-telemetry" }
 hermes-insights = { path = "crates/hermes-insights" }
-hermes-parity-tests = { path = "crates/hermes-parity-tests" }
+hermes-server-client = { path = "crates/hermes-server-client" }
 hermes-acp-server = { path = "crates/hermes-acp-server" }
 hermes-wiki = { path = "crates/hermes-wiki" }
+hermes-trading = { path = "crates/hermes-trading" }
+hermes-parity-tests = { path = "crates/hermes-parity-tests" }
+hermes-strategies = { path = "crates/hermes-strategies" }
+hermes-market-watch = { path = "crates/hermes-market-watch" }
+hermes-copilot-lite = { path = "crates/hermes-copilot-lite" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -108,4 +118,6 @@ proptest = "1"
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["download-binaries"] }
 which = "8"
 qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+rqrr = "0.9"
 indicatif = "0.18"

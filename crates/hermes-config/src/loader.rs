@@ -7,12 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // Re-export ConfigError for convenience
 pub use hermes_core::ConfigError;
 
-use crate::config::{
-    GatewayConfig, LlmProviderConfig, ProxyConfig, TerminalBackendType, TerminalConfig, WebConfig,
-};
+use crate::config::{GatewayConfig, ProxyConfig, TerminalBackendType, TerminalConfig, WebConfig};
 use crate::merge::merge_configs;
 use crate::paths;
-use crate::platform::PlatformConfig;
 
 // ---------------------------------------------------------------------------
 // ConfigError conversion helpers
@@ -571,7 +568,7 @@ fn normalize_provider_secrets(config: &mut GatewayConfig) {
     });
 }
 
-const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider";
+const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider, server.enabled|base_url|wechat_base_url|channel|app|invite_code|auth.preferred_method|auth.poll_interval_ms|auth.otp_ttl_seconds|auth.heartbeat_interval_secs";
 
 fn parse_bool_config_value(value: &str, field: &str) -> Result<bool, ConfigError> {
     let normalized = value.trim().to_ascii_lowercase();
@@ -820,7 +817,7 @@ fn apply_user_config_patch_dotted(
             let entry = config
                 .auxiliary
                 .entry((*task).to_string())
-                .or_insert_with(crate::config::AuxiliaryTaskConfig::default);
+                .or_default();
             match *field {
                 "provider" => entry.provider = value.to_string(),
                 "model" => entry.model = value.to_string(),
@@ -854,7 +851,7 @@ fn apply_user_config_patch_dotted(
             let entry = config
                 .llm_providers
                 .entry((*provider).to_string())
-                .or_insert_with(LlmProviderConfig::default);
+                .or_default();
             match *field {
                 "api_key" => entry.api_key = Some(value.to_string()),
                 "api_key_env" => entry.api_key_env = Some(value.to_string()),
@@ -1051,6 +1048,80 @@ fn apply_user_config_patch_dotted(
             } else {
                 Some(trimmed.to_string())
             };
+        }
+        ["server", "enabled"] => {
+            config.server.enabled = parse_bool_config_value(value, "server.enabled")?;
+        }
+        ["server", "base_url"] => {
+            config.server.base_url = value.trim().trim_end_matches('/').to_string();
+        }
+        ["server", "wechat_base_url"] => {
+            config.server.wechat_base_url = value.trim().trim_end_matches('/').to_string();
+        }
+        ["server", "channel"] => {
+            let channel = value.trim().to_string();
+            config.server.channel = channel.clone();
+            crate::server::sync_wechat_app_id_for_channel(&mut config.server.auth, &channel);
+        }
+        ["server", "app"] => {
+            config.server.app = value.trim().to_string();
+        }
+        ["server", "invite_code"] => {
+            config.server.invite_code = value.trim().to_string();
+        }
+        ["server", "auth", "preferred_method"] => {
+            let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+            config.server.auth.preferred_method = match normalized.as_str() {
+                "wechat" | "wechat_qr" | "wx" => crate::server::ServerLoginMethod::WechatQr,
+                "email" | "email_otp" | "otp" => crate::server::ServerLoginMethod::EmailOtp,
+                _ => {
+                    return Err(ConfigError::ValidationError(format!(
+                        "server.auth.preferred_method must be wechat_qr or email_otp: {}",
+                        value
+                    )));
+                }
+            };
+        }
+        ["server", "auth", "poll_interval_ms"] => {
+            config.server.auth.poll_interval_ms = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "server.auth.poll_interval_ms must be a positive integer: {}",
+                    value
+                ))
+            })?;
+        }
+        ["server", "auth", "otp_ttl_seconds"] => {
+            config.server.auth.otp_ttl_seconds = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "server.auth.otp_ttl_seconds must be a positive integer: {}",
+                    value
+                ))
+            })?;
+        }
+        ["server", "auth", "heartbeat_interval_secs"] => {
+            config.server.auth.heartbeat_interval_secs = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "server.auth.heartbeat_interval_secs must be a positive integer: {}",
+                    value
+                ))
+            })?;
+        }
+        ["server", "auth", "wechat_app_id"] => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                config.server.auth.wechat_app_id.clear();
+            } else if crate::server::is_valid_wechat_open_app_id(trimmed) {
+                config.server.auth.wechat_app_id = trimmed.to_string();
+            } else {
+                return Err(ConfigError::ValidationError(format!(
+                    "invalid WeChat Open Platform app id '{trimmed}' \
+                     (expected wx + 16 hex chars, e.g. wxc7a38fe55e162569 for flowy). \
+                     Use server.app for the client app identifier (flowymes), not wechat_app_id"
+                )));
+            }
+        }
+        ["server", "llm", "default_model"] => {
+            config.server.llm.default_model = value.trim().to_string();
         }
         _ => {
             return Err(ConfigError::NotFound(format!(
@@ -1374,6 +1445,53 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
             .filter(|s| !s.is_empty())
             .map(mask_secret)
             .unwrap_or_else(|| "(not set)".to_string())),
+        ["server", "enabled"] => Ok(config.server.enabled.to_string()),
+        ["server", "base_url"] => Ok(if config.server.base_url.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.server.base_url.clone()
+        }),
+        ["server", "wechat_base_url"] => Ok(if config.server.wechat_base_url.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.server.wechat_base_url.clone()
+        }),
+        ["server", "channel"] => Ok(config.server.channel.clone()),
+        ["server", "app"] => Ok(config.server.app.clone()),
+        ["server", "invite_code"] => Ok(if config.server.invite_code.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.server.invite_code.clone()
+        }),
+        ["server", "auth", "preferred_method"] => {
+            Ok(config.server.auth.preferred_method.as_str().to_string())
+        }
+        ["server", "auth", "poll_interval_ms"] => {
+            Ok(config.server.auth.poll_interval_ms.to_string())
+        }
+        ["server", "auth", "otp_ttl_seconds"] => Ok(config.server.auth.otp_ttl_seconds.to_string()),
+        ["server", "auth", "heartbeat_interval_secs"] => {
+            Ok(config.server.auth.heartbeat_interval_secs.to_string())
+        }
+        ["server", "auth", "wechat_app_id"] => {
+            let effective = config.server.effective_wechat_app_id();
+            let stored = config.server.auth.wechat_app_id.trim();
+            Ok(if stored.is_empty() {
+                format!("(not set, using channel default: {effective})")
+            } else if !crate::server::is_valid_wechat_open_app_id(stored) {
+                format!("(invalid stored value '{stored}', using channel default: {effective})")
+            } else {
+                effective
+            })
+        }
+        ["server", "llm", "default_model"] => {
+            let effective = config.server.effective_default_llm_model();
+            Ok(if config.server.llm.default_model.trim().is_empty() {
+                format!("(not set, using built-in default: {effective})")
+            } else {
+                effective
+            })
+        }
         _ => Err(ConfigError::NotFound(format!(
             "unknown config key: {} (supported: {})",
             key, CONFIG_PATCH_HELP
@@ -1763,15 +1881,14 @@ fn parse_list_env(value: &str, split_colon: bool) -> Vec<String> {
     if trimmed.is_empty() {
         return Vec::new();
     }
-    if trimmed.starts_with('[') {
-        if let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
+    if trimmed.starts_with('[')
+        && let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
             return values
                 .into_iter()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
                 .collect();
         }
-    }
     let delimiter = if trimmed.contains(',') || !split_colon {
         ','
     } else {
@@ -2110,11 +2227,63 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             config.insights.contribution.auth_token = Some(trimmed.to_string());
         }
     }
-    if let Ok(v) = std::env::var("HERMES_KANBAN_DISPATCH_IN_GATEWAY") {
-        if let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v) {
-            config.kanban.dispatch_in_gateway = parsed;
+    if let Ok(v) = std::env::var("HERMES_SERVER_URL") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            config.server.base_url = trimmed.to_string();
         }
     }
+    if let Ok(v) = std::env::var("HERMES_SERVER_ENABLED")
+        && let Some(parsed) = parse_bool_env("HERMES_SERVER_ENABLED", &v) {
+            config.server.enabled = parsed;
+        }
+    if let Ok(v) = std::env::var("HERMES_SERVER_TOKEN") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            // Token is read at runtime from env by hermes-server-client; no config field needed.
+            let _ = trimmed;
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_SERVER_CHANNEL") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            config.server.channel = trimmed.to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_SERVER_APP") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            config.server.app = trimmed.to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_SERVER_WECHAT_URL") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            config.server.wechat_base_url = trimmed.to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_SERVER_WECHAT_APP_ID") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            if crate::server::is_valid_wechat_open_app_id(trimmed) {
+                config.server.auth.wechat_app_id = trimmed.to_string();
+            } else {
+                tracing::warn!(
+                    "HERMES_SERVER_WECHAT_APP_ID ignored — invalid WeChat Open Platform app id: {trimmed}"
+                );
+            }
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_SERVER_INVITE_CODE") {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            config.server.invite_code = trimmed.to_string();
+        }
+    }
+    if let Ok(v) = std::env::var("HERMES_KANBAN_DISPATCH_IN_GATEWAY")
+        && let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v) {
+            config.kanban.dispatch_in_gateway = parsed;
+        }
     if let Ok(v) = std::env::var("HERMES_AGENT_API_MAX_RETRIES") {
         if let Ok(parsed) = v.parse::<u32>() {
             config.agent.api_max_retries = Some(parsed);
@@ -2145,23 +2314,20 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             .get_or_insert_with(crate::config::ProxyConfig::default);
         proxy.socks_proxy = Some(v);
     }
-    if let Ok(v) = std::env::var("HERMES_LLM_API_KEY") {
-        if !v.trim().is_empty() {
+    if let Ok(v) = std::env::var("HERMES_LLM_API_KEY")
+        && !v.trim().is_empty() {
             for provider in config.llm_providers.values_mut() {
                 provider.api_key = Some(v.clone());
             }
         }
-    }
-    if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_RESULT_CHARS") {
-        if let Ok(n) = v.parse::<usize>() {
+    if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_RESULT_CHARS")
+        && let Ok(n) = v.parse::<usize>() {
             config.budget.max_result_size_chars = n;
         }
-    }
-    if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_AGGREGATE_CHARS") {
-        if let Ok(n) = v.parse::<usize>() {
+    if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_AGGREGATE_CHARS")
+        && let Ok(n) = v.parse::<usize>() {
             config.budget.max_aggregate_chars = n;
         }
-    }
 
     // Provider-specific API keys (prefer HERMES_OPENAI_API_KEY over legacy OPENAI_API_KEY).
     let openai_env = std::env::var("HERMES_OPENAI_API_KEY")
@@ -2176,7 +2342,7 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
         config
             .llm_providers
             .entry("openai".to_string())
-            .or_insert_with(LlmProviderConfig::default)
+            .or_default()
             .api_key = Some(v);
     }
     let mut env_overridden_providers = std::collections::HashSet::new();
@@ -2207,7 +2373,7 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             config
                 .llm_providers
                 .entry(provider_name.to_string())
-                .or_insert_with(LlmProviderConfig::default)
+                .or_default()
                 .api_key = Some(v);
         }
     }
@@ -2224,37 +2390,34 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             config
                 .llm_providers
                 .entry(provider_name.to_string())
-                .or_insert_with(LlmProviderConfig::default)
+                .or_default()
                 .base_url = Some(v);
         }
     }
 
-    if let Ok(v) = std::env::var("HERMES_BASE_URL") {
-        if !v.trim().is_empty() {
+    if let Ok(v) = std::env::var("HERMES_BASE_URL")
+        && !v.trim().is_empty() {
             for provider in config.llm_providers.values_mut() {
                 provider.base_url = Some(v.clone());
             }
         }
-    }
 
-    if let Ok(v) = std::env::var("OPENROUTER_BASE_URL") {
-        if !v.trim().is_empty() {
+    if let Ok(v) = std::env::var("OPENROUTER_BASE_URL")
+        && !v.trim().is_empty() {
             config
                 .llm_providers
                 .entry("openrouter".to_string())
-                .or_insert_with(LlmProviderConfig::default)
+                .or_default()
                 .base_url = Some(v);
         }
-    }
-    if let Ok(v) = std::env::var("MINIMAX_BASE_URL") {
-        if !v.trim().is_empty() {
+    if let Ok(v) = std::env::var("MINIMAX_BASE_URL")
+        && !v.trim().is_empty() {
             config
                 .llm_providers
                 .entry("minimax".to_string())
-                .or_insert_with(LlmProviderConfig::default)
+                .or_default()
                 .base_url = Some(v);
         }
-    }
 
     if let Ok(token) = std::env::var("SLACK_BOT_TOKEN") {
         let trimmed = token.trim();
@@ -2262,7 +2425,7 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
             let slack = config
                 .platforms
                 .entry("slack".to_string())
-                .or_insert_with(PlatformConfig::default);
+                .or_default();
             let enabled_was_explicit = slack
                 .extra
                 .remove("_enabled_explicit")
@@ -2286,6 +2449,7 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
 ///
 /// Checks:
 /// - max_turns > 0
+///
 /// Resolve the prefill JSON file using upstream-compatible precedence.
 pub fn resolve_prefill_messages_file(config: &GatewayConfig) -> Option<String> {
     env_var_nonempty("HERMES_PREFILL_MESSAGES_FILE")
@@ -2373,16 +2537,14 @@ fn trimmed_optional(value: Option<&str>) -> Option<String> {
 
 fn expand_home_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
-    if trimmed == "~" {
-        if let Some(home) = std::env::var_os("HOME") {
+    if trimmed == "~"
+        && let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home);
         }
-    }
-    if let Some(rest) = trimmed.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
+    if let Some(rest) = trimmed.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME") {
             return PathBuf::from(home).join(rest);
         }
-    }
     PathBuf::from(trimmed)
 }
 
@@ -2406,13 +2568,12 @@ pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
     let _ = config.session.reset_policy.validate();
 
     for (name, provider) in &config.llm_providers {
-        if let Some(key) = &provider.api_key {
-            if key.trim().is_empty() {
+        if let Some(key) = &provider.api_key
+            && key.trim().is_empty() {
                 return Err(ConfigError::ValidationError(format!(
                     "llm_providers.{name}.api_key must not be empty"
                 )));
             }
-        }
         if let Some(api_mode) = &provider.api_mode {
             normalize_provider_api_mode(api_mode).map_err(|_| {
                 ConfigError::ValidationError(format!(
@@ -2420,22 +2581,20 @@ pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
                 ))
             })?;
         }
-        if let Some(timeout) = provider.request_timeout_seconds {
-            if !timeout.is_finite() || timeout <= 0.0 {
+        if let Some(timeout) = provider.request_timeout_seconds
+            && (!timeout.is_finite() || timeout <= 0.0) {
                 return Err(ConfigError::ValidationError(format!(
                     "llm_providers.{name}.request_timeout_seconds must be a positive finite number"
                 )));
             }
-        }
     }
 
-    if let Some(api_key) = &config.delegation.api_key {
-        if api_key.trim().is_empty() {
+    if let Some(api_key) = &config.delegation.api_key
+        && api_key.trim().is_empty() {
             return Err(ConfigError::ValidationError(
                 "delegation.api_key must not be empty".into(),
             ));
         }
-    }
 
     Ok(())
 }
@@ -3081,6 +3240,32 @@ custom_providers:
         let loaded = load_user_config_file(&path).unwrap();
         assert_eq!(loaded.model.as_deref(), Some("openai:gpt-4o-mini"));
         assert_eq!(loaded.max_turns, 15);
+    }
+
+    #[test]
+    fn apply_patch_server_fields() {
+        let mut c = GatewayConfig::default();
+        apply_user_config_patch(
+            &mut c,
+            "server.base_url",
+            "https://server.flowyaipc.cn/claw",
+        )
+        .unwrap();
+        apply_user_config_patch(&mut c, "server.channel", "flowy").unwrap();
+        apply_user_config_patch(&mut c, "server.app", "flowymes").unwrap();
+        apply_user_config_patch(&mut c, "server.auth.preferred_method", "email").unwrap();
+        assert_eq!(
+            c.server.base_url,
+            "https://server.flowyaipc.cn/claw"
+        );
+        assert_eq!(c.server.channel, "flowy");
+        assert_eq!(c.server.app, "flowymes");
+        assert_eq!(
+            c.server.auth.preferred_method,
+            crate::server::ServerLoginMethod::EmailOtp
+        );
+        let display = user_config_field_display(&c, "server.base_url").unwrap();
+        assert_eq!(display, "https://server.flowyaipc.cn/claw");
     }
 
     #[test]

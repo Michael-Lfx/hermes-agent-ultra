@@ -483,6 +483,15 @@ pub(crate) async fn run(cli: Cli) {
             )
             .await
         }
+        CliCommand::Server { action, rest, method } => {
+            hermes_cli::commands::handle_cli_server(
+                action,
+                rest,
+                method,
+                cli.config_dir.as_deref(),
+            )
+            .await
+        }
         CliCommand::Mcp {
             action,
             name,

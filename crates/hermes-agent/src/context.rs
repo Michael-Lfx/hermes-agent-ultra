@@ -111,17 +111,18 @@ impl ContextManager {
     pub fn truncate_to_budget(&mut self, budget: &BudgetConfig) {
         let max_chars = budget.max_aggregate_chars.min(self.max_context_chars);
 
+
+        // Fast path: incremental counter already tracks total; skip Vec alloc when within budget.
+        if self.total_message_chars <= max_chars {
+            return;
+        }
+
         // Compute per-message char lengths once (single forward scan).
         let lens: Vec<usize> = self
             .messages
             .iter()
             .map(|m| m.content.as_deref().map(str::len).unwrap_or(0))
             .collect();
-
-        let total_chars: usize = lens.iter().sum();
-        if total_chars <= max_chars {
-            return;
-        }
 
         let n = self.messages.len();
 
@@ -561,18 +562,24 @@ pub fn load_builtin_memory_snapshot(
 
 /// Builder for assembling the full system prompt from multiple layers.
 ///
-/// Layers (in order):
+/// Static layers (cache-stable across sessions, same config):
 /// 1. SOUL.md personality (or default identity)
 /// 2. User/gateway system prompt (if provided)
-/// 3. Memory context block (from MemoryManager)
-/// 4. Tool descriptions / guidance
-/// 5. Skill prompts (if preloaded)
+/// 3. Tool guidance / enforcement guidance
+/// 4. Memory context block (from MemoryManager)
+/// 5. Skill prompts
 /// 6. Context files from `.hermes/context/`
-/// 7. Current date/time
-/// 8. Working directory info
+/// 7. Code index repo map
+///
+/// Dynamic layers (per-session, NOT included in the cached static prefix):
+/// - Timestamp / session ID / model / provider
+/// - Provider-specific identity hints (Alibaba model name)
+/// - Environment hints (WSL, terminal backend)
+/// - Platform hint (telegram, cli, webui)
 pub struct SystemPromptBuilder {
-    parts: Vec<String>,
-    /// Cached assembled prompt.
+    static_parts: Vec<String>,
+    dynamic_parts: Vec<String>,
+    /// Cached assembled static prompt.
     cached: Option<String>,
 }
 
@@ -580,14 +587,15 @@ impl SystemPromptBuilder {
     /// Create a new empty builder.
     pub fn new() -> Self {
         Self {
-            parts: Vec::new(),
+            static_parts: Vec::new(),
+            dynamic_parts: Vec::new(),
             cached: None,
         }
     }
 
     /// Add the SOUL.md personality or default identity.
     pub fn with_personality(mut self, soul_content: Option<&str>) -> Self {
-        self.parts
+        self.static_parts
             .push(soul_content.unwrap_or(DEFAULT_AGENT_IDENTITY).to_string());
         self.cached = None;
         self
@@ -596,7 +604,7 @@ impl SystemPromptBuilder {
     /// Add a user/gateway system prompt.
     pub fn with_system_message(mut self, message: &str) -> Self {
         if !message.trim().is_empty() {
-            self.parts.push(message.to_string());
+            self.static_parts.push(message.to_string());
             self.cached = None;
         }
         self
@@ -605,7 +613,7 @@ impl SystemPromptBuilder {
     /// Add memory context block.
     pub fn with_memory_context(mut self, memory_block: &str) -> Self {
         if !memory_block.trim().is_empty() {
-            self.parts.push(memory_block.to_string());
+            self.static_parts.push(memory_block.to_string());
             self.cached = None;
         }
         self
@@ -614,7 +622,7 @@ impl SystemPromptBuilder {
     /// Add tool guidance text.
     pub fn with_tool_guidance(mut self, guidance: &str) -> Self {
         if !guidance.trim().is_empty() {
-            self.parts.push(guidance.to_string());
+            self.static_parts.push(guidance.to_string());
             self.cached = None;
         }
         self
@@ -623,7 +631,7 @@ impl SystemPromptBuilder {
     /// Add preloaded skill prompts.
     pub fn with_skills_prompt(mut self, skills_prompt: &str) -> Self {
         if !skills_prompt.trim().is_empty() {
-            self.parts.push(skills_prompt.to_string());
+            self.static_parts.push(skills_prompt.to_string());
             self.cached = None;
         }
         self
@@ -632,13 +640,16 @@ impl SystemPromptBuilder {
     /// Add context files content.
     pub fn with_context_files(mut self, context_content: &str) -> Self {
         if !context_content.trim().is_empty() {
-            self.parts.push(context_content.to_string());
+            self.static_parts.push(context_content.to_string());
             self.cached = None;
         }
         self
     }
 
     /// Add current date/time and optional metadata (Python `system_prompt.build_system_prompt_parts`).
+    ///
+    /// Goes into the dynamic tier so the stable static prefix is not invalidated
+    /// when the date, model, or session ID changes.
     pub fn with_timestamp(
         mut self,
         model: Option<&str>,
@@ -656,34 +667,64 @@ impl SystemPromptBuilder {
         if let Some(p) = provider {
             line.push_str(&format!("\nProvider: {p}"));
         }
-        self.parts.push(line);
-        self.cached = None;
+        self.dynamic_parts.push(line);
         self
     }
 
-    /// Add an arbitrary text block.
+    /// Add an arbitrary text block to the static (cached) tier.
     pub fn with_block(mut self, block: &str) -> Self {
         if !block.trim().is_empty() {
-            self.parts.push(block.to_string());
+            self.static_parts.push(block.to_string());
             self.cached = None;
         }
         self
     }
 
-    /// Build and cache the assembled system prompt.
+    /// Add an arbitrary text block to the dynamic (per-session) tier.
+    ///
+    /// Dynamic blocks are not part of the cached prefix — use for content that
+    /// changes every session (timestamps, env hints, platform hints).
+    pub fn with_dynamic_block(mut self, block: &str) -> Self {
+        if !block.trim().is_empty() {
+            self.dynamic_parts.push(block.to_string());
+        }
+        self
+    }
+
+    /// Build and cache the static portion of the system prompt.
     pub fn build(&mut self) -> &str {
         if self.cached.is_none() {
-            self.cached = Some(self.parts.join("\n\n"));
+            self.cached = Some(self.static_parts.join("\n\n"));
         }
         self.cached.as_deref().unwrap_or("")
     }
 
-    /// Invalidate the cached prompt (call after personality/config changes).
+    /// Build the dynamic (per-session) suffix.
+    pub fn build_dynamic(&self) -> String {
+        self.dynamic_parts.join("\n\n")
+    }
+
+    /// Build the full system prompt (static + dynamic) as a single string.
+    ///
+    /// Used for backward-compat session persistence and restored-session paths.
+    pub fn build_full(&mut self) -> String {
+        let static_str = self.build().to_string();
+        let dynamic_str = self.build_dynamic();
+        if dynamic_str.is_empty() {
+            static_str
+        } else if static_str.is_empty() {
+            dynamic_str
+        } else {
+            format!("{static_str}\n\n{dynamic_str}")
+        }
+    }
+
+    /// Invalidate the cached static prompt (call after personality/config changes).
     pub fn invalidate(&mut self) {
         self.cached = None;
     }
 
-    /// Get the cached prompt without rebuilding.
+    /// Get the cached static prompt without rebuilding.
     pub fn cached(&self) -> Option<&str> {
         self.cached.as_deref()
     }
@@ -839,14 +880,26 @@ mod tests {
             .with_memory_context("<memory-context>User likes Rust</memory-context>")
             .with_timestamp(Some("gpt-4o"), None, None);
 
-        let prompt = builder.build();
-        assert!(prompt.contains("You are Hermes."));
-        assert!(prompt.contains("Be concise."));
-        assert!(prompt.contains("User likes Rust"));
-        assert!(prompt.contains("gpt-4o"));
-        assert!(prompt.contains("Conversation started:"));
-        assert!(!prompt.contains(" AM"));
-        assert!(!prompt.contains(" PM"));
+        // Static prefix should not contain dynamic content.
+        let static_prompt = builder.build();
+        assert!(static_prompt.contains("You are Hermes."));
+        assert!(static_prompt.contains("Be concise."));
+        assert!(static_prompt.contains("User likes Rust"));
+        assert!(!static_prompt.contains("gpt-4o"), "model should be in dynamic tier");
+        assert!(!static_prompt.contains("Conversation started:"), "timestamp should be in dynamic tier");
+
+        // Dynamic suffix should contain timestamp/model metadata.
+        let dynamic = builder.build_dynamic();
+        assert!(dynamic.contains("gpt-4o"));
+        assert!(dynamic.contains("Conversation started:"));
+        assert!(!dynamic.contains(" AM"));
+        assert!(!dynamic.contains(" PM"));
+
+        // Full prompt combines both.
+        let full = builder.build_full();
+        assert!(full.contains("You are Hermes."));
+        assert!(full.contains("gpt-4o"));
+        assert!(full.contains("Conversation started:"));
     }
 
     #[test]

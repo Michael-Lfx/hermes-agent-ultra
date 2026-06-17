@@ -1,0 +1,28 @@
+[package]
+name = "hermes-trading"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Trading: 0py market data and backtesting for Hermes Agent"
+
+[features]
+default = []
+test-mock = ["dep:wiremock"]
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+hermes-config = { workspace = true }
+wiremock = { version = "0.6", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+wiremock = "0.6"
+tempfile = "3"

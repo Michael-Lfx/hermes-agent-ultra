@@ -459,7 +459,7 @@ mod tests {
         });
         assert_eq!(
             nous_body["tags"],
-            serde_json::json!(["product=hermes-agent"])
+            crate::provider_profiles::nous_portal_tags()
         );
         assert!(nous_body.get("reasoning").is_none());
 
@@ -933,6 +933,42 @@ mod tests {
         });
         let chunk = parse_sse_chunk(&json).unwrap();
         assert_eq!(chunk.finish_reason.as_deref(), Some("stop"));
+        assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 150);
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_input_output_token_field_names() {
+        let json = serde_json::json!({
+            "choices": [{
+                "delta": {},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 150
+            }
+        });
+        let chunk = parse_sse_chunk(&json).unwrap();
+        let usage = chunk.usage.as_ref().unwrap();
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.total_tokens, 150);
+    }
+
+    #[test]
+    fn test_parse_sse_chunk_usage_only_empty_choices() {
+        let json = serde_json::json!({
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 50,
+                "total_tokens": 150
+            }
+        });
+        let chunk = parse_sse_chunk(&json).unwrap();
+        assert!(chunk.delta.is_none());
+        assert!(chunk.finish_reason.is_none());
         assert_eq!(chunk.usage.as_ref().unwrap().total_tokens, 150);
     }
 

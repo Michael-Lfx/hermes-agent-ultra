@@ -27,7 +27,7 @@ path = "src/main.rs"
 [dependencies]
 hermes-core = { workspace = true }
 hermes-agent = { workspace = true }
-hermes-tools = { workspace = true }
+hermes-tools = { workspace = true, features = ["full"] }
 hermes-config = { workspace = true }
 hermes-gateway = { workspace = true, features = [
     "telegram",
@@ -62,6 +62,7 @@ hermes-telemetry = { workspace = true }
 hermes-acp-server = { workspace = true }
 hermes-intelligence = { workspace = true }
 hermes-insights = { workspace = true }
+hermes-server-client = { workspace = true }
 clap = { workspace = true }
 clap_complete = "4"
 ratatui = { workspace = true }

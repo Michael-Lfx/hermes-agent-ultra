@@ -6,8 +6,6 @@
 //!
 //! The built-in provider is always registered first and cannot be removed.
 //! Multiple external providers can be registered and run concurrently.
-//!
-//! Corresponds to Python `agent/memory_manager.py`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Write as _;
@@ -279,7 +277,7 @@ pub fn build_memory_context_block(raw_context: &str) -> String {
         return String::new();
     }
     if FENCE_TAG_RE.is_match(trimmed) {
-        tracing::warn!("Memory provider returned pre-wrapped memory-context; stripping wrapper");
+        tracing::trace!("Memory provider returned pre-wrapped memory-context; stripping wrapper");
     }
     let clean = sanitize_context(trimmed);
     format!(
@@ -390,7 +388,7 @@ impl MemoryManager {
 
     // -- Prefetch / recall --------------------------------------------------
 
-    /// Collect prefetch context from all providers, wrap in memory-context fence.
+    /// Collect prefetch context from all providers as raw text (fencing happens at API assembly).
     pub fn prefetch_all(&self, query: &str, session_id: &str) -> String {
         let query = query.to_string();
         let session_id = session_id.to_string();
@@ -440,7 +438,7 @@ impl MemoryManager {
         };
 
         let raw = parts.join("\n\n");
-        build_memory_context_block(&raw)
+        raw
     }
 
     /// Queue background prefetch on all providers for the next turn.
@@ -679,31 +677,34 @@ fn memory_fusion_top_k() -> usize {
         .unwrap_or(6)
 }
 
-fn memory_fusion_weights() -> HashMap<String, f64> {
-    let raw = std::env::var("HERMES_MEMORY_FUSION_WEIGHTS").unwrap_or_else(|_| {
-        "builtin=1.2,interest=1.1,contextlattice=1.25,supermemory=1.15".to_string()
-    });
-    let mut weights = HashMap::new();
-    for piece in raw.split(',') {
-        let token = piece.trim();
-        if token.is_empty() {
-            continue;
+fn memory_fusion_weights() -> &'static HashMap<String, f64> {
+    static WEIGHTS: std::sync::OnceLock<HashMap<String, f64>> = std::sync::OnceLock::new();
+    WEIGHTS.get_or_init(|| {
+        let raw = std::env::var("HERMES_MEMORY_FUSION_WEIGHTS").unwrap_or_else(|_| {
+            "builtin=1.2,interest=1.1,contextlattice=1.25,supermemory=1.15".to_string()
+        });
+        let mut weights = HashMap::new();
+        for piece in raw.split(',') {
+            let token = piece.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let mut split = token.splitn(2, '=');
+            let Some(name) = split.next().map(str::trim).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let Some(weight) = split
+                .next()
+                .map(str::trim)
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v > 0.0)
+            else {
+                continue;
+            };
+            weights.insert(name.to_ascii_lowercase(), weight);
         }
-        let mut split = token.splitn(2, '=');
-        let Some(name) = split.next().map(str::trim).filter(|s| !s.is_empty()) else {
-            continue;
-        };
-        let Some(weight) = split
-            .next()
-            .map(str::trim)
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite() && *v > 0.0)
-        else {
-            continue;
-        };
-        weights.insert(name.to_ascii_lowercase(), weight);
-    }
-    weights
+        weights
+    })
 }
 
 fn memory_fusion_min_confidence() -> f64 {
@@ -924,7 +925,7 @@ fn fuse_memory_candidates(candidates: Vec<FusedMemoryCandidate>, query: &str) ->
     let mut scored: Vec<(f64, f64, FusedMemoryCandidate)> = candidates
         .into_iter()
         .map(|entry| {
-            let (score, confidence) = score_memory_candidate(&entry, &terms, &weights);
+            let (score, confidence) = score_memory_candidate(&entry, &terms, weights);
             (score, confidence, entry)
         })
         .collect();
@@ -1140,7 +1141,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prefetch_all_wraps_in_fence() {
+    fn test_prefetch_all_returns_raw_unfenced_content() {
         let _guard = FUSION_ENV_LOCK.lock().expect("fusion env lock");
         let orig = std::env::var("HERMES_MEMORY_FUSION_MIN_CONFIDENCE").ok();
         unsafe { std::env::remove_var("HERMES_MEMORY_FUSION_MIN_CONFIDENCE") };
@@ -1149,9 +1150,9 @@ mod tests {
             TestProvider::new("builtin").with_prefetch("User likes Rust."),
         ));
         let ctx = mm.prefetch_all("hello", "");
-        assert!(ctx.contains("<memory-context>"));
         assert!(ctx.contains("User likes Rust."));
-        assert!(ctx.contains("</memory-context>"));
+        assert!(!ctx.contains("<memory-context>"));
+        assert!(!ctx.contains("</memory-context>"));
         match orig {
             Some(v) => unsafe { std::env::set_var("HERMES_MEMORY_FUSION_MIN_CONFIDENCE", v) },
             None => unsafe { std::env::remove_var("HERMES_MEMORY_FUSION_MIN_CONFIDENCE") },

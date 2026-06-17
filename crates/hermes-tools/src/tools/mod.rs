@@ -55,3 +55,14 @@ pub mod video;
 pub mod vision;
 pub mod voice_mode;
 pub mod web;
+
+#[cfg(feature = "trading-research")]
+pub mod trading_backtest;
+#[cfg(feature = "trading-research")]
+pub mod trading_create_strategy;
+#[cfg(feature = "trading-research")]
+pub mod trading_market_data;
+#[cfg(feature = "trading-research")]
+pub mod trading_report;
+#[cfg(feature = "trading-research")]
+pub mod trading_strategies;

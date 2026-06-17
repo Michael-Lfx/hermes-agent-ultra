@@ -234,6 +234,11 @@ pub enum CliCommand {
         last_session: bool,
         outbox_clear: bool,
     },
+    Server {
+        action: Option<String>,
+        rest: Vec<String>,
+        method: Option<String>,
+    },
     Mcp {
         action: Option<String>,
         name: Option<String>,

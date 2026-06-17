@@ -4,20 +4,15 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Python↔Rust parity fixtures and harness for Hermes Agent"
+description = "Golden parity fixtures between Python Hermes and Rust implementations"
 
 [dependencies]
-hermes-config = { workspace = true }
-hermes-core = { workspace = true }
-hermes-intelligence = { workspace = true }
-hermes-tools = { workspace = true }
-hermes-skills = { workspace = true }
+hermes-trading = { workspace = true, features = ["test-mock"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = "0.11"
-thiserror = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tracing = { workspace = true }
 
 [dev-dependencies]
-hermes-cli = { workspace = true }
-clap = { workspace = true }
-regex = { workspace = true }
+hermes-trading = { workspace = true, features = ["test-mock"] }
