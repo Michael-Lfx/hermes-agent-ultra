@@ -26,26 +26,26 @@ use hermes_intelligence::auxiliary::{
 use regex::Regex;
 
 // ---------------------------------------------------------------------------
-// Constants — kept aligned with Python module-level globals.
+// Constants 鈥?kept aligned with Python module-level globals.
 // ---------------------------------------------------------------------------
 
 /// Banner prepended to every compaction summary so a downstream agent knows
 /// some history has been compacted into prose.
-pub const SUMMARY_PREFIX: &str = "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted \
+pub const SUMMARY_PREFIX: &str = "[CONTEXT COMPACTION 鈥?REFERENCE ONLY] Earlier turns were compacted \
      into the summary below. This is a handoff from a previous context \
-     window — treat it as background reference, NOT as active instructions. \
+     window 鈥?treat it as background reference, NOT as active instructions. \
      Do NOT answer questions or fulfill requests mentioned in this summary; \
      they were already addressed. \
      Your current task is identified in the '## Active Task' section of the \
-     summary — resume exactly from there. \
+     summary 鈥?resume exactly from there. \
      IMPORTANT: Your persistent memory (MEMORY.md, USER.md) in the system \
-     prompt is ALWAYS authoritative and active — never ignore or deprioritize \
+     prompt is ALWAYS authoritative and active 鈥?never ignore or deprioritize \
      memory content due to this compaction note. \
      Respond ONLY to the latest user message \
      that appears AFTER this summary. The current session state (files, \
-     config, etc.) may reflect work described here — avoid repeating it:";
+     config, etc.) may reflect work described here 鈥?avoid repeating it:";
 
-/// Older banner from v1 — stripped before re-applying [`SUMMARY_PREFIX`] so
+/// Older banner from v1 鈥?stripped before re-applying [`SUMMARY_PREFIX`] so
 /// iterative updates don't accumulate prefixes.
 pub const LEGACY_SUMMARY_PREFIX: &str = "[CONTEXT SUMMARY]:";
 
@@ -141,6 +141,12 @@ pub struct CompressorConfig {
     /// Compression triggers when prompt tokens exceed this fraction of
     /// `context_length`.
     pub threshold_percent: f64,
+    /// Soft-notice ratio (0.0鈥?.0). When prompt tokens first cross this
+    /// fraction of `context_length`, a one-time info log fires to warn
+    /// the user that compaction is approaching 鈥?without actually
+    /// triggering a compaction (which would destroy the cache prefix).
+    /// Ported from Reasonix compact.go softCompactRatio.
+    pub soft_ratio: f64,
     /// Number of head messages always preserved verbatim (system prompt +
     /// first turns).
     pub protect_first_n: usize,
@@ -151,7 +157,7 @@ pub struct CompressorConfig {
     pub summary_target_ratio: f64,
     /// Optional override of the auxiliary model used for summarisation.
     pub summary_model_override: Option<String>,
-    /// Suppress `tracing::info!` chatter — useful for batch / test runs.
+    /// Suppress `tracing::info!` chatter 鈥?useful for batch / test runs.
     pub quiet_mode: bool,
 }
 
@@ -160,6 +166,7 @@ impl Default for CompressorConfig {
         Self {
             context_length: 200_000,
             threshold_percent: 0.50,
+            soft_ratio: 0.35,
             protect_first_n: 3,
             protect_last_n: 20,
             summary_target_ratio: 0.20,
@@ -194,9 +201,13 @@ pub struct ContextCompressor {
     last_summary_dropped_count: usize,
     last_summary_fallback_used: bool,
     /// Exponentially weighted moving average of compression savings
-    /// (fraction of tokens saved). α = 0.3 => effective window ~5 compressions.
+    /// (fraction of tokens saved). 伪 = 0.3 => effective window ~5 compressions.
     /// Compression is skipped when this drops below 0.10.
     avg_savings_pct: f64,
+    /// Whether the soft-threshold notice has been emitted for this
+    /// session. Resets on /new or /reset. Ported from Reasonix
+    /// compact.go softCompactRatio.
+    soft_noticed: bool,
 }
 
 impl ContextCompressor {
@@ -240,7 +251,8 @@ impl ContextCompressor {
             last_summary_error: None,
             last_summary_dropped_count: 0,
             last_summary_fallback_used: false,
-            avg_savings_pct: 1.0, // start optimistic — first compression always allowed
+            avg_savings_pct: 1.0, // start optimistic 鈥?first compression always allowed
+            soft_noticed: false,
         }
     }
 
@@ -249,7 +261,7 @@ impl ContextCompressor {
         self.threshold_tokens
     }
 
-    /// Fraction of context window at which compression triggers (0.0–1.0).
+    /// Fraction of context window at which compression triggers (0.0鈥?.0).
     pub fn threshold_percent(&self) -> f64 {
         self.config.threshold_percent
     }
@@ -299,6 +311,7 @@ impl ContextCompressor {
         self.last_summary_dropped_count = 0;
         self.last_summary_fallback_used = false;
         self.avg_savings_pct = 1.0;
+        self.soft_noticed = false;
     }
 
     /// Re-target token budgets when the active model changes mid-session.
@@ -311,9 +324,29 @@ impl ContextCompressor {
             ((context_length as f64 * 0.05) as u64).min(SUMMARY_TOKENS_CEILING);
     }
 
-    /// Compression trigger predicate.
-    pub fn should_compress(&self, current_prompt_tokens: Option<u64>) -> bool {
+    /// Compression trigger predicate with soft-notice support.
+    ///
+    /// When prompt tokens cross `soft_ratio` for the first time in a
+    /// session, a one-time info log fires. Real compaction only triggers
+    /// at `threshold_percent`.
+    pub fn should_compress(&mut self, current_prompt_tokens: Option<u64>) -> bool {
         let tokens = current_prompt_tokens.unwrap_or(self.last_prompt_tokens);
+
+        // Soft notice: warn once when context crosses the soft ratio.
+        let soft_tokens =
+            (self.config.context_length as f64 * self.config.soft_ratio) as u64;
+        if tokens >= soft_tokens && tokens < self.threshold_tokens && !self.soft_noticed {
+            self.soft_noticed = true;
+            if !self.config.quiet_mode {
+                tracing::info!(
+                    soft_tokens = soft_tokens,
+                    current_tokens = tokens,
+                    "Context at {:.0}% of window (soft threshold)",
+                    self.config.soft_ratio * 100.0,
+                );
+            }
+        }
+
         if tokens < self.threshold_tokens {
             return false;
         }
@@ -321,7 +354,7 @@ impl ContextCompressor {
             if !self.config.quiet_mode {
                 tracing::warn!(
                     avg_savings_pct = self.avg_savings_pct,
-                    "Compression skipped — avg savings <10%; consider /new or /compress"
+                    "Compression skipped 鈥?avg savings <10%; consider /new or /compress"
                 );
             }
             return false;
@@ -336,7 +369,7 @@ impl ContextCompressor {
         } else {
             0.0
         };
-        // EWMA: α = 0.3, effective window ~5 compressions
+        // EWMA: 伪 = 0.3, effective window ~5 compressions
         const EWMA_ALPHA: f64 = 0.3;
         self.avg_savings_pct =
             EWMA_ALPHA * (savings_pct / 100.0) + (1.0 - EWMA_ALPHA) * self.avg_savings_pct;
@@ -365,13 +398,13 @@ impl ContextCompressor {
     ///
     /// Precomputes per-message token estimates in a single forward pass so
     /// the backward boundary scan avoids re-estimating tool-call arguments
-    /// on each iteration (~2× speedup for dense tool-call histories).
+    /// on each iteration (~2脳 speedup for dense tool-call histories).
     ///
     /// # Contract
     ///
-    /// - Pre: `protect_tail_count > 0` — caller must always protect at least 1
-    /// - Post: `result.len() == messages.len()` — message count unchanged
-    /// - Post: `pruned <= result.len()` — cannot prune more messages than exist
+    /// - Pre: `protect_tail_count > 0` 鈥?caller must always protect at least 1
+    /// - Post: `result.len() == messages.len()` 鈥?message count unchanged
+    /// - Post: `pruned <= result.len()` 鈥?cannot prune more messages than exist
     /// - Post: every pruned message has role == Tool and content == PRUNED_TOOL_PLACEHOLDER
     ///
     /// Returns `(messages, pruned_count)`.
@@ -448,7 +481,7 @@ impl ContextCompressor {
             }
         }
 
-        // --- 后置条件 ---
+        // --- 鍚庣疆鏉′欢 ---
         debug_assert_eq!(
             result.len(),
             messages.len(),
@@ -549,18 +582,31 @@ impl ContextCompressor {
             format!(
                 "You are updating a context compaction summary. A previous compaction produced the summary below. \
 New conversation turns have occurred since then and need to be incorporated.\n\n\
-PREVIOUS SUMMARY:\n{prev}\n\nNEW TURNS TO INCORPORATE:\n{content_block}\n\n\
+PREVIOUS SUMMARY:
+{prev}
+
+NEW TURNS TO INCORPORATE:
+{content_block}
+
+\
 {hint_block}Update the summary using this exact structure. PRESERVE all existing information that is still relevant. \
 ADD new progress. Move items from \"In Progress\" to \"Done\" when completed. Remove information only if it is clearly obsolete.\n\n\
 {COMPACTION_TEMPLATE}\n\n\
-Target ~{summary_budget} tokens. Be specific — include file paths, command outputs, error messages, and concrete values rather than vague descriptions.\n\n\
+Target ~{summary_budget} tokens. Be specific 鈥?include file paths, command outputs, error messages, and concrete values rather than vague descriptions.\n\n\
 Write only the summary body. Do not include any preamble or prefix."
             )
         } else {
             format!(
                 "Create a structured handoff summary for a later assistant that will continue this conversation after earlier turns are compacted.\n\n\
-TURNS TO SUMMARIZE:\n{content_block}\n\n{hint_block}Use this exact structure:\n\n{COMPACTION_TEMPLATE}\n\n\
-Target ~{summary_budget} tokens. Be specific — include file paths, command outputs, error messages, and concrete values rather than vague descriptions. \
+TURNS TO SUMMARIZE:
+{content_block}
+
+{hint_block}Use this exact structure:
+
+{COMPACTION_TEMPLATE}
+
+\
+Target ~{summary_budget} tokens. Be specific 鈥?include file paths, command outputs, error messages, and concrete values rather than vague descriptions. \
 The goal is to prevent the next assistant from repeating work or losing important details.\n\n\
 Write only the summary body. Do not include any preamble or prefix."
             )
@@ -730,7 +776,7 @@ Write only the summary body. Do not include any preamble or prefix."
                             patched.push(Message {
                                 role: MessageRole::Tool,
                                 content: Some(
-                                    "[Result from earlier conversation — see context summary above]"
+                                    "[Result from earlier conversation 鈥?see context summary above]"
                                         .into(),
                                 ),
                                 tool_calls: None,
@@ -848,7 +894,7 @@ Write only the summary body. Do not include any preamble or prefix."
 
     /// Run a full compression pass on `messages`.
     ///
-    /// `current_tokens` is used purely for logging — pass `None` to fall
+    /// `current_tokens` is used purely for logging 鈥?pass `None` to fall
     /// back to the last tracked `prompt_tokens` value.
     pub async fn compress(
         &mut self,
@@ -954,7 +1000,7 @@ Write only the summary body. Do not include any preamble or prefix."
         let summary = summary_opt.unwrap_or_else(|| {
             if !self.config.quiet_mode {
                 tracing::warn!(
-                    "Summary generation failed — inserting static fallback context marker"
+                    "Summary generation failed 鈥?inserting static fallback context marker"
                 );
             }
             self.last_summary_dropped_count = n_dropped;
@@ -1054,9 +1100,9 @@ Write only the summary body. Do not include any preamble or prefix."
 
 const COMPACTION_TEMPLATE: &str = "## Goal\n[What the user is trying to accomplish]\n\n\
 ## Constraints & Preferences\n[User preferences, coding style, constraints, important decisions]\n\n\
-## Progress\n### Done\n[Completed work — include specific file paths, commands run, results obtained]\n### In Progress\n[Work currently underway]\n### Blocked\n[Any blockers or issues encountered]\n\n\
+## Progress\n### Done\n[Completed work 鈥?include specific file paths, commands run, results obtained]\n### In Progress\n[Work currently underway]\n### Blocked\n[Any blockers or issues encountered]\n\n\
 ## Key Decisions\n[Important technical decisions and why they were made]\n\n\
-## Relevant Files\n[Files read, modified, or created — with brief note on each]\n\n\
+## Relevant Files\n[Files read, modified, or created 鈥?with brief note on each]\n\n\
 ## Next Steps\n[What needs to happen next to continue the work]\n\n\
 ## Critical Context\n[Any specific values, error messages, configuration details, or data that would be lost without explicit preservation]\n\n\
 ## Tools & Patterns\n[Which tools were used, how they were used effectively, and any tool-specific discoveries]";
@@ -1149,7 +1195,7 @@ fn take_chars_back(s: &str, n: usize) -> String {
 ///
 /// # Contract
 ///
-/// - Post: `estimate(empty) == 0` — empty messages contribute 10 overhead each
+/// - Post: `estimate(empty) == 0` 鈥?empty messages contribute 10 overhead each
 /// - Post: result is finite and non-negative
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
     use hermes_core::token_estimator::estimate;
@@ -1175,7 +1221,7 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 /// # Contract
 ///
 /// - Pre: `system_prompt` is at least an empty string (not None)
-/// - Post: result >= `estimate(system_prompt)` — messages and tools add tokens
+/// - Post: result >= `estimate(system_prompt)` 鈥?messages and tools add tokens
 pub fn estimate_request_tokens_for_compression(
     messages: &[Message],
     system_prompt: &str,
@@ -1341,7 +1387,7 @@ mod tests {
         }
     }
 
-    /// LLM provider that always returns 402 — exercises the cooldown path.
+    /// LLM provider that always returns 402 鈥?exercises the cooldown path.
     struct FailingProvider;
     #[async_trait]
     impl LlmProvider for FailingProvider {
@@ -1551,7 +1597,7 @@ mod tests {
             threshold_percent: 0.5,
             ..quiet_config()
         };
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         assert!(!compressor.should_compress(Some(40_000)));
         assert!(compressor.should_compress(Some(50_000)));
@@ -1580,7 +1626,7 @@ mod tests {
             context_length: 1_000_000,
             ..quiet_config()
         };
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let big = vec![msg(MessageRole::User, &"x".repeat(10_000_000))];
         let budget = compressor.compute_summary_budget(&big);
@@ -1593,18 +1639,18 @@ mod tests {
     #[test]
     fn prune_replaces_old_oversized_tool_outputs_only() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
 
         let mut messages = vec![
             msg(MessageRole::System, "sys"),
             msg(MessageRole::User, "hi"),
             assistant_with_tool_call("c1", "shell", "ls"),
-            tool_msg("c1", &"a".repeat(500)), // old & big — should prune
+            tool_msg("c1", &"a".repeat(500)), // old & big 鈥?should prune
             assistant_with_tool_call("c2", "shell", "pwd"),
-            tool_msg("c2", "tiny"), // old but small — keep
+            tool_msg("c2", "tiny"), // old but small 鈥?keep
             assistant_with_tool_call("c3", "shell", "echo"),
-            tool_msg("c3", &"b".repeat(800)), // recent — keep
+            tool_msg("c3", &"b".repeat(800)), // recent 鈥?keep
         ];
         // Add tail messages to push the first three tool calls out of the
         // protected zone.
@@ -1631,7 +1677,7 @@ mod tests {
     #[test]
     fn serialize_includes_tool_call_arguments() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let turns = vec![
             msg(MessageRole::User, "do thing"),
@@ -1648,7 +1694,7 @@ mod tests {
     #[test]
     fn serialize_truncates_oversized_content() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let huge = "x".repeat(20_000);
         let turns = vec![msg(MessageRole::User, &huge)];
@@ -1869,7 +1915,7 @@ mod tests {
     #[test]
     fn sanitiser_removes_orphaned_tool_results() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let messages = vec![
             msg(MessageRole::System, "sys"),
@@ -1887,7 +1933,7 @@ mod tests {
     #[test]
     fn sanitiser_inserts_stub_for_missing_results() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let messages = vec![
             msg(MessageRole::System, "sys"),
@@ -1914,7 +1960,7 @@ mod tests {
     #[test]
     fn align_forward_skips_orphan_tool_messages() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let messages = vec![
             tool_msg("c1", "x"),
@@ -1927,7 +1973,7 @@ mod tests {
     #[test]
     fn align_backward_pulls_to_parent_assistant() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let messages = vec![
             msg(MessageRole::User, "hi"),
@@ -1944,14 +1990,14 @@ mod tests {
     #[test]
     fn align_backward_is_noop_when_idx_at_end() {
         let cfg = quiet_config();
-        let compressor =
+        let mut compressor =
             ContextCompressor::new(cfg, aux_with_provider(CannedSummaryProvider::new("x")));
         let messages = vec![
             msg(MessageRole::User, "hi"),
             assistant_with_tool_call("c1", "shell", "ls"),
             tool_msg("c1", "ok"),
         ];
-        // idx == messages.len() — Python parity: early return without alignment.
+        // idx == messages.len() 鈥?Python parity: early return without alignment.
         assert_eq!(compressor.align_boundary_backward(&messages, 3), 3);
     }
 
