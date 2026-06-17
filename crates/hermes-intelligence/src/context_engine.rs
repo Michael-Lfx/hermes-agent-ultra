@@ -87,6 +87,18 @@ pub struct DefaultContextEngine {
     /// CJK-heavy text may benefit from 0.5–1.0.
     /// Ported from Reasonix compact.go tokPerChar.
     pub tokens_per_char: f64,
+=======
+}
+
+impl DefaultContextEngine {
+    pub fn new() -> Self {
+        Self {
+            keep_ratio: 0.33,
+            use_llm_summary: false,
+            consecutive_compacts: AtomicU32::new(0),
+            compact_stuck: AtomicBool::new(false),
+            tokens_per_char: 0.25,
+>>>>>>> 5a68f1ecc (parity(cache): Phase 2 — absorb Reasonix epsilon improvements)
         }
     }
 
@@ -453,58 +465,9 @@ fn is_compression_summary(msg: &Value) -> bool {
 }
 
 <<<<<<< HEAD
-/// Compute the leading prefix length that must never be compacted.
-///
-/// This mirrors Reasonix `pinnedPrefixLen()`:
-///   1. system prompt (index 0) — always pinned
-///   2. first user turn — pinned if ≤ 1500 tokens AND ≤ 15% of target window
-///   3. prior compression summaries — pinned to prevent re-summarization
-fn pinned_prefix_len(messages: &[Value], target_tokens: u64) -> usize {
-    let mut i = 0;
-    let n = messages.len();
-
-    // 1. System prompt is always first, always pinned.
-    if i < n
-        && messages[i]
-            .get("role")
-            .and_then(|r| r.as_str())
-            == Some("system")
-    {
-        i += 1;
-    }
-
-    // 2. First user turn — pin verbatim if it fits within budget.
-    const MAX_PINNED_FIRST_USER_TOKENS: u64 = 1500;
-    const PINNED_FIRST_USER_WINDOW_FRAC: f64 = 0.15;
-    let max_tok = MAX_PINNED_FIRST_USER_TOKENS
-        .min((target_tokens as f64 * PINNED_FIRST_USER_WINDOW_FRAC) as u64);
-    if i < n
-        && messages[i]
-            .get("role")
-            .and_then(|r| r.as_str())
-            == Some("user")
-        && !is_compression_summary(&messages[i])
-    {
-        let content = messages[i]
-            .get("content")
-            .and_then(|c| c.as_str())
-            .unwrap_or("");
-        if estimate_tokens_rough(content) <= max_tok {
-            i += 1;
-        }
-    }
-
-    // 3. Prior compression summaries — identified by the
-    //    <compression-summary> marker, always pinned.
-    while i < n && is_compression_summary(&messages[i]) {
-        i += 1;
-    }
-
-    i
-}
-
+<<<<<<< HEAD
 =======
->>>>>>> 19bffab55 (parity(cache): absorb Reasonix DeepSeek prefix-caching advantages)
+>>>>>>> 5a68f1ecc (parity(cache): Phase 2 — absorb Reasonix epsilon improvements)
 // ---------------------------------------------------------------------------
 // ImportanceBasedEngine — token budget with message scoring
 // ---------------------------------------------------------------------------
