@@ -91,7 +91,10 @@ impl ToolHandler for GetQuoteHandler {
         )
     }
 }
+<<<<<<< HEAD
 
 fn is_a_share_symbol(sym: &str) -> bool {
     sym.ends_with(".SH") || sym.ends_with(".SZ")
 }
+=======
+>>>>>>> cc681fb4b (feat(trading): spot quote stack with get_quote tool and spot-quote skill)

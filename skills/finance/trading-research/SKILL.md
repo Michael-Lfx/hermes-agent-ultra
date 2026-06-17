@@ -187,40 +187,6 @@ If `session_search` is inconclusive, fall back to `get_backtest_report` when the
 
 Hand off when the user wants recurring after-close backtests. This skill covers one-shot research; **`trading-cron`** owns `cronjob` recipes and `enabled_toolsets`.
 
-## Relationship with `trading-debate` Skill
-
-After `run_backtest` produces a RunCard, hand off to **`trading-debate`** when the user
-wants bull/bear analysis or an investment-committee style verdict. Do not run debate
-logic inside this skill — delegate per `trading-debate` workflow.
-
-## Verification
-
-Ask: "拉 BTC-USDT 最近 30 天日 K 线"
-Expected: Agent calls `get_market_data` with symbol="BTC-USDT", returns OHLCV JSON.
-
-Ask: "回测 000001.SZ RSI 策略"
-Expected: Agent calls `run_backtest` with symbol="000001.SZ", strategy="rsi_revert",
-returns RunCard JSON with T+1-adjusted metrics.
-
-Ask: "回测 000001.SZ 20/50 均线策略"
-Expected: Agent calls `run_backtest` with symbol="000001.SZ", strategy="sma_cross",
-params={"short_window":20,"long_window":50}, returns RunCard JSON.
-
-Ask: "回测 AAPL SMA 策略"
-Expected: **Do not** call `run_backtest`. Explain US historical OHLCV is not supported; offer `get_quote` for spot or A-share/crypto backtest.
-
-Ask: "AAPL 现在多少钱"
-Expected: Follow **`spot-quote`** — `get_quote(symbol="AAPL", source="auto")`, report `price`. Use `web_search` only if Yahoo fails — **not** `get_market_data` / `run_backtest` / `execute_code`.
-
-Ask: "000001.SZ 现在多少钱"
-Expected: Agent calls `get_quote(symbol="000001.SZ")`, reports `price` from JSON.
-
-Ask: "我比较保守，记住一下"
-Expected: `memory(action="add", target="user", content="Trading risk preference: 保守")`; confirm to user.
-
-Ask: "上次回测 BTC 结论是什么"
-Expected: `session_search(query="run_backtest BTC-USDT", limit=5)`; report symbol, strategy, total_return_pct from results.
-
 ## Limitations
 
 - US/HK historical OHLCV and backtest are **not supported** (use `get_quote` for spot prices)

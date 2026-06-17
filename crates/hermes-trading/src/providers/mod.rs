@@ -34,6 +34,7 @@ pub mod quote_router;
 
 pub mod router;
 pub mod stub;
+pub mod yahoo;
 
 pub mod stub;
 
@@ -70,5 +71,8 @@ pub use quote_router::{QuoteRouter, QuoteSource};
 pub use router::{AutoRouter, DataSource};
 
 pub use stub::StubProvider;
+<<<<<<< HEAD
 
+=======
+>>>>>>> cc681fb4b (feat(trading): spot quote stack with get_quote tool and spot-quote skill)
 pub use yahoo::YahooProvider;
