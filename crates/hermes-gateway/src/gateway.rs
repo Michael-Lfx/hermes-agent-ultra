@@ -530,6 +530,18 @@ impl Gateway {
         }
     }
 
+    /// Abort all in-flight agent routes (called during gateway shutdown).
+    pub async fn abort_all_active_routes(&self) {
+        let mut routes = self.session.active_routes.write().await;
+        let count = routes.len();
+        for (_key, handle) in routes.drain() {
+            handle.abort();
+        }
+        if count > 0 {
+            info!(count, "Aborted in-flight agent routes for shutdown");
+        }
+    }
+
     /// Register the agent inbound preparer (vision enrich, native multimodal, etc.).
     pub async fn set_inbound_preparer(&self, preparer: Arc<dyn InboundMessagePreparer>) {
         *self.extensions.inbound_preparer.write().await = Some(preparer);

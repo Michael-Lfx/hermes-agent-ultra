@@ -423,6 +423,7 @@ pub(crate) async fn run_gateway(
                 .map_err(|e| AgentError::Io(format!("Failed to listen for Ctrl+C: {}", e)))?;
 
             println!("\nShutting down gateway...");
+            gateway.abort_all_active_routes().await;
             gateway.teardown_all_sessions("shutdown").await;
             cron_scheduler.stop().await;
             gateway.stop_all().await?;
