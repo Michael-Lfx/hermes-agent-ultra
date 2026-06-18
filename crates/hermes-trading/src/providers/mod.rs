@@ -1,13 +1,45 @@
 //! Concrete market data provider implementations.
 
-
-
 pub mod binance;
 
 pub mod binance_quote;
 
 pub mod akshare;
 
+<<<<<<< HEAD
+=======
+pub mod eastmoney;
+
+pub mod eastmoney_basic;
+
+pub mod eastmoney_capital_flow;
+
+pub mod eastmoney_financials;
+
+pub mod eastmoney_http;
+
+pub mod eastmoney_lhb;
+
+pub mod eastmoney_quote;
+
+pub mod eastmoney_valuation;
+
+pub mod fundamentals;
+
+#[cfg(any(test, feature = "test-mock"))]
+pub mod mock;
+
+#[cfg(any(test, feature = "test-mock"))]
+pub mod quote_mock;
+
+pub mod quote_router;
+
+pub mod router;
+
+pub mod stub;
+
+pub mod yahoo;
+>>>>>>> 98eae4748 (feat(trading): akshare-rs primary path for A-share research dims)
 
 pub use binance::BinanceProvider;
 
@@ -30,11 +62,9 @@ pub use eastmoney_valuation::EastmoneyValuationProvider;
 pub use fundamentals::{FundamentalsAggregator, FundamentalsProvider};
 
 #[cfg(any(test, feature = "test-mock"))]
-
 pub use mock::MockProvider;
 
 #[cfg(any(test, feature = "test-mock"))]
-
 pub use quote_mock::MockQuoteProvider;
 
 pub use quote_router::{QuoteRouter, QuoteSource};
@@ -45,4 +75,3 @@ pub use stub::StubProvider;
 <<<<<<< HEAD
 
 pub use yahoo::YahooProvider;
-

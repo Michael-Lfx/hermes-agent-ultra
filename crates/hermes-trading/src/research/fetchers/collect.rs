@@ -7,6 +7,28 @@ use super::context::FetchContext;
 use super::registry::{EXEC_ORDER, build_registry, fetcher_for};
 use super::types::CollectOutput;
 use crate::quote_data::QuoteData;
+=======
+use crate::research::types::FundamentalsSnapshot;
+
+/// Options for dimension collection.
+#[derive(Debug, Clone, Default)]
+pub struct CollectOptions {
+    /// When true, run web-only fetchers (they return `Skipped` stubs).
+    pub include_web_dims: bool,
+}
+
+/// Collect registered HTTP dimensions for one symbol.
+pub async fn collect_dims(
+    symbol: &str,
+    opts: &CollectOptions,
+    cached_quote: Option<QuoteData>,
+) -> CollectOutput {
+    let registry = build_registry();
+    let mut ctx = FetchContext::new(symbol);
+    if let Some(q) = cached_quote {
+        ctx = ctx.with_cached_quote(q);
+    }
+>>>>>>> 98eae4748 (feat(trading): akshare-rs primary path for A-share research dims)
     let mut output = CollectOutput {
         ticker: ctx.symbol.clone(),
         market: ctx.market,
@@ -37,6 +59,7 @@ use crate::quote_data::QuoteData;
         );
     }
 
+<<<<<<< HEAD
     apply_dims_to_snapshot(snap, &output);
     output.build_raw_dims()
 }

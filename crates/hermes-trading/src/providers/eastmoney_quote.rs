@@ -41,16 +41,6 @@ impl Default for EastmoneyQuoteProvider {
 }
 
 >>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
-#[async_trait]
-impl QuoteProvider for EastmoneyQuoteProvider {
-    async fn fetch_quote(&self, symbol: &str) -> Result<QuoteData, TradingError> {
-        let canonical = normalize_symbol(symbol);
-        if !is_a_share(&canonical) {
-            return Err(TradingError::SymbolNotFound(format!(
-                "Eastmoney quote only supports A-shares: {symbol}"
-            )));
-        }
-<<<<<<< HEAD
         crate::providers::akshare::fetch_a_share_quote_chain(&canonical).await
     }
 
