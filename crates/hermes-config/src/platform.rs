@@ -20,14 +20,12 @@ pub enum UnauthorizedDmBehavior {
     Ignore,
 }
 
-
 // ---------------------------------------------------------------------------
 // PlatformConfig
 // ---------------------------------------------------------------------------
 
 /// Configuration for a specific platform (e.g. discord, slack).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PlatformConfig {
     /// Whether this platform adapter is enabled.
     #[serde(default)]
@@ -71,7 +69,6 @@ pub struct PlatformConfig {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-
 impl PlatformConfig {
     /// Deep-merge a JSON overlay into this configuration.
     ///
@@ -95,9 +92,10 @@ impl PlatformConfig {
             if let Some(v) = map.get("unauthorized_dm_behavior").and_then(|v| v.as_str())
                 && let Ok(behavior) = serde_json::from_value::<UnauthorizedDmBehavior>(
                     serde_json::Value::String(v.to_string()),
-                ) {
-                    self.unauthorized_dm_behavior = behavior;
-                }
+                )
+            {
+                self.unauthorized_dm_behavior = behavior;
+            }
             if let Some(v) = map.get("group_sessions_per_user").and_then(|v| v.as_bool()) {
                 self.group_sessions_per_user = v;
             }
@@ -105,13 +103,15 @@ impl PlatformConfig {
                 self.home_channel = Some(v.to_string());
             }
             if let Some(v) = map.get("allowed_users")
-                && let Ok(users) = serde_json::from_value::<Vec<String>>(v.clone()) {
-                    self.allowed_users = users;
-                }
+                && let Ok(users) = serde_json::from_value::<Vec<String>>(v.clone())
+            {
+                self.allowed_users = users;
+            }
             if let Some(v) = map.get("admin_users")
-                && let Ok(users) = serde_json::from_value::<Vec<String>>(v.clone()) {
-                    self.admin_users = users;
-                }
+                && let Ok(users) = serde_json::from_value::<Vec<String>>(v.clone())
+            {
+                self.admin_users = users;
+            }
             // Merge extra map recursively
             if let Some(serde_json::Value::Object(extra_overlay)) = map.get("extra") {
                 for (k, v) in extra_overlay {

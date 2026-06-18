@@ -884,8 +884,14 @@ mod tests {
         assert!(static_prompt.contains("You are Hermes."));
         assert!(static_prompt.contains("Be concise."));
         assert!(static_prompt.contains("User likes Rust"));
-        assert!(!static_prompt.contains("gpt-4o"), "model should be in dynamic tier");
-        assert!(!static_prompt.contains("Conversation started:"), "timestamp should be in dynamic tier");
+        assert!(
+            !static_prompt.contains("gpt-4o"),
+            "model should be in dynamic tier"
+        );
+        assert!(
+            !static_prompt.contains("Conversation started:"),
+            "timestamp should be in dynamic tier"
+        );
 
         // Dynamic suffix should contain timestamp/model metadata.
         let dynamic = builder.build_dynamic();

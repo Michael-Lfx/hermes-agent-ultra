@@ -814,10 +814,7 @@ fn apply_user_config_patch_dotted(
             })?);
         }
         ["auxiliary", task, field] => {
-            let entry = config
-                .auxiliary
-                .entry((*task).to_string())
-                .or_default();
+            let entry = config.auxiliary.entry((*task).to_string()).or_default();
             match *field {
                 "provider" => entry.provider = value.to_string(),
                 "model" => entry.model = value.to_string(),
@@ -1882,13 +1879,14 @@ fn parse_list_env(value: &str, split_colon: bool) -> Vec<String> {
         return Vec::new();
     }
     if trimmed.starts_with('[')
-        && let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
-            return values
-                .into_iter()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect();
-        }
+        && let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed)
+    {
+        return values
+            .into_iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect();
+    }
     let delimiter = if trimmed.contains(',') || !split_colon {
         ','
     } else {
@@ -2234,9 +2232,10 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
         }
     }
     if let Ok(v) = std::env::var("HERMES_SERVER_ENABLED")
-        && let Some(parsed) = parse_bool_env("HERMES_SERVER_ENABLED", &v) {
-            config.server.enabled = parsed;
-        }
+        && let Some(parsed) = parse_bool_env("HERMES_SERVER_ENABLED", &v)
+    {
+        config.server.enabled = parsed;
+    }
     if let Ok(v) = std::env::var("HERMES_SERVER_TOKEN") {
         let trimmed = v.trim();
         if !trimmed.is_empty() {
@@ -2281,9 +2280,10 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
         }
     }
     if let Ok(v) = std::env::var("HERMES_KANBAN_DISPATCH_IN_GATEWAY")
-        && let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v) {
-            config.kanban.dispatch_in_gateway = parsed;
-        }
+        && let Some(parsed) = parse_bool_env("HERMES_KANBAN_DISPATCH_IN_GATEWAY", &v)
+    {
+        config.kanban.dispatch_in_gateway = parsed;
+    }
     if let Ok(v) = std::env::var("HERMES_AGENT_API_MAX_RETRIES") {
         if let Ok(parsed) = v.parse::<u32>() {
             config.agent.api_max_retries = Some(parsed);
@@ -2315,19 +2315,22 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
         proxy.socks_proxy = Some(v);
     }
     if let Ok(v) = std::env::var("HERMES_LLM_API_KEY")
-        && !v.trim().is_empty() {
-            for provider in config.llm_providers.values_mut() {
-                provider.api_key = Some(v.clone());
-            }
+        && !v.trim().is_empty()
+    {
+        for provider in config.llm_providers.values_mut() {
+            provider.api_key = Some(v.clone());
         }
+    }
     if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_RESULT_CHARS")
-        && let Ok(n) = v.parse::<usize>() {
-            config.budget.max_result_size_chars = n;
-        }
+        && let Ok(n) = v.parse::<usize>()
+    {
+        config.budget.max_result_size_chars = n;
+    }
     if let Ok(v) = std::env::var("HERMES_BUDGET_MAX_AGGREGATE_CHARS")
-        && let Ok(n) = v.parse::<usize>() {
-            config.budget.max_aggregate_chars = n;
-        }
+        && let Ok(n) = v.parse::<usize>()
+    {
+        config.budget.max_aggregate_chars = n;
+    }
 
     // Provider-specific API keys (prefer HERMES_OPENAI_API_KEY over legacy OPENAI_API_KEY).
     let openai_env = std::env::var("HERMES_OPENAI_API_KEY")
@@ -2396,36 +2399,36 @@ pub fn apply_env_overrides(config: &mut GatewayConfig) {
     }
 
     if let Ok(v) = std::env::var("HERMES_BASE_URL")
-        && !v.trim().is_empty() {
-            for provider in config.llm_providers.values_mut() {
-                provider.base_url = Some(v.clone());
-            }
+        && !v.trim().is_empty()
+    {
+        for provider in config.llm_providers.values_mut() {
+            provider.base_url = Some(v.clone());
         }
+    }
 
     if let Ok(v) = std::env::var("OPENROUTER_BASE_URL")
-        && !v.trim().is_empty() {
-            config
-                .llm_providers
-                .entry("openrouter".to_string())
-                .or_default()
-                .base_url = Some(v);
-        }
+        && !v.trim().is_empty()
+    {
+        config
+            .llm_providers
+            .entry("openrouter".to_string())
+            .or_default()
+            .base_url = Some(v);
+    }
     if let Ok(v) = std::env::var("MINIMAX_BASE_URL")
-        && !v.trim().is_empty() {
-            config
-                .llm_providers
-                .entry("minimax".to_string())
-                .or_default()
-                .base_url = Some(v);
-        }
+        && !v.trim().is_empty()
+    {
+        config
+            .llm_providers
+            .entry("minimax".to_string())
+            .or_default()
+            .base_url = Some(v);
+    }
 
     if let Ok(token) = std::env::var("SLACK_BOT_TOKEN") {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
-            let slack = config
-                .platforms
-                .entry("slack".to_string())
-                .or_default();
+            let slack = config.platforms.entry("slack".to_string()).or_default();
             let enabled_was_explicit = slack
                 .extra
                 .remove("_enabled_explicit")
@@ -2538,13 +2541,15 @@ fn trimmed_optional(value: Option<&str>) -> Option<String> {
 fn expand_home_path(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
     if trimmed == "~"
-        && let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home);
-        }
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home);
+    }
     if let Some(rest) = trimmed.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(rest);
+    }
     PathBuf::from(trimmed)
 }
 
@@ -2569,11 +2574,12 @@ pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
 
     for (name, provider) in &config.llm_providers {
         if let Some(key) = &provider.api_key
-            && key.trim().is_empty() {
-                return Err(ConfigError::ValidationError(format!(
-                    "llm_providers.{name}.api_key must not be empty"
-                )));
-            }
+            && key.trim().is_empty()
+        {
+            return Err(ConfigError::ValidationError(format!(
+                "llm_providers.{name}.api_key must not be empty"
+            )));
+        }
         if let Some(api_mode) = &provider.api_mode {
             normalize_provider_api_mode(api_mode).map_err(|_| {
                 ConfigError::ValidationError(format!(
@@ -2582,19 +2588,21 @@ pub fn validate_config(config: &GatewayConfig) -> Result<(), ConfigError> {
             })?;
         }
         if let Some(timeout) = provider.request_timeout_seconds
-            && (!timeout.is_finite() || timeout <= 0.0) {
-                return Err(ConfigError::ValidationError(format!(
-                    "llm_providers.{name}.request_timeout_seconds must be a positive finite number"
-                )));
-            }
+            && (!timeout.is_finite() || timeout <= 0.0)
+        {
+            return Err(ConfigError::ValidationError(format!(
+                "llm_providers.{name}.request_timeout_seconds must be a positive finite number"
+            )));
+        }
     }
 
     if let Some(api_key) = &config.delegation.api_key
-        && api_key.trim().is_empty() {
-            return Err(ConfigError::ValidationError(
-                "delegation.api_key must not be empty".into(),
-            ));
-        }
+        && api_key.trim().is_empty()
+    {
+        return Err(ConfigError::ValidationError(
+            "delegation.api_key must not be empty".into(),
+        ));
+    }
 
     Ok(())
 }

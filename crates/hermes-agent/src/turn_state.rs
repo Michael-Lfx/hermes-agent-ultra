@@ -436,7 +436,7 @@ async fn turn_prefetch(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     agent.invalidate_turn_api_messages_cache();
     tc.checkpoint_mgr.new_turn();
     tc.iteration_budget.consume();
-    tracing::debug!("Agent turn {}", tc.total_turns);
+    // tracing::debug!("Agent turn {}", tc.total_turns);
 
     // Housekeeping-only turns enable mute_post_response for the *current* turn's
     // pre-tool narration. Reset each turn so the next LLM stream (especially the
@@ -597,16 +597,16 @@ async fn turn_route(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
             )));
         }
     }
-    tracing::debug!(
-        turn = tc.total_turns,
-        model = active_model,
-        governor_pressure = llm_governor.pressure,
-        governor_max_tokens = ?llm_governor.max_tokens,
-        governor_avg_latency_ms = ?turn_governor_runtime.avg_llm_latency_ms,
-        governor_avg_tool_error_rate = turn_governor_runtime.avg_tool_error_rate,
-        governor_consecutive_error_turns = turn_governor_runtime.consecutive_error_turns,
-        "turn governor snapshot"
-    );
+    // tracing::debug!(
+    //     turn = tc.total_turns,
+    //     model = active_model,
+    //     governor_pressure = llm_governor.pressure,
+    //     governor_max_tokens = ?llm_governor.max_tokens,
+    //     governor_avg_latency_ms = ?turn_governor_runtime.avg_llm_latency_ms,
+    //     governor_avg_tool_error_rate = turn_governor_runtime.avg_tool_error_rate,
+    //     governor_consecutive_error_turns = turn_governor_runtime.consecutive_error_turns,
+    //     "turn governor snapshot"
+    // );
     tc.replay.record(
         "turn_start",
         serde_json::json!({
@@ -1069,18 +1069,18 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             &assistant_msg,
             effective_finish_reason.as_deref(),
         );
-        tracing::debug!(
-            turn = tc.total_turns,
-            finish_reason = ?finalization_signals.finish_reason,
-            has_tool_calls = finalization_signals.has_tool_calls,
-            has_visible_text = finalization_signals.has_visible_text,
-            has_visible_text_after_think = finalization_signals.has_visible_text_after_think,
-            has_reasoning = finalization_signals.has_reasoning,
-            continuation_required = finalization_signals.continuation_required,
-            ack_detected = finalization_signals.ack_detected,
-            final_gate_passed = finalization_signals.final_gate_passed(),
-            "finalization gate evaluation (stream)"
-        );
+        // tracing::debug!(
+        //     turn = tc.total_turns,
+        //     finish_reason = ?finalization_signals.finish_reason,
+        //     has_tool_calls = finalization_signals.has_tool_calls,
+        //     has_visible_text = finalization_signals.has_visible_text,
+        //     has_visible_text_after_think = finalization_signals.has_visible_text_after_think,
+        //     has_reasoning = finalization_signals.has_reasoning,
+        //     continuation_required = finalization_signals.continuation_required,
+        //     ack_detected = finalization_signals.ack_detected,
+        //     final_gate_passed = finalization_signals.final_gate_passed(),
+        //     "finalization gate evaluation (stream)"
+        // );
         tc.replay.record(
             "final_gate",
             serde_json::json!({
@@ -1323,7 +1323,7 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
             agent.set_pending_plan(None);
         }
 
-        tracing::debug!("No tool calls in response, finishing naturally");
+        // tracing::debug!("No tool calls in response, finishing naturally");
         if tc.file_mutation.has_failures() {
             let footer = tc.file_mutation.format_advisory_footer();
             for msg in tc.ctx.get_messages_mut().iter_mut().rev() {
@@ -1711,18 +1711,6 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         return TurnState::CallLlm;
     }
 
-    // Pre-tool hooks + callbacks
-    let tool_names_for_log: Vec<&str> = tool_calls
-        .iter()
-        .map(|tc_| tc_.function.name.as_str())
-        .collect();
-    tracing::debug!(
-        turn = tc.total_turns,
-        tool_count = tool_calls.len(),
-        tools = ?tool_names_for_log,
-        streaming = true,
-        "agent tool batch start"
-    );
     // Pre-parse tool args once; reused by hooks, guardrails, and file mutation.
     let tool_args: Vec<Value> = tool_calls
         .iter()

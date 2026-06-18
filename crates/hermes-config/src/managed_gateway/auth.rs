@@ -144,17 +144,19 @@ pub fn read_nous_access_token(reader: Option<&dyn TokenReader>) -> Option<String
         && !access_token_is_expiring(
             state.expires_at.as_deref(),
             NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
-        ) {
-            return Some(tok.clone());
-        }
+        )
+    {
+        return Some(tok.clone());
+    }
 
     if let Some(reader) = reader
-        && let Some(refreshed) = reader.refresh(NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS) {
-            let trimmed = refreshed.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+        && let Some(refreshed) = reader.refresh(NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS)
+    {
+        let trimmed = refreshed.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
+    }
 
     cached
 }

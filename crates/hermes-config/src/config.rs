@@ -1287,7 +1287,6 @@ pub enum TerminalBackendType {
     Singularity,
 }
 
-
 impl TerminalBackendType {
     pub fn from_env_name(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
@@ -1526,8 +1525,7 @@ pub struct WebConfig {
 // ---------------------------------------------------------------------------
 
 /// Approval / safety-gate settings for dangerous operations.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ApprovalConfig {
     /// Whether the approval gate is enabled.
     #[serde(default)]
@@ -1546,10 +1544,8 @@ pub struct ApprovalConfig {
     pub whitelist_commands: Vec<String>,
 }
 
-
 /// Security toggles aligned with Python config shape.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SecurityConfig {
     /// Allow private/internal URL resolution globally.
     ///
@@ -1563,7 +1559,6 @@ pub struct SecurityConfig {
     #[serde(default)]
     pub website_blocklist: WebsiteBlocklistConfig,
 }
-
 
 /// Website/domain blocklist configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -1628,8 +1623,7 @@ pub struct ProfileConfig {
 // ---------------------------------------------------------------------------
 
 /// HTTP/SOCKS proxy settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProxyConfig {
     /// HTTP proxy URL (e.g. "http://proxy:8080").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1639,7 +1633,6 @@ pub struct ProxyConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socks_proxy: Option<String>,
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
