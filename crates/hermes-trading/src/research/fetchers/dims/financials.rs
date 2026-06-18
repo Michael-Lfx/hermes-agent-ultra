@@ -20,6 +20,14 @@ impl FinancialsFetcher {
     };
 }
 
+=======
+impl Default for FinancialsFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 #[async_trait]
 impl DimFetcher for FinancialsFetcher {
     fn spec(&self) -> &FetcherSpec {
@@ -28,6 +36,7 @@ impl DimFetcher for FinancialsFetcher {
 
     async fn fetch(&self, ctx: &FetchContext) -> DimResult {
         let ticker = &ctx.symbol;
+<<<<<<< HEAD
         match fetch_financials_dim_akshare(ticker).await {
             Ok((data, source)) => {
                 let quality = if data.get("roe").and_then(|v| v.as_f64()).is_some()

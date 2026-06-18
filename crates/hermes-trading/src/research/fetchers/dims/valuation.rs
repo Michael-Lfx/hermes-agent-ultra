@@ -15,6 +15,9 @@ use crate::settlement::is_a_share;
 
 pub struct ValuationFetcher {
     basic: EastmoneyBasicProvider,
+=======
+    valuation: EastmoneyValuationProvider,
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 }
 
 impl ValuationFetcher {
@@ -22,6 +25,7 @@ impl ValuationFetcher {
     pub fn new() -> Self {
         Self {
             basic: EastmoneyBasicProvider::new(),
+<<<<<<< HEAD
         }
     }
 

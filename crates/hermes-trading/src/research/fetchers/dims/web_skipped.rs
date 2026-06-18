@@ -56,6 +56,21 @@ pub fn chain_fetcher() -> WebSkippedFetcher {
     )
 }
 
+=======
+pub fn research_fetcher() -> WebSkippedFetcher {
+    WebSkippedFetcher::new(
+        FetcherSpec {
+            dim_key: dim_keys::RESEARCH,
+            depends_on: &[],
+            markets: &[Market::A, Market::H, Market::U],
+            sources: &["web_search", "em_data"],
+            web_only: true,
+        },
+        "券商研报用 web_search",
+    )
+}
+
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 pub fn materials_fetcher() -> WebSkippedFetcher {
     WebSkippedFetcher::new(
         FetcherSpec {
@@ -121,6 +136,7 @@ pub fn moat_fetcher() -> WebSkippedFetcher {
     )
 }
 
+<<<<<<< HEAD
 pub fn sentiment_fetcher() -> WebSkippedFetcher {
     WebSkippedFetcher::new(
         FetcherSpec {

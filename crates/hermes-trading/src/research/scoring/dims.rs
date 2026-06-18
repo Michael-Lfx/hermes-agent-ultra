@@ -4,14 +4,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::research::report::labels::dimension_display_name;
-use crate::research::types::FeatureVector;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct DimScore {
-    pub score: u8,
-    pub weight: u8,
-    #[serde(default)]
-    pub display_name: String,
     pub label: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<String>,
@@ -109,54 +101,6 @@ pub fn score_dimensions(
             score: score_1 as u8,
             weight: 5,
             display_name: String::new(),
-            label: format!("ROE {last_roe:.1}% · 营收增速 {growth:+.1}% · 负债率 {debt:.0}%"),
-            missing: missing_1,
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-
-    // 2 · kline (momentum)
-    let kline = get("2_kline");
-    let stage = kline
-        .get("stage")
-        .and_then(|v| v.as_str())
-        .or(features.stage.as_deref())
-        .unwrap_or("")
-        .to_string();
-    let ma_align = kline
-        .get("ma_align")
-        .and_then(|v| v.as_str())
-        .or(features.ma_align.as_deref())
-        .unwrap_or("")
-        .to_string();
-    let dd = f64_val(
-        kline.get("kline_stats").unwrap_or(&Value::Null),
-        "max_drawdown",
-    )
-    .or(features.max_drawdown_1y)
-    .unwrap_or(0.0);
-    let mut score_2: i32 = 5;
-    if stage.contains("Stage 2") {
-        score_2 += 2;
-    } else if stage.contains("Stage 1") {
-        score_2 += 1;
-    } else if stage.contains("Stage 3") || stage.contains("Stage 4") {
-        score_2 -= 2;
-    }
-    if ma_align.contains("多头") {
-        score_2 += 1;
-    }
-    if dd <= -30.0 {
-        score_2 -= 1;
-    }
-    score_2 = score_2.clamp(1, 10);
-    out.insert(
-        "2_kline".into(),
-        DimScore {
-            score: score_2 as u8,
-            weight: 4,
-            display_name: String::new(),
             label: format!("{stage} · 均线{ma_align}"),
             missing: if stage.is_empty() {
                 vec!["stage".into()]
@@ -184,79 +128,6 @@ pub fn score_dimensions(
             },
             weight: 4,
             display_name: String::new(),
-            label: "同行对比".into(),
-            missing: vec![],
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-    out.insert("5_chain".into(), neutral_dim(6, 4, "产业链"));
-    let research = get("6_research");
-    let research_count = research
-        .get("research_count")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0);
-    let mut score_6: i32 = 5;
-    if research_count >= 8 {
-        score_6 += 2;
-    } else if research_count >= 3 {
-        score_6 += 1;
-    } else if research_count == 0 {
-        score_6 -= 1;
-    }
-    out.insert(
-        "6_research".into(),
-        DimScore {
-            score: score_6.clamp(1, 10) as u8,
-            weight: 3,
-            display_name: String::new(),
-            label: format!("券商研报 {research_count} 篇"),
-            missing: if research_count == 0 {
-                vec!["research_reports".into()]
-            } else {
-                vec![]
-            },
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-    let industry_dim = get("7_industry");
-    let ind_growth = f64_val(&industry_dim, "growth").unwrap_or(0.0);
-    let ind_pe = f64_val(&industry_dim, "industry_pe")
-        .or(features.industry_pe)
-        .unwrap_or(0.0);
-    let ind_name = industry_dim
-        .get("industry")
-        .and_then(|v| v.as_str())
-        .or(features.industry.as_deref())
-        .unwrap_or("—");
-    let mut score_7: i32 = 5;
-    if ind_growth >= 15.0 {
-        score_7 += 2;
-    } else if ind_growth >= 5.0 {
-        score_7 += 1;
-    } else if ind_growth < 0.0 {
-        score_7 -= 2;
-    }
-    if ind_pe > 0.0 && features.pe.is_some_and(|pe| pe < ind_pe) {
-        score_7 += 1;
-    }
-    out.insert(
-        "7_industry".into(),
-        DimScore {
-            score: score_7.clamp(1, 10) as u8,
-            weight: 4,
-            display_name: String::new(),
-            label: format!("{ind_name} · 增速 {ind_growth:+.1}% · 行业PE {ind_pe:.1}"),
-            missing: if ind_name == "—" {
-                vec!["industry".into()]
-            } else {
-                vec![]
-            },
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
     out.insert("8_materials".into(), neutral_dim(6, 3, "原材料成本关注中"));
     out.insert("9_futures".into(), neutral_dim(5, 2, "无强关联期货品种"));
 
@@ -321,17 +192,6 @@ pub fn score_dimensions(
     let main_5d = f64_val(&cf, "main_fund_5d_net_yi").unwrap_or(0.0);
     let fh = get("6_fund_holders");
     let holder_chg = f64_val(&fh, "holder_change_ratio").unwrap_or(0.0);
-    let mut score_12: i32 = 5;
-    if main_5d > 0.0 {
-        score_12 += 2;
-    } else if main_5d < 0.0 {
-        score_12 -= 1;
-    }
-    if holder_chg < -5.0 {
-        score_12 += 1;
-    } else if holder_chg > 10.0 {
-        score_12 -= 1;
-    }
     out.insert(
         "12_capital_flow".into(),
         DimScore {
@@ -354,23 +214,6 @@ pub fn score_dimensions(
         "15_events".into(),
         DimScore {
             score: 6,
-            weight: 4,
-            display_name: String::new(),
-            label: "事件驱动".into(),
-            missing: vec![],
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-    let lhb = get("16_lhb");
-    let lhb_count = lhb
-        .get("lhb_count_30d")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as i32;
-    out.insert(
-        "16_lhb".into(),
-        DimScore {
-            score: (5 + (lhb_count / 2).min(3)).min(10) as u8,
             weight: 4,
             display_name: String::new(),
             label: format!("近 30 天上榜 {lhb_count} 次"),
@@ -420,26 +263,6 @@ pub fn score_dimensions(
         }
     }
 
-    let total_weighted: f64 = out.values().map(|d| f64::from(d.score * d.weight)).sum();
-    let total_weight: f64 = out.values().map(|d| f64::from(d.weight)).sum();
-    let fundamental = if total_weight > 0.0 {
-        (total_weighted / total_weight * 10.0 * 10.0).round() / 100.0
-    } else {
-        0.0
-    };
-
-    ScoreDimensionsResult {
-        ticker: ticker.to_string(),
-        fundamental_score: fundamental,
-        dimensions: out,
-    }
-}
-
-fn neutral_dim(score: u8, weight: u8, label: &str) -> DimScore {
-    DimScore {
-        score,
-        weight,
-        display_name: String::new(),
         label: label.into(),
         missing: vec![],
         reasons_pass: vec![],

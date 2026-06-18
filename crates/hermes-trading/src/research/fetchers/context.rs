@@ -4,15 +4,6 @@ use std::collections::BTreeMap;
 
 use super::types::{DimResult, Market};
 use crate::quote_data::QuoteData;
-
-/// Context for a single symbol collection run (prior dims for `depends_on`).
-#[derive(Debug, Clone)]
-pub struct FetchContext {
-    pub symbol: String,
-    pub market: Market,
-    pub prior: BTreeMap<String, DimResult>,
-    /// Quote already fetched by caller (e.g. `analyze_stock`) — basic dim reuses it.
-    pub cached_quote: Option<QuoteData>,
 }
 
 impl FetchContext {
@@ -25,16 +16,6 @@ impl FetchContext {
             market,
             prior: BTreeMap::new(),
             cached_quote: None,
-        }
-    }
-
-    #[must_use]
-    pub fn with_cached_quote(mut self, quote: QuoteData) -> Self {
-        self.cached_quote = Some(quote);
-        self
-    }
-
-    #[must_use]
     pub fn prior_data(&self, dim_key: &str) -> Option<&serde_json::Value> {
         self.prior.get(dim_key).map(|r| &r.data)
     }
@@ -46,6 +27,7 @@ impl FetchContext {
             .and_then(|v| v.as_str())
             .map(str::to_string)
     }
+<<<<<<< HEAD
 
     /// Prior `0_basic` dim payload and source tag.
     #[must_use]
@@ -54,4 +36,6 @@ impl FetchContext {
             .get("0_basic")
             .map(|r| (&r.data, r.source.as_str()))
     }
+=======
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 }

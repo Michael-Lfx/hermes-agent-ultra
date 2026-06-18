@@ -21,6 +21,14 @@ impl LhbFetcher {
     };
 }
 
+=======
+impl Default for LhbFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 #[async_trait]
 impl DimFetcher for LhbFetcher {
     fn spec(&self) -> &FetcherSpec {
@@ -31,6 +39,7 @@ impl DimFetcher for LhbFetcher {
         if !is_a_share(&ctx.symbol) {
             return DimResult::skipped(dim_keys::LHB, &ctx.symbol, "龙虎榜仅 A 股");
         }
+<<<<<<< HEAD
         match fetch_lhb_dim_akshare(&ctx.symbol).await {
             Ok((data, source)) => {
                 let count = data

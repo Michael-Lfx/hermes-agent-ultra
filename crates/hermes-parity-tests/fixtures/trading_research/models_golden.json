@@ -61,6 +61,7 @@
       "op": "project_three_stmt",
       "input": { "symbol": "TEST", "revenue_latest_yi": 52, "equity_yi": 92 },
       "expected": { "y5_ni": 9.82 }
+<<<<<<< HEAD
     },
     {
       "id": "dcf_moutai",
@@ -147,6 +148,8 @@
         }
       },
       "expected": { "panel_consensus": 3.1 }
+=======
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
     }
   ]
 }

@@ -21,6 +21,14 @@ impl CapitalFlowFetcher {
     };
 }
 
+=======
+impl Default for CapitalFlowFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 #[async_trait]
 impl DimFetcher for CapitalFlowFetcher {
     fn spec(&self) -> &FetcherSpec {
@@ -35,6 +43,7 @@ impl DimFetcher for CapitalFlowFetcher {
                 "港美股资金流用 web_search",
             );
         }
+<<<<<<< HEAD
         match fetch_capital_flow_dim_akshare(&ctx.symbol).await {
             Ok((data, source)) => {
                 let quality = if data
@@ -57,3 +66,13 @@ impl DimFetcher for CapitalFlowFetcher {
         }
     }
 }
+<<<<<<< HEAD
+=======
+
+async fn fetch_capital_flow_util(
+    client: &reqwest::Client,
+    symbol: &str,
+) -> Result<serde_json::Value, crate::error::TradingError> {
+    fetch_capital_flow_dim(client, symbol).await
+}
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)

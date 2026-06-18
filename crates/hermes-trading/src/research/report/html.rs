@@ -6,25 +6,6 @@ use super::labels::{DIM_ORDER, dimension_display_name};
 
 use super::svg::{render_svg_gauge, render_svg_percentile};
 
-/// Render minimal HTML table report.
-#[must_use]
-pub fn render_html_report(analysis: &Value, narrative: Option<&str>) -> String {
-    let symbol = analysis
-        .get("symbol")
-        .and_then(|v| v.as_str())
-        .unwrap_or("—");
-    let confidence = analysis
-        .get("data_confidence")
-        .and_then(|c| c.get("score"))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let fund_score = analysis
-        .get("scores")
-        .and_then(|s| s.get("fundamental_score"))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    let dcf = analysis.get("dcf");
-    let intrinsic = dcf
         .and_then(|d| d.get("intrinsic_per_share"))
         .and_then(|v| v.as_f64())
         .map(|v| format!("¥{v:.2}"))
@@ -128,6 +109,7 @@ th,td{{border:1px solid #ccc;padding:8px;text-align:left}}
         html.push_str("</table>");
     }
 
+<<<<<<< HEAD
     if let Some(personas) = analysis.get("personas") {
         if let Some(vd) = personas.get("vote_distribution") {
             html.push_str("<h2>66 位评委投票</h2><table><tr><th>类别</th><th>人数</th></tr>");
@@ -164,6 +146,8 @@ th,td{{border:1px solid #ccc;padding:8px;text-align:left}}
         }
     }
 
+=======
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
     if let Some(text) = narrative {
         html.push_str(&format!("<h2>分析结论</h2><p>{text}</p>"));
     }

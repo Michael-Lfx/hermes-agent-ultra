@@ -70,6 +70,7 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "trading",
+<<<<<<< HEAD
             Arc::new(crate::tools::trading_resolve_symbol::ResolveAShareSymbolHandler::new()),
             "🔍",
             vec![],
@@ -77,6 +78,8 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "trading",
+=======
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
             Arc::new(crate::tools::trading_analyze_stock::AnalyzeStockHandler::new()),
             "📋",
             vec![],

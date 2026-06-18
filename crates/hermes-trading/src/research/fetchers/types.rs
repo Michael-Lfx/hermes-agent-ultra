@@ -141,6 +141,7 @@ impl CollectOutput {
         }
         Value::Object(obj)
     }
+<<<<<<< HEAD
 
     /// One-line dim source summary for engineering logs (`dim_key=source/quality`).
     #[must_use]
@@ -205,4 +206,6 @@ mod summary_tests {
         assert!(line.contains("10_valuation=akshare/partial"));
         assert!(!line.contains("3_macro"));
     }
+=======
+>>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
 }
