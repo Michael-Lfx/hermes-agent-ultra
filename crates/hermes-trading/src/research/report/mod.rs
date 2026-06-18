@@ -4,4 +4,4 @@ pub mod html;
 pub mod svg;
 
 pub use html::render_html_report;
-pub use svg::render_svg_gauge;
+pub use svg::{render_svg_gauge, render_svg_percentile};

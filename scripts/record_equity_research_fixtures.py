@@ -9,6 +9,10 @@ from pathlib import Path
 
 UZI_SCRIPTS = Path(r"c:\code\github\UZI-Skill\skills\deep-analysis\scripts")
 OUT = Path(__file__).resolve().parents[1] / "crates/hermes-parity-tests/fixtures/trading_research/models_golden.json"
+FETCHER_OUT = (
+    Path(__file__).resolve().parents[1]
+    / "crates/hermes-parity-tests/fixtures/trading_research_fetch/fetcher_golden.json"
+)
 
 
 def main() -> int:
@@ -94,6 +98,8 @@ def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(fixture, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote {OUT}")
+    if FETCHER_OUT.exists():
+        print(f"fetcher golden (offline mappers): {FETCHER_OUT}")
     return 0
 
 

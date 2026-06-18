@@ -367,4 +367,84 @@ mod tests {
         );
         assert!(r.intrinsic_per_share > 0.0);
     }
+
+    #[test]
+    fn dcf_shares_fallback() {
+        let mut f = smoke_features();
+        f.shares_outstanding_yi = None;
+        let r = compute_dcf(&f, None);
+        assert!(
+            r.used_fallback
+                .contains(&"shares_from_market_cap_price".to_string())
+        );
+        assert!(r.intrinsic_per_share > 0.0);
+    }
+
+    fn profile_moutai() -> FeatureVector {
+        FeatureVector {
+            symbol: "600519.SH".into(),
+            price: Some(1680.0),
+            market_cap_yi: Some(21000.0),
+            shares_outstanding_yi: Some(12.56),
+            revenue_latest_yi: Some(1500.0),
+            net_margin: Some(52.0),
+            pe: Some(28.5),
+            pb: Some(8.2),
+            total_debt_yi: Some(30.0),
+            cash_yi: Some(1500.0),
+            fcf_latest_yi: Some(600.0),
+            ebitda_yi: Some(900.0),
+            equity_yi: Some(2200.0),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    #[ignore = "run manually to refresh models_golden DCF expected values"]
+    fn dump_dcf_profile_golden() {
+        let profiles = [
+            ("dcf_moutai", profile_moutai()),
+            (
+                "dcf_loss_maker",
+                FeatureVector {
+                    symbol: "600157.SH".into(),
+                    price: Some(1.2),
+                    market_cap_yi: Some(260.0),
+                    shares_outstanding_yi: Some(220.0),
+                    revenue_latest_yi: Some(300.0),
+                    net_margin: Some(-5.0),
+                    pe: Some(-5.0),
+                    total_debt_yi: Some(400.0),
+                    cash_yi: Some(20.0),
+                    fcf_latest_yi: Some(-10.0),
+                    equity_yi: Some(80.0),
+                    ..Default::default()
+                },
+            ),
+            (
+                "dcf_small_cap",
+                FeatureVector {
+                    symbol: "300999.SZ".into(),
+                    price: Some(32.0),
+                    market_cap_yi: Some(180.0),
+                    shares_outstanding_yi: Some(5.6),
+                    revenue_latest_yi: Some(2200.0),
+                    net_margin: Some(2.5),
+                    pe: Some(45.0),
+                    total_debt_yi: Some(200.0),
+                    cash_yi: Some(50.0),
+                    fcf_latest_yi: Some(15.0),
+                    equity_yi: Some(300.0),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (id, f) in profiles {
+            let r = compute_dcf(&f, None);
+            eprintln!(
+                "{id}: intrinsic={:.2} safety={:.2} center={:.2}",
+                r.intrinsic_per_share, r.safety_margin_pct, r.sensitivity_table.center_cell
+            );
+        }
+    }
 }

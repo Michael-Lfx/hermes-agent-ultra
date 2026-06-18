@@ -69,4 +69,6 @@ pub mod trading_quote;
 #[cfg(feature = "trading-research")]
 pub mod trading_report;
 #[cfg(feature = "trading-research")]
+pub mod trading_resolve_symbol;
+#[cfg(feature = "trading-research")]
 pub mod trading_strategies;

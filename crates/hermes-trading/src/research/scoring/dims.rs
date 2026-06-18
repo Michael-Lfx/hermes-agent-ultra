@@ -185,8 +185,70 @@ pub fn score_dimensions(
         },
     );
     out.insert("5_chain".into(), neutral_dim(6, 4, "产业链"));
-    out.insert("6_research".into(), neutral_dim(6, 3, "券商研报"));
-    out.insert("7_industry".into(), neutral_dim(7, 4, "行业处于成长期"));
+    let research = get("6_research");
+    let research_count = research
+        .get("research_count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let mut score_6: i32 = 5;
+    if research_count >= 8 {
+        score_6 += 2;
+    } else if research_count >= 3 {
+        score_6 += 1;
+    } else if research_count == 0 {
+        score_6 -= 1;
+    }
+    out.insert(
+        "6_research".into(),
+        DimScore {
+            score: score_6.clamp(1, 10) as u8,
+            weight: 3,
+            label: format!("券商研报 {research_count} 篇"),
+            missing: if research_count == 0 {
+                vec!["research_reports".into()]
+            } else {
+                vec![]
+            },
+            reasons_pass: vec![],
+            reasons_fail: vec![],
+        },
+    );
+    let industry_dim = get("7_industry");
+    let ind_growth = f64_val(&industry_dim, "growth").unwrap_or(0.0);
+    let ind_pe = f64_val(&industry_dim, "industry_pe")
+        .or(features.industry_pe)
+        .unwrap_or(0.0);
+    let ind_name = industry_dim
+        .get("industry")
+        .and_then(|v| v.as_str())
+        .or(features.industry.as_deref())
+        .unwrap_or("—");
+    let mut score_7: i32 = 5;
+    if ind_growth >= 15.0 {
+        score_7 += 2;
+    } else if ind_growth >= 5.0 {
+        score_7 += 1;
+    } else if ind_growth < 0.0 {
+        score_7 -= 2;
+    }
+    if ind_pe > 0.0 && features.pe.is_some_and(|pe| pe < ind_pe) {
+        score_7 += 1;
+    }
+    out.insert(
+        "7_industry".into(),
+        DimScore {
+            score: score_7.clamp(1, 10) as u8,
+            weight: 4,
+            label: format!("{ind_name} · 增速 {ind_growth:+.1}% · 行业PE {ind_pe:.1}"),
+            missing: if ind_name == "—" {
+                vec!["industry".into()]
+            } else {
+                vec![]
+            },
+            reasons_pass: vec![],
+            reasons_fail: vec![],
+        },
+    );
     out.insert("8_materials".into(), neutral_dim(6, 3, "原材料成本关注中"));
     out.insert("9_futures".into(), neutral_dim(5, 2, "无强关联期货品种"));
 
@@ -248,10 +310,17 @@ pub fn score_dimensions(
     out.insert("11_governance".into(), neutral_dim(6, 3, "治理结构"));
     let cf = get("12_capital_flow");
     let main_5d = f64_val(&cf, "main_fund_5d_net_yi").unwrap_or(0.0);
+    let fh = get("6_fund_holders");
+    let holder_chg = f64_val(&fh, "holder_change_ratio").unwrap_or(0.0);
     let mut score_12: i32 = 5;
     if main_5d > 0.0 {
         score_12 += 2;
     } else if main_5d < 0.0 {
+        score_12 -= 1;
+    }
+    if holder_chg < -5.0 {
+        score_12 += 1;
+    } else if holder_chg > 10.0 {
         score_12 -= 1;
     }
     out.insert(
@@ -259,8 +328,12 @@ pub fn score_dimensions(
         DimScore {
             score: score_12.clamp(1, 10) as u8,
             weight: 4,
-            label: format!("主力 5日 {main_5d:.2} 亿"),
-            missing: vec![],
+            label: format!("主力 5日 {main_5d:.2} 亿 · 户数变化 {holder_chg:+.1}%"),
+            missing: if main_5d == 0.0 && holder_chg == 0.0 {
+                vec!["capital_flow".into()]
+            } else {
+                vec![]
+            },
             reasons_pass: vec![],
             reasons_fail: vec![],
         },
@@ -295,13 +368,32 @@ pub fn score_dimensions(
         },
     );
     out.insert("17_sentiment".into(), neutral_dim(6, 3, "舆情"));
+    let events = get("15_events");
+    let trap_keywords = ["涨停", "牛股", "翻倍", "龙头", "妖股"];
+    let mut trap_score: i32 = 9;
+    let mut trap_label = "🟢 未发现推广痕迹".to_string();
+    if let Some(items) = events.get("news").and_then(|v| v.as_array()) {
+        for item in items {
+            if let Some(title) = item.get("title").and_then(|v| v.as_str())
+                && trap_keywords.iter().any(|k| title.contains(k))
+            {
+                trap_score = 3;
+                trap_label = "🔴 舆情含推广措辞".into();
+                break;
+            }
+        }
+    }
     out.insert(
         "18_trap".into(),
         DimScore {
-            score: 9,
+            score: trap_score.clamp(1, 10) as u8,
             weight: 5,
-            label: "🟢 未发现推广痕迹".into(),
-            missing: vec![],
+            label: trap_label,
+            missing: if events.is_null() {
+                vec!["events".into()]
+            } else {
+                vec![]
+            },
             reasons_pass: vec![],
             reasons_fail: vec![],
         },

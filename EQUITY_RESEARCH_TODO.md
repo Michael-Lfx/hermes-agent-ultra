@@ -1,7 +1,8 @@
 # UZI-Skill → Rust 重写 · 股票研报引擎迁移 TODO
 
 > **更新时间**：2026-06-18
-> **总体状态**：P0a/b/c 已完成；P1 取数 **部分完成**（HTTP transport 层 P1a 进行中，见 [`docs/sop/equity_research_data.md`](docs/sop/equity_research_data.md)）
+> **总体状态**：4 波终态计划已落地（pipeline golden / bridge+scoring / model+panel / HTML+docs）；见 [`EQUITY_RESEARCH_CHECKLIST.md`](EQUITY_RESEARCH_CHECKLIST.md)
+> **终态清单**：[`EQUITY_RESEARCH_CHECKLIST.md`](EQUITY_RESEARCH_CHECKLIST.md)（Hermes 终态只剩项，可勾选 backlog）
 > **目标**：把 UZI-Skill(`wbh604/UZI-Skill`)的 **确定性分析大脑 + 结构化研报** 用纯 Rust 重写进 `hermes-trading`，**不引入 Python 运行时**。
 > **不做**：装 Python 包 / Playwright。**akshare-rs**（纯 Rust crate `akshare = "0.1.7"`）已作 A 股硬数据主路，非 Python akshare。
 

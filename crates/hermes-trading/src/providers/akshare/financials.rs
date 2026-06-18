@@ -9,7 +9,7 @@ use crate::providers::eastmoney_financials::EastmoneyFinancialsProvider;
 use crate::providers::fundamentals::FundamentalsProvider;
 use crate::symbol::normalize_symbol;
 
-use super::{client, code6, map_err, sina_paper_code, try_or_fallback};
+use super::{client, code6, labels, map_err, sina_paper_code, try_or_fallback};
 
 pub async fn fetch_financials_dim_akshare(
     symbol: &str,
@@ -68,26 +68,32 @@ fn map_financials_json(
     abstract_rows: &[HashMap<String, Value>],
     indicator_rows: &[HashMap<String, Value>],
 ) -> Value {
-    let roe = metric_latest(abstract_rows, "净资产收益率")
-        .or_else(|| metric_latest(indicator_rows, "净资产收益率(%)"));
-    let net_margin = metric_latest(abstract_rows, "销售净利率")
-        .or_else(|| metric_latest(indicator_rows, "销售净利率(%)"));
-    let gross_margin = metric_latest(abstract_rows, "销售毛利率");
-    let revenue_latest = metric_latest(abstract_rows, "营业总收入");
-    let roe_history = metric_series(abstract_rows, "净资产收益率")
-        .or_else(|| metric_series(indicator_rows, "净资产收益率(%)"));
-    let revenue_history = metric_series(abstract_rows, "营业总收入");
+    let roe = metric_latest(abstract_rows, labels::financials::ROE)
+        .or_else(|| metric_latest(indicator_rows, labels::financials::ROE_PCT));
+    let net_margin = metric_latest(abstract_rows, labels::financials::NET_MARGIN)
+        .or_else(|| metric_latest(indicator_rows, labels::financials::NET_MARGIN_PCT));
+    let gross_margin = metric_latest(abstract_rows, labels::financials::GROSS_MARGIN);
+    let revenue_latest = metric_latest(abstract_rows, labels::financials::REVENUE);
+    let fcf_yi = metric_latest(abstract_rows, labels::financials::FCF).map(|v| v / 1e8);
+    let roe_history = metric_series(abstract_rows, labels::financials::ROE)
+        .or_else(|| metric_series(indicator_rows, labels::financials::ROE_PCT));
+    let revenue_history = metric_series(abstract_rows, labels::financials::REVENUE);
+    let debt_ratio = metric_latest(indicator_rows, labels::financials::DEBT_RATIO_PCT);
+    let debt_history = metric_series(indicator_rows, labels::financials::DEBT_RATIO_PCT);
 
     json!({
         "roe": roe,
         "net_margin": net_margin,
         "gross_margin": gross_margin,
         "revenue_latest_yi": revenue_latest.map(|v| v / 1e8),
+        "fcf_yi": fcf_yi,
+        "fcf_positive": fcf_yi.is_some_and(|v| v > 0.0),
         "roe_history": roe_history,
         "revenue_history": revenue_history.map(|v| v.into_iter().map(|x| x / 1e8).collect::<Vec<_>>()),
+        "debt_ratio_history": debt_history,
         "financial_health": {
-            "debt_ratio": metric_latest(indicator_rows, "资产负债率(%)"),
-            "current_ratio": metric_latest(indicator_rows, "流动比率"),
+            "debt_ratio": debt_ratio,
+            "current_ratio": metric_latest(indicator_rows, labels::financials::CURRENT_RATIO),
         },
     })
 }

@@ -59,6 +59,9 @@ fn load_fixtures() -> Vec<(PathBuf, FixtureFile)> {
         if !name.starts_with("trading_") {
             continue;
         }
+        if name == "trading_research" || name == "trading_research_fetch" {
+            continue;
+        }
         for file_entry in fs::read_dir(&group_path).expect("read fixture group") {
             let file_entry = file_entry.expect("valid file entry");
             let path = file_entry.path();

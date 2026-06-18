@@ -9,6 +9,7 @@ use hermes_trading::research::models::{
     CompsPeer, CompsTarget, ThreeStmtResult, build_comps_table, compute_dcf, compute_wacc,
     project_three_stmt, quick_lbo,
 };
+use hermes_trading::research::scoring::{generate_panel, score_dimensions};
 use hermes_trading::research::types::FeatureVector;
 
 #[derive(Debug, serde::Deserialize)]
@@ -71,6 +72,15 @@ fn features_from(v: &Value) -> FeatureVector {
     set_f64!(fcf_latest_yi);
     set_f64!(ebitda_yi);
     set_f64!(equity_yi);
+    if let Some(b) = v.get("fcf_positive").and_then(|x| x.as_bool()) {
+        f.fcf_positive = Some(b);
+    }
+    if let Some(n) = v.get("debt_ratio").and_then(|x| x.as_f64()) {
+        f.debt_ratio = Some(n);
+    }
+    if let Some(n) = v.get("pe_quantile_5y").and_then(|x| x.as_f64()) {
+        f.pe_quantile_5y = Some(n);
+    }
     f
 }
 
@@ -152,6 +162,35 @@ fn run_case(case: &FixtureCase) {
                 case.expected["y5_ni"].as_f64().unwrap(),
                 0.02
             ));
+        }
+        "persona_panel" => {
+            let f = features_from(&case.input);
+            let raw = case
+                .input
+                .get("raw_dims")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let scored = score_dimensions(f.symbol.as_str(), &raw, &f);
+            let p1 = generate_panel(&scored, &f);
+            let p2 = generate_panel(&scored, &f);
+            assert_eq!(
+                p1.panel_consensus, p2.panel_consensus,
+                "{} panel not deterministic",
+                case.id
+            );
+            if let Some(exp) = case
+                .expected
+                .get("panel_consensus")
+                .and_then(|v| v.as_f64())
+            {
+                assert!(
+                    approx_eq(p1.panel_consensus, exp, 0.02),
+                    "{} panel {} vs {}",
+                    case.id,
+                    p1.panel_consensus,
+                    exp
+                );
+            }
         }
         other => panic!("unknown op {other}"),
     }

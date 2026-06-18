@@ -53,16 +53,19 @@ No gateway keyword routing — **you** decide whether this skill applies:
 
 **Symbol format:** A-shares use `.SH` / `.SZ` (e.g. `600519.SH`). Do **not** use Yahoo suffix `.SS` — Hermes normalizes it, but prefer `.SH` in tool calls.
 
-1. **`get_quote(symbol)`** — live price + PE (A-share: **akshare-rs** primary → Eastmoney push2 → Tencent qt fallback)
+1. **`resolve_a_share_symbol(query)`** — when user gives Chinese name (e.g. `牧原股份`, `山西汾酒`), resolve to canonical symbol **before** quote/analysis
+2. **`get_quote(symbol)`** — live price + PE (A-share: **akshare-rs** primary → Eastmoney push2 → Tencent qt fallback)
    - If Eastmoney quote API fails → note as blocked, continue to fallback section below
-2. **`web_search`** — supplement fundamentals if `data_confidence` will be low:
-   revenue, FCF, debt, ROE, peers, industry
+3. **`analyze_stock(symbol, use_providers=true)`** — default runs 22-dim HTTP fetchers + DCF/scoring/panel; returns `raw_dims`, `data_confidence`, `used_fallback`
+   - Only pass manual `fundamentals` / `peers` when providers failed or user supplied research notes
+4. **`web_search`** — **required** when `data_confidence.score < 0.5` OR `missing_dims` includes macro/policy/moat/chain:
+   - supplement revenue, FCF, debt, ROE, peers, industry, policy headlines
    - Chinese queries via bing_cn may return unrelated results ("贵州" tourism when searching for Moutai). Use English queries like `"Kweichow Moutai 600519 market cap"` for financial data.
-3. **`analyze_stock`** — pass enriched `fundamentals` JSON + optional `peers` array
-4. **LLM narrative** — write conclusion citing:
+5. **LLM narrative** — write conclusion citing:
    - `data_confidence.score` and `missing_dims`
    - `used_fallback` (never hide proxy/Fallback paths)
    - DCF `verdict` + persona `panel_consensus`
+6. **Optional `format: "html"`** + `narrative` for one-page readable report (DCF sensitivity, 19-dim scores, gauges)
 
 ### Eastmoney API fallback
 
@@ -78,11 +81,11 @@ If both fail (push2.eastmoney.com unreachable):
 
 ### Rules
 
-- If `data_confidence.score < 0.5`: **do not** claim "institutional-grade" — say data is partial
+- If `data_confidence.score < 0.5`: **do not** claim "institutional-grade" — say data is partial; run `web_search` for gaps before final narrative
 - Always surface `used_fallback` fields in the user-facing summary
 - Persona **commentary** is LLM-generated; Rust output is `{id, vote, score, cited_rule}` only
-- Optional: `use_providers: true` for A-share hard data (Eastmoney financials/valuation/LHB)
-- Optional: `format: "html"` + `narrative` for readable report
+- `use_providers` defaults **true**; set `false` only for quote-only smoke tests
+- Prefer `format: "html"` + `narrative` when user asks for 研报 / readable report
 
 ## Example
 
@@ -109,5 +112,5 @@ analyze_stock({
 
 ## Toolsets
 
-- **`trading`** — `get_quote`, `analyze_stock`
-- **`web`** — `web_search` for fundamentals gap-fill
+- **`trading`** — `resolve_a_share_symbol`, `get_quote`, `analyze_stock`
+- **`web`** — `web_search` for fundamentals gap-fill (macro, policy, moat when not in `raw_dims`)
