@@ -41,6 +41,7 @@ pub async fn ensure_dependency(dep: RuntimeDep, interactive: bool) -> bool {
         return true;
     }
 
+
     if !interactive {
         if auto_ensure_enabled() {
             return ensure_runtime_dep(dep, true).await;
@@ -48,6 +49,7 @@ pub async fn ensure_dependency(dep: RuntimeDep, interactive: bool) -> bool {
         warn!(%dep, "{} is not installed", description(dep));
         return false;
     }
+
 
     if !atty_is_tty() {
         warn!("not a TTY, skipping install prompt for {}", dep);

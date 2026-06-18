@@ -156,6 +156,8 @@ pub(crate) async fn run_gateway(
                     .collect();
                 tracing::info!(
                     deps = %labels.join(", "),
+                tracing::info!(
+                    deps = %labels.join(", "),
                     "runtime dependencies missing; starting background install"
                 );
                 if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
@@ -165,6 +167,7 @@ pub(crate) async fn run_gateway(
                         deps = %labels.join(", "),
                         "HERMES_AUTO_ENSURE_DEPS disabled; missing deps will block tools at use time"
                     );
+                }
                 }
             }
             drop(_p2);
