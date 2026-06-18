@@ -6,7 +6,6 @@ use tracing::warn;
 
 use super::super::r#trait::DimFetcher;
 use super::super::types::{DimQuality, DimResult, FetcherSpec, Market};
-use crate::providers::akshare::DEFAULT_INDUSTRY;
 use crate::providers::akshare::{fetch_industry_growth, median_peer_pe};
 use crate::research::fetchers::context::FetchContext;
 use crate::research::fetchers::dim_keys;
@@ -31,9 +30,7 @@ impl DimFetcher for IndustryFetcher {
     }
 
     async fn fetch(&self, ctx: &FetchContext) -> DimResult {
-        let industry = ctx
-            .prior_industry()
-            .unwrap_or_else(|| DEFAULT_INDUSTRY.into());
+        let industry = ctx.prior_industry().unwrap_or_else(|| "综合".into());
         let industry_pe = ctx
             .prior_data("4_peers")
             .and_then(|d| d.get("peer_table"))
@@ -42,7 +39,7 @@ impl DimFetcher for IndustryFetcher {
         let mut growth = None;
         let mut source = "0_basic".to_string();
 
-        if is_a_share(&ctx.symbol) && industry != DEFAULT_INDUSTRY {
+        if is_a_share(&ctx.symbol) && industry != "综合" {
             match fetch_industry_growth(&ctx.symbol).await {
                 Ok(g) => {
                     growth = g;
@@ -56,7 +53,7 @@ impl DimFetcher for IndustryFetcher {
 
         let quality = if industry_pe.is_some() && growth.is_some() {
             DimQuality::Full
-        } else if industry != DEFAULT_INDUSTRY {
+        } else if industry != "综合" {
             DimQuality::Partial
         } else {
             DimQuality::Missing
