@@ -27,7 +27,6 @@ impl FetchContext {
             market,
             prior: BTreeMap::new(),
             cached_quote: None,
-<<<<<<< HEAD
     pub fn prior_data(&self, dim_key: &str) -> Option<&serde_json::Value> {
         self.prior.get(dim_key).map(|r| &r.data)
     }
@@ -40,14 +39,7 @@ impl FetchContext {
             .map(str::to_string)
     }
 <<<<<<< HEAD
-
-    /// Prior `0_basic` dim payload and source tag.
-    #[must_use]
-    pub fn prior_basic(&self) -> Option<(&serde_json::Value, &str)> {
-        self.prior
-            .get("0_basic")
-            .map(|r| (&r.data, r.source.as_str()))
-    }
+<<<<<<< HEAD
 =======
->>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
 }

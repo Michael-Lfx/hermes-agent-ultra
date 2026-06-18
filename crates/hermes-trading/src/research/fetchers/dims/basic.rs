@@ -13,6 +13,74 @@ use crate::providers::QuoteSource;
 use crate::providers::akshare::{
     apply_supplement, fetch_a_share_quote_chain, fetch_basic_info_supplement,
 };
+=======
+use crate::quote_data::QuoteData;
+use crate::research::fetchers::context::FetchContext;
+use crate::research::fetchers::dim_keys;
+use crate::research::types::FundamentalsSnapshot;
+use crate::settlement::is_a_share;
+
+pub struct BasicFetcher {
+    basic: EastmoneyBasicProvider,
+    quotes: QuoteRouter,
+}
+
+impl BasicFetcher {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            basic: EastmoneyBasicProvider::new(),
+            quotes: QuoteRouter::new(),
+        }
+    }
+
+    pub const SPEC: FetcherSpec = FetcherSpec {
+        dim_key: dim_keys::BASIC,
+        depends_on: &[],
+        markets: &[Market::A, Market::H, Market::U],
+        sources: &["akshare", "eastmoney_push2", "tencent_qt", "yahoo"],
+        web_only: false,
+    };
+
+    /// QuoteData has no market_cap / shares — always merge push2 or individual_info for Full.
+    fn needs_push2_merge(_q: &QuoteData) -> bool {
+        true
+    }
+
+    fn snap_needs_supplement(snap: &FundamentalsSnapshot) -> bool {
+        snap.market_cap_yi.is_none()
+            || snap.shares_outstanding_yi.is_none()
+            || snap.industry.is_none()
+    }
+
+    async fn supplement_snap_if_needed(
+        ticker: &str,
+        snap: &mut FundamentalsSnapshot,
+        source: &mut String,
+    ) {
+        if !Self::snap_needs_supplement(snap) {
+            return;
+        }
+        match fetch_basic_info_supplement(ticker).await {
+            Ok(sup) => {
+                apply_supplement(snap, &sup);
+                if sup.market_cap_yi.is_some() || sup.industry.is_some() {
+                    if source.contains("akshare") {
+                        *source = format!("{source}+akshare_info");
+                    } else if source.is_empty() {
+                        *source = "akshare_info".into();
+                    } else {
+                        *source = format!("{source}+akshare_info");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(symbol = %ticker, error = %e, "basic individual_info supplement failed");
+            }
+        }
+    }
+
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
     fn snap_has_core(snap: &FundamentalsSnapshot) -> bool {
         snap.name.is_some() && snap.price.is_some()
     }
@@ -28,6 +96,7 @@ use crate::providers::akshare::{
             "shares_outstanding_yi": snap.shares_outstanding_yi,
             "change_pct": snap.change_pct,
             "industry": snap.industry,
+<<<<<<< HEAD
             }
             Ok(snap) => {
                 warn!(
@@ -165,22 +234,15 @@ mod tests {
 
 =======
     #[test]
-    fn needs_push2_merge_when_name_or_pe_missing() {
+    fn needs_push2_merge_always_for_capital_fields() {
         assert!(BasicFetcher::needs_push2_merge(&sample_quote(
-            "akshare", None, None
-        )));
-        assert!(BasicFetcher::needs_push2_merge(&sample_quote(
-            "akshare",
-            Some("牧原股份"),
-            None
-        )));
-        assert!(!BasicFetcher::needs_push2_merge(&sample_quote(
             "akshare",
             Some("牧原股份"),
             Some(12.0)
         )));
     }
 
+<<<<<<< HEAD
 >>>>>>> 98eae4748 (feat(trading): akshare-rs primary path for A-share research dims)
     #[test]
     fn needs_push2_merge_always_for_capital_fields() {
@@ -191,6 +253,8 @@ mod tests {
         )));
     }
 
+=======
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
     #[tokio::test]
     async fn merge_snap_and_quote_fills_gaps() {
         let snap = FundamentalsSnapshot {

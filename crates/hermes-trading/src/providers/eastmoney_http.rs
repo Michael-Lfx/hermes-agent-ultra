@@ -616,53 +616,8 @@ mod tests {
 
     #[tokio::test]
 <<<<<<< HEAD
-    async fn fetch_push2_quote_decodes_gzip_body() {
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        use std::io::Write;
-        use wiremock::matchers::{method, query_param};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let body = r#"{"data":{"f57":"600519","f58":"贵州茅台","f43":140704,"f116":2100000000000,"f162":1850,"f184":1256197800}}"#;
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(body.as_bytes()).unwrap();
-        let gzip_body = encoder.finish().unwrap();
-
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(query_param("secid", "1.600519"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_bytes(gzip_body)
-                    .insert_header("Content-Encoding", "gzip"),
-            )
-            .mount(&server)
-            .await;
-
-        let client = reqwest::Client::builder().gzip(true).build().unwrap();
-        let url = format!(
-            "{}/api/qt/stock/get?secid=1.600519&fields={}&ut={}",
-            server.uri(),
-            QUOTE_FIELDS_MIN,
-            EASTMONEY_UT
-        );
-        let resp = client
-            .get(&url)
-            .header(REFERER, EASTMONEY_REFERER)
-            .send()
-            .await
-            .unwrap();
-        let parsed: Push2QuoteResponse =
-            serde_json::from_slice(&resp.bytes().await.unwrap()).unwrap();
-        let raw = parsed.data.unwrap().into_raw();
-        assert_eq!(raw.name.as_deref(), Some("贵州茅台"));
-        assert_eq!(scaled_price(raw.price_raw), Some(1407.04));
-        assert_eq!(market_cap_yi(raw.market_cap_raw), Some(21_000.0));
-    }
-
-    #[tokio::test]
 =======
->>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
     #[ignore = "live network"]
     async fn live_push2_quote_600519() {
         let client = default_client();

@@ -58,6 +58,12 @@ pub async fn collect_dims(
             "dimension collection complete"
         );
     }
+<<<<<<< HEAD
+=======
+
+    output
+}
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
 
 <<<<<<< HEAD
     apply_dims_to_snapshot(snap, &output);

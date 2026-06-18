@@ -1,6 +1,18 @@
 //! akshare-rs adapter — primary A-share data path with eastmoney fallback.
 
 mod basic_info;
+=======
+mod candles;
+mod capital_flow;
+mod events;
+mod financials;
+mod fund_holders;
+mod lhb;
+mod peers;
+mod quote;
+mod research;
+mod valuation;
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
 
 use std::sync::OnceLock;
 
@@ -59,6 +71,7 @@ where
 pub use basic_info::{
     BasicInfoSupplement, apply_supplement, fetch_basic_info_supplement, map_individual_info,
 };
+<<<<<<< HEAD
 
 #[cfg(test)]
 mod tests {

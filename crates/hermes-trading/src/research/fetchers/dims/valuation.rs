@@ -18,14 +18,6 @@ pub struct ValuationFetcher {
 =======
     valuation: EastmoneyValuationProvider,
 >>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
-}
-
-impl ValuationFetcher {
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            basic: EastmoneyBasicProvider::new(),
-<<<<<<< HEAD
         }
     }
 

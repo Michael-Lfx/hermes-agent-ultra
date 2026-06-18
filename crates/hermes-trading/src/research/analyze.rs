@@ -85,53 +85,5 @@ pub fn snapshot_from_inputs(
     snap
 }
 <<<<<<< HEAD
-
-fn peers_from_raw_dims(raw_dims: Option<&Value>) -> Option<Vec<CompsPeer>> {
-    let table = raw_dims?
-        .get("4_peers")?
-        .get("data")?
-        .get("peer_table")?
-        .as_array()?;
-    if table.is_empty() {
-        return None;
-    }
-    let peers: Vec<CompsPeer> = table
-        .iter()
-        .map(|row| CompsPeer {
-            name: row.get("name").and_then(|v| v.as_str()).map(str::to_string),
-            ticker: row
-                .get("ticker")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            pe: row.get("pe").and_then(|v| v.as_f64()),
-            pb: row.get("pb").and_then(|v| v.as_f64()),
-            ..Default::default()
-        })
-        .collect();
-    if peers.is_empty() { None } else { Some(peers) }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn peers_from_raw_dims_maps_peer_table() {
-        let raw = json!({
-            "4_peers": {
-                "data": {
-                    "peer_table": [
-                        {"name": "五粮液", "ticker": "000858.SZ", "pe": 18.0, "pb": 4.2}
-                    ]
-                }
-            }
-        });
-        let peers = peers_from_raw_dims(Some(&raw)).unwrap();
-        assert_eq!(peers.len(), 1);
-        assert_eq!(peers[0].name.as_deref(), Some("五粮液"));
-        assert_eq!(peers[0].pe, Some(18.0));
-    }
-}
 =======
->>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
+>>>>>>> d9ae746af (feat(trading): P0 equity fetch — basic Full, valuation/peers/fund_holders, dedupe)
