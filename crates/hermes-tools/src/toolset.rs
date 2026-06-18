@@ -104,6 +104,14 @@ pub const TOOLSET_TRADING_QUOTE: &[&str] = &["get_quote"];
 pub const TOOLSET_TRADING: &[&str] = &[
     "get_quote",
     "resolve_a_share_symbol",
+=======
+    "get_market_data",
+    "run_backtest",
+    "get_backtest_report",
+    "list_strategies",
+    "create_strategy",
+];
+>>>>>>> 15df69bb5 (﻿feat(trading): equity research orchestration and full 19-dim report)
 
 // ---------------------------------------------------------------------------
 // Toolset
@@ -335,75 +343,6 @@ impl ToolsetManager {
                 .map(|s| s.to_string())
                 .collect(),
         ));
-=======
-        self.register(Toolset::new(
-            "trading",
-            TOOLSET_TRADING.iter().map(|s| s.to_string()).collect(),
-        ));
-
-        // Platform composite toolsets
-        self.register(Toolset::with_includes(
-            "hermes-cli",
-            vec![
-                "web",
-                "content",
-                "capture",
-                "terminal",
-                "file",
-                "browser",
-                "vision",
-                "image_gen",
-                "video_gen",
-                "spotify",
-                "skills",
-                "memory",
-                "session_search",
-                "todo",
-                "clarify",
-                "code_execution",
-                "delegation",
-                "cronjob",
-                "messaging",
-                "homeassistant",
-                "tts",
-                "computer_use",
-                "trading-quote",
-                "trading",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
-        ));
-        self.register(Toolset::with_includes(
-            "hermes-cron",
-            vec!["hermes-cli"].into_iter().map(String::from).collect(),
-        ));
-        self.register(Toolset::with_includes(
-            "hermes-telegram",
-            vec!["hermes-cli"].into_iter().map(String::from).collect(),
-        ));
-        self.register(Toolset::with_includes(
-            "hermes-discord",
-            vec!["hermes-telegram"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-        ));
-        self.register(Toolset::with_includes(
-            "hermes-whatsapp",
-            vec!["hermes-telegram"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-        ));
-        self.register(Toolset::with_includes(
-            "hermes-slack",
-            vec!["hermes-telegram"]
-                .into_iter()
-                .map(String::from)
-                .collect(),
-        ));
->>>>>>> 5fe790073 (feat(trading): Hermes memory, session_search, and trading-cron integration)
         self.register(Toolset::new(
             "trading",
             TOOLSET_TRADING.iter().map(|s| s.to_string()).collect(),
