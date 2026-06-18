@@ -296,15 +296,16 @@ impl AgentLoop {
             .filter(|m| m.role != MessageRole::System)
             .count();
         if !self.context_compression_should_run(ctx).await {
-            tracing::debug!(
-                model = %model,
-                model_context_tokens = model_tokens,
-                max_context_chars = max_c,
-                transcript_chars = before,
-                gateway_messages = gateway_msgs,
-                context_usage_pct = before_pct,
-                "Preflight compression check: no compression needed"
-            );
+            // tracing::debug!(
+            //     model = %model,
+            //     model_context_tokens = model_tokens,
+            //     max_context_chars = max_c,
+            //     transcript_chars = before,
+            //     gateway_messages = gateway_msgs,
+            //     context_usage_pct = before_pct,
+            //     "Preflight compression check: no compression needed"
+            // );
+            let _ = (model_tokens, gateway_msgs, before_pct);
             crate::hooks::emit_status(
                 self,
                 "lifecycle",

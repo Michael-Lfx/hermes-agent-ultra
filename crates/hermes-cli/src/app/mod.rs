@@ -451,8 +451,13 @@ impl App {
                 .unwrap_or_default();
 
             let result = crate::commands::handle_slash_command(self, cmd, &args).await?;
-            if result == crate::commands::CommandResult::Quit {
-                self.set_running(false);
+            match result {
+                crate::commands::CommandResult::Quit => self.set_running(false),
+                crate::commands::CommandResult::RunAgent(message) => {
+                    self.run_agent_user_message(message).await?;
+                }
+                crate::commands::CommandResult::Handled
+                | crate::commands::CommandResult::NeedsAgent => {}
             }
         } else {
             use crate::plan_mode::{PlanApprovalParseStyle, PlanTurnPrep, prepare_plan_turn};
@@ -503,10 +508,23 @@ impl App {
             .unwrap_or_default();
 
         let result = crate::commands::handle_slash_command(self, slash_cmd, &args).await?;
-        if result == crate::commands::CommandResult::Quit {
-            self.set_running(false);
+        match result {
+            crate::commands::CommandResult::Quit => self.set_running(false),
+            crate::commands::CommandResult::RunAgent(message) => {
+                self.run_agent_user_message(message).await?;
+            }
+            crate::commands::CommandResult::Handled
+            | crate::commands::CommandResult::NeedsAgent => {}
         }
         Ok(())
+    }
+
+    async fn run_agent_user_message(&mut self, user_message: String) -> Result<(), AgentError> {
+        let user_message = self.prepare_user_message(&user_message);
+        self.session
+            .messages
+            .push(hermes_core::Message::user(user_message));
+        self.run_agent_turn().await
     }
 
     /// Run agent-loop context compression on the current CLI transcript.

@@ -473,7 +473,13 @@ pub(crate) async fn prepare_user_turn(
     route_id: &str,
     route_start: Instant,
 ) -> Result<(Arc<Vec<Message>>, u64), GatewayError> {
-    let user_message = gw.prepare_inbound_user_message(incoming, session_key).await;
+    let mut effective_incoming = incoming.clone();
+    if let Some(override_text) = gw.take_pending_inbound_text(session_key).await {
+        effective_incoming.text = override_text;
+    }
+    let user_message = gw
+        .prepare_inbound_user_message(&effective_incoming, session_key)
+        .await;
     let input_chars = user_message
         .content
         .as_deref()
@@ -550,15 +556,15 @@ pub(crate) async fn dispatch_agent_route(
         && !incoming.platform.eq_ignore_ascii_case("whatsapp");
 
     if incoming.platform.eq_ignore_ascii_case("wecom") {
-        info!(
-            route_id = %route_id,
-            chat_id = %incoming.chat_id,
-            session_key = %session_key,
-            streaming_enabled = gw.config.streaming_enabled,
-            supports_streaming,
-            message_id = ?incoming.message_id,
-            "wecom route: streaming vs one-shot decision"
-        );
+        // info!(
+        //     route_id = %route_id,
+        //     chat_id = %incoming.chat_id,
+        //     session_key = %session_key,
+        //     streaming_enabled = gw.config.streaming_enabled,
+        //     supports_streaming,
+        //     message_id = ?incoming.message_id,
+        //     "wecom route: streaming vs one-shot decision"
+        // );
     }
 
     gw.begin_turn_outbound_tracking(session_key, &incoming.platform, &incoming.chat_id);

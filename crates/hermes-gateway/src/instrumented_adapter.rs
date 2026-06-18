@@ -5,10 +5,8 @@
 //! Concrete `platforms/*` implementations are unchanged.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_trait::async_trait;
-use tracing::debug;
 
 use hermes_core::errors::GatewayError;
 use hermes_core::traits::{ParseMode, PlatformAdapter, SendMessageOptions};
@@ -17,6 +15,7 @@ use hermes_core::traits::{ParseMode, PlatformAdapter, SendMessageOptions};
 /// calls without changing any platform behaviour.
 pub(crate) struct InstrumentedAdapter {
     inner: Arc<dyn PlatformAdapter>,
+    #[allow(dead_code)] // reserved for outbound timing logs when re-enabled
     platform: String,
 }
 
@@ -45,14 +44,13 @@ impl PlatformAdapter for InstrumentedAdapter {
         text: &str,
         parse_mode: Option<ParseMode>,
     ) -> Result<(), GatewayError> {
-        let t = Instant::now();
         let result = self.inner.send_message(chat_id, text, parse_mode).await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "send_message"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "send_message"
+        // );
         result
     }
 
@@ -62,17 +60,16 @@ impl PlatformAdapter for InstrumentedAdapter {
         text: &str,
         parse_mode: Option<ParseMode>,
     ) -> Result<Option<String>, GatewayError> {
-        let t = Instant::now();
         let result = self
             .inner
             .send_message_with_id(chat_id, text, parse_mode)
             .await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "send_message_with_id"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "send_message_with_id"
+        // );
         result
     }
 
@@ -158,14 +155,13 @@ impl PlatformAdapter for InstrumentedAdapter {
         file_path: &str,
         caption: Option<&str>,
     ) -> Result<(), GatewayError> {
-        let t = Instant::now();
         let result = self.inner.send_file(chat_id, file_path, caption).await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "send_file"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "send_file"
+        // );
         result
     }
 
@@ -187,14 +183,13 @@ impl PlatformAdapter for InstrumentedAdapter {
         image_url: &str,
         caption: Option<&str>,
     ) -> Result<(), GatewayError> {
-        let t = Instant::now();
         let result = self.inner.send_image_url(chat_id, image_url, caption).await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "send_image_url"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "send_image_url"
+        // );
         result
     }
 
@@ -208,14 +203,13 @@ impl PlatformAdapter for InstrumentedAdapter {
         message_id: &str,
         emoji: &str,
     ) -> Result<(), GatewayError> {
-        let t = Instant::now();
         let result = self.inner.add_reaction(chat_id, message_id, emoji).await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "add_reaction"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "add_reaction"
+        // );
         result
     }
 
@@ -233,14 +227,13 @@ impl PlatformAdapter for InstrumentedAdapter {
     }
 
     async fn trigger_typing(&self, chat_id: &str) -> Result<(), GatewayError> {
-        let t = Instant::now();
         let result = self.inner.trigger_typing(chat_id).await;
-        debug!(
-            platform = %self.platform,
-            elapsed_ms = t.elapsed().as_millis(),
-            ok = result.is_ok(),
-            "trigger_typing"
-        );
+        // debug!(
+        //     platform = %self.platform,
+        //     elapsed_ms = t.elapsed().as_millis(),
+        //     ok = result.is_ok(),
+        //     "trigger_typing"
+        // );
         result
     }
 

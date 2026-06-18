@@ -510,10 +510,11 @@ pub fn drop_thinking_only_and_merge_users(messages: Vec<Message>) -> Vec<Message
         }
         merged.push(m);
     }
-    debug!(
-        dropped,
-        merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
-    );
+    // debug!(
+    //     dropped,
+    //     merges, "Pre-call sanitizer: dropped thinking-only assistant turns"
+    // );
+    let _ = (dropped, merges);
     merged
 }
 

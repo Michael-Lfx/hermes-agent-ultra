@@ -1,4 +1,4 @@
-﻿//! Normalize Python Hermes `config.yaml` into shapes `GatewayConfig` can deserialize.
+//! Normalize Python Hermes `config.yaml` into shapes `GatewayConfig` can deserialize.
 //!
 //! Python 版常用：嵌套 `model:`、`toolsets:`、`agent.max_turns`、`session_reset`、`providers`、
 //! 根级 `telegram` / `discord` / `weixin` 等平台块（而非 `platforms:` 下）等；
@@ -251,11 +251,12 @@ fn merge_providers_into_llm(map: &mut Mapping) {
             .entry(Value::String(pname))
             .or_insert_with(|| Value::Mapping(Mapping::new()));
         if let Value::Mapping(em) = slot
-            && let Value::Mapping(src) = pv {
-                for (k, v) in src {
-                    em.insert(k, v);
-                }
+            && let Value::Mapping(src) = pv
+        {
+            for (k, v) in src {
+                em.insert(k, v);
             }
+        }
     }
     map.insert(llm_key, Value::Mapping(llm));
 }

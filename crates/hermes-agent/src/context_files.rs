@@ -175,7 +175,7 @@ pub fn load_workspace_context(working_dir: &Path) -> Option<String> {
                         } else {
                             scanned
                         };
-                        debug!("Loaded workspace context from {}", candidate.display());
+                        // debug!("Loaded workspace context from {}", candidate.display());
                         return Some(final_content);
                     }
                     Err(e) => {

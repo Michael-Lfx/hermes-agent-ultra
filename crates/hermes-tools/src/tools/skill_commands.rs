@@ -63,6 +63,34 @@ impl Default for SkillCommandResolverConfig {
     }
 }
 
+/// Build a resolver config from runtime skill allow/deny lists (CLI/gateway parity).
+pub fn skill_command_resolver_config(
+    enabled: &[String],
+    disabled: &[String],
+) -> SkillCommandResolverConfig {
+    SkillCommandResolverConfig {
+        roots: default_skill_roots(),
+        enabled: enabled.to_vec(),
+        disabled: disabled.to_vec(),
+        platform: Some(std::env::consts::OS.to_string()),
+    }
+}
+
+/// Resolve a full slash line (`/equity-research 山西汾酒`) against installed skills.
+pub fn try_resolve_skill_slash_line(
+    input: &str,
+    config: &SkillCommandResolverConfig,
+) -> Result<Option<SkillSlashInvocation>, String> {
+    let trimmed = input.trim();
+    if !trimmed.starts_with('/') {
+        return Ok(None);
+    }
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let command = parts.next().unwrap_or(trimmed);
+    let args = parts.next().unwrap_or_default();
+    resolve_installed_skill_slash_command(command, args, config)
+}
+
 /// Resolved installed-skill slash invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SkillSlashInvocation {
@@ -807,5 +835,28 @@ mod tests {
         assert!(note.contains("/reload-skills"));
         assert!(note.contains("/release-captain"));
         assert!(note.contains("/danger"));
+    }
+
+    #[test]
+    fn resolve_bundled_equity_research_skill_slash() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let skills_root = manifest_dir.join("../../skills");
+        if !skills_root
+            .join("finance/equity-research/SKILL.md")
+            .exists()
+        {
+            return;
+        }
+        let config = SkillCommandResolverConfig {
+            roots: vec![skills_root],
+            ..SkillCommandResolverConfig::default()
+        };
+        let resolved = try_resolve_skill_slash_line("/equity-research 山西汾酒", &config)
+            .expect("resolver should not error")
+            .expect("equity-research should resolve from nested skills/finance/");
+        assert_eq!(resolved.command, "/equity-research");
+        assert_eq!(resolved.skill_name, "equity-research");
+        assert!(resolved.message.contains("analyze_stock"));
+        assert!(resolved.message.contains("山西汾酒"));
     }
 }
