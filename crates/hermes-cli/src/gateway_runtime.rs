@@ -155,10 +155,9 @@ pub(crate) async fn run_gateway(
                     .iter()
                     .map(|dep| format!("{} ({})", dep, hermes_config::dep_check::description(*dep)))
                     .collect();
-                tracing::warn!(
+                tracing::info!(
                     deps = %labels.join(", "),
-                    "runtime dependencies missing on PATH; run `hermes gateway setup` to install, \
-                     or place binaries under $HERMES_HOME/bin"
+                    "runtime dependencies missing; attempting silent install"
                 );
 <<<<<<< HEAD
                 if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
@@ -170,8 +169,6 @@ pub(crate) async fn run_gateway(
                     );
                 }
                 }
-=======
->>>>>>> 92d35e74c (fix(deps): resolve RuntimeDep from HERMES_HOME managed bins and warn at gateway startup)
             }
             drop(_p2);
 
