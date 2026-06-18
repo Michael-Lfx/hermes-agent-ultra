@@ -63,6 +63,10 @@ pub fn normalize_symbol(symbol: &str) -> String {
         let code: u32 = suffix.parse().unwrap_or(0);
         return format!("{code:04}.HK");
     }
+    // Yahoo/Bloomberg Shanghai suffix → Hermes `.SH`
+    if upper.ends_with(".SS") {
+        return format!("{}.SH", &upper[..upper.len() - 3]);
+    }
     upper
 }
 
@@ -110,6 +114,12 @@ mod tests {
         assert_eq!(normalize_symbol("BTC"), "BTC-USDT");
         assert_eq!(normalize_symbol("eth"), "ETH-USDT");
         assert_eq!(normalize_symbol("比特币"), "BTC-USDT");
+    }
+
+    #[test]
+    fn normalize_shanghai_ss_alias() {
+        assert_eq!(normalize_symbol("600519.SS"), "600519.SH");
+        assert_eq!(normalize_symbol("600519.SH"), "600519.SH");
     }
 
     #[test]

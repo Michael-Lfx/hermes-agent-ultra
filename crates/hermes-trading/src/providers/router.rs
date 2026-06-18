@@ -92,10 +92,10 @@ impl AutoRouter {
         ensure_ohlcv_supported(symbol)?;
         let upper = symbol.to_uppercase();
         if upper.ends_with(".SZ") || upper.ends_with(".SH") {
-            debug!(symbol = %symbol, provider = "eastmoney", "AutoRouter selected");
+            // debug!(symbol = %symbol, provider = "eastmoney", "AutoRouter selected");
             Ok(&self.eastmoney)
         } else if symbol.contains('-') {
-            debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
+            // debug!(symbol = %symbol, provider = "binance", "AutoRouter selected");
             Ok(&self.binance)
         } else {
             Err(TradingError::SymbolNotFound(format!(
