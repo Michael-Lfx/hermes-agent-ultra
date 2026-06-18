@@ -32,6 +32,27 @@ impl ToolHandler for ResolveAShareSymbolHandler {
             "query": query,
             "symbol": symbol,
             "_orchestration": "Call analyze_stock(symbol, use_providers=true) next for valuation/DCF/scoring — before web_search.",
+<<<<<<< HEAD
+=======
+        }))
+        .map_err(|e| ToolError::ExecutionFailed(e.to_string()))
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "query".into(),
+            json!({
+                "type": "string",
+                "description": "Chinese stock name or 6-digit code (e.g. 牧原股份, 600519, 600519.SH)"
+            }),
+        );
+
+        tool_schema(
+            "resolve_a_share_symbol",
+            "Resolve A-share Chinese name or 6-digit code to canonical symbol (600519.SH / 000001.SZ). \
+             After resolution, call analyze_stock for fundamentals/valuation — not web_search first.",
+>>>>>>> 7062cddeb (﻿feat(trading): equity research orchestration and full 19-dim report)
             JsonSchema::object(props, vec!["query".into()]),
         )
     }
