@@ -1,12 +1,16 @@
 //! akshare-rs adapter — primary A-share data path with eastmoney fallback.
 
+mod basic_info;
 mod candles;
 mod capital_flow;
 mod events;
 mod financials;
+mod fund_holders;
 mod lhb;
+mod peers;
 mod quote;
 mod research;
+mod valuation;
 
 use std::sync::OnceLock;
 
@@ -62,13 +66,21 @@ where
     }
 }
 
+pub use basic_info::{
+    BasicInfoSupplement, apply_supplement, fetch_basic_info_supplement, map_individual_info,
+};
 pub use candles::fetch_a_share_closes;
 pub use capital_flow::fetch_capital_flow_dim_akshare;
 pub use events::fetch_events_dim_akshare;
 pub use financials::fetch_financials_dim_akshare;
+pub use fund_holders::fetch_fund_holders_dim;
 pub use lhb::fetch_lhb_dim_akshare;
+pub use peers::{
+    em_prefix_symbol, fetch_industry_growth, fetch_peer_table, map_peer_table, median_peer_pe,
+};
 pub use quote::fetch_a_share_quote_chain;
 pub use research::fetch_research_dim_akshare;
+pub use valuation::{fetch_valuation_percentiles, percentile_rank};
 
 #[cfg(test)]
 mod tests {

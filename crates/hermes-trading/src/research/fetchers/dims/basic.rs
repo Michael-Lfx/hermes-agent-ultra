@@ -10,7 +10,9 @@ use crate::providers::EastmoneyBasicProvider;
 use crate::providers::FundamentalsProvider;
 use crate::providers::QuoteRouter;
 use crate::providers::QuoteSource;
-use crate::providers::akshare::fetch_a_share_quote_chain;
+use crate::providers::akshare::{
+    apply_supplement, fetch_a_share_quote_chain, fetch_basic_info_supplement,
+};
 use crate::quote_data::QuoteData;
 use crate::research::fetchers::context::FetchContext;
 use crate::research::fetchers::dim_keys;
@@ -39,9 +41,42 @@ impl BasicFetcher {
         web_only: false,
     };
 
-    /// push2 merge only when quote lacks name or PE (market_cap still needs push2 for Full).
-    fn needs_push2_merge(q: &QuoteData) -> bool {
-        q.short_name.is_none() || q.pe_ratio.is_none()
+    /// QuoteData has no market_cap / shares — always merge push2 or individual_info for Full.
+    fn needs_push2_merge(_q: &QuoteData) -> bool {
+        true
+    }
+
+    fn snap_needs_supplement(snap: &FundamentalsSnapshot) -> bool {
+        snap.market_cap_yi.is_none()
+            || snap.shares_outstanding_yi.is_none()
+            || snap.industry.is_none()
+    }
+
+    async fn supplement_snap_if_needed(
+        ticker: &str,
+        snap: &mut FundamentalsSnapshot,
+        source: &mut String,
+    ) {
+        if !Self::snap_needs_supplement(snap) {
+            return;
+        }
+        match fetch_basic_info_supplement(ticker).await {
+            Ok(sup) => {
+                apply_supplement(snap, &sup);
+                if sup.market_cap_yi.is_some() || sup.industry.is_some() {
+                    if source.contains("akshare") {
+                        *source = format!("{source}+akshare_info");
+                    } else if source.is_empty() {
+                        *source = "akshare_info".into();
+                    } else {
+                        *source = format!("{source}+akshare_info");
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(symbol = %ticker, error = %e, "basic individual_info supplement failed");
+            }
+        }
     }
 
     fn snap_has_core(snap: &FundamentalsSnapshot) -> bool {
@@ -58,6 +93,7 @@ impl BasicFetcher {
             "market_cap_yi": snap.market_cap_yi,
             "shares_outstanding_yi": snap.shares_outstanding_yi,
             "change_pct": snap.change_pct,
+            "industry": snap.industry,
         });
         DimResult::ok(
             dim_keys::BASIC,
@@ -103,15 +139,34 @@ impl BasicFetcher {
         {
             if Self::needs_push2_merge(&q) {
                 match self.basic.fetch(ticker).await {
-                    Ok(snap) => return Self::merge_snap_and_quote(ticker, snap, &q),
+                    Ok(mut snap) => {
+                        Self::merge_snap_fields(&mut snap, &q);
+                        let mut source = if q.source == "akshare" {
+                            "akshare+eastmoney_push2".into()
+                        } else if q.source == "tencent_qt" {
+                            "eastmoney_push2+tencent_qt".into()
+                        } else {
+                            q.source.clone()
+                        };
+                        Self::supplement_snap_if_needed(ticker, &mut snap, &mut source).await;
+                        return Self::dim_from_snap(&snap, &source);
+                    }
                     Err(e) => {
                         warn!(symbol = %ticker, error = %e, "eastmoney basic merge skipped");
                     }
                 }
-            } else {
-                debug!(symbol = %ticker, "basic dim skipping push2 merge; quote has name+pe");
             }
-            return Self::dim_from_quote(ticker, &q);
+            let mut snap = FundamentalsSnapshot {
+                symbol: ticker.to_string(),
+                name: q.short_name.clone(),
+                price: q.price,
+                pe: q.pe_ratio,
+                change_pct: q.change_pct,
+                ..Default::default()
+            };
+            let mut source = q.source.clone();
+            Self::supplement_snap_if_needed(ticker, &mut snap, &mut source).await;
+            return Self::dim_from_snap(&snap, &source);
         }
 
         self.fetch_a_share_fallback(ticker).await
@@ -119,8 +174,10 @@ impl BasicFetcher {
 
     async fn fetch_a_share_fallback(&self, ticker: &str) -> DimResult {
         match self.basic.fetch(ticker).await {
-            Ok(snap) if Self::snap_has_core(&snap) => {
-                return Self::dim_from_snap(&snap, "eastmoney_push2");
+            Ok(mut snap) if Self::snap_has_core(&snap) => {
+                let mut source = "eastmoney_push2".to_string();
+                Self::supplement_snap_if_needed(ticker, &mut snap, &mut source).await;
+                return Self::dim_from_snap(&snap, &source);
             }
             Ok(snap) => {
                 warn!(
@@ -132,7 +189,7 @@ impl BasicFetcher {
                     .fetch_quote_with_source(ticker, QuoteSource::Auto, false)
                     .await
                 {
-                    return Self::merge_snap_and_quote(ticker, snap, &q);
+                    return Self::merge_snap_and_quote(ticker, snap, &q).await;
                 }
             }
             Err(e) => {
@@ -149,16 +206,24 @@ impl BasicFetcher {
             .fetch_quote_with_source(ticker, QuoteSource::Auto, false)
             .await
         {
-            Ok(q) => Self::dim_from_quote(ticker, &q),
+            Ok(q) => {
+                let mut snap = FundamentalsSnapshot {
+                    symbol: ticker.to_string(),
+                    name: q.short_name.clone(),
+                    price: q.price,
+                    pe: q.pe_ratio,
+                    change_pct: q.change_pct,
+                    ..Default::default()
+                };
+                let mut source = q.source.clone();
+                Self::supplement_snap_if_needed(ticker, &mut snap, &mut source).await;
+                Self::dim_from_snap(&snap, &source)
+            }
             Err(e) => DimResult::error(dim_keys::BASIC, ticker, "quote_router", e.to_string()),
         }
     }
 
-    fn merge_snap_and_quote(
-        _ticker: &str,
-        mut snap: FundamentalsSnapshot,
-        q: &QuoteData,
-    ) -> DimResult {
+    fn merge_snap_fields(snap: &mut FundamentalsSnapshot, q: &QuoteData) {
         if snap.name.is_none() {
             snap.name.clone_from(&q.short_name);
         }
@@ -171,18 +236,27 @@ impl BasicFetcher {
         if snap.change_pct.is_none() {
             snap.change_pct = q.change_pct;
         }
-        let source = if q.source == "akshare" {
+    }
+
+    async fn merge_snap_and_quote(
+        ticker: &str,
+        mut snap: FundamentalsSnapshot,
+        q: &QuoteData,
+    ) -> DimResult {
+        Self::merge_snap_fields(&mut snap, q);
+        let mut source = if q.source == "akshare" {
             if snap.market_cap_yi.is_some() {
-                "akshare+eastmoney_push2"
+                "akshare+eastmoney_push2".into()
             } else {
-                "akshare"
+                "akshare".into()
             }
         } else if q.source == "tencent_qt" {
-            "eastmoney_push2+tencent_qt"
+            "eastmoney_push2+tencent_qt".into()
         } else {
-            q.source.as_str()
+            q.source.clone()
         };
-        Self::dim_from_snap(&snap, source)
+        Self::supplement_snap_if_needed(ticker, &mut snap, &mut source).await;
+        Self::dim_from_snap(&snap, &source)
     }
 }
 
@@ -240,24 +314,16 @@ mod tests {
     }
 
     #[test]
-    fn needs_push2_merge_when_name_or_pe_missing() {
+    fn needs_push2_merge_always_for_capital_fields() {
         assert!(BasicFetcher::needs_push2_merge(&sample_quote(
-            "akshare", None, None
-        )));
-        assert!(BasicFetcher::needs_push2_merge(&sample_quote(
-            "akshare",
-            Some("牧原股份"),
-            None
-        )));
-        assert!(!BasicFetcher::needs_push2_merge(&sample_quote(
             "akshare",
             Some("牧原股份"),
             Some(12.0)
         )));
     }
 
-    #[test]
-    fn merge_snap_and_quote_fills_gaps() {
+    #[tokio::test]
+    async fn merge_snap_and_quote_fills_gaps() {
         let snap = FundamentalsSnapshot {
             symbol: "600519.SH".into(),
             market_cap_yi: Some(1500.0),
@@ -280,7 +346,7 @@ mod tests {
             source: "akshare".into(),
             partial: false,
         };
-        let dim = BasicFetcher::merge_snap_and_quote("600519.SH", snap, &q);
+        let dim = BasicFetcher::merge_snap_and_quote("600519.SH", snap, &q).await;
         assert!(dim.error.is_none());
         assert_eq!(dim.source, "akshare+eastmoney_push2");
         assert_eq!(dim.data.get("price").and_then(|v| v.as_f64()), Some(1407.0));

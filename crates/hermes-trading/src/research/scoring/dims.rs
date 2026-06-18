@@ -168,7 +168,11 @@ pub fn score_dimensions(
     out.insert(
         "4_peers".into(),
         DimScore {
-            score: if get("4_peers").get("peer_table").is_some() {
+            score: if get("4_peers")
+                .get("peer_table")
+                .and_then(|v| v.as_array())
+                .is_some_and(|a| !a.is_empty())
+            {
                 7
             } else {
                 5
@@ -188,11 +192,15 @@ pub fn score_dimensions(
 
     // 10 · valuation
     let val = get("10_valuation");
-    let pe_q_str = val
-        .get("pe_quantile")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let pe_q = parse_pe_quantile(pe_q_str)
+    let pe_q = val
+        .get("pe_percentile")
+        .and_then(|v| v.as_f64())
+        .map(|v| v.round() as i32)
+        .or_else(|| {
+            val.get("pe_quantile")
+                .and_then(|v| v.as_str())
+                .and_then(parse_pe_quantile)
+        })
         .or(features.pe_quantile_5y.map(|v| v as i32))
         .unwrap_or(50);
     let score_10 = if pe_q < 30 {
@@ -213,7 +221,8 @@ pub fn score_dimensions(
             weight: 5,
             label: format!(
                 "PE {} · 5 年 {pe_q} 分位",
-                val.get("pe")
+                val.get("pe_ttm")
+                    .or_else(|| val.get("pe"))
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "—".into())
             ),
