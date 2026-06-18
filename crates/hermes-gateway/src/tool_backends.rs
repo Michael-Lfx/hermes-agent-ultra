@@ -386,10 +386,10 @@ impl ClarifyDispatcher {
             waits.get(session_key).cloned()
         };
         let Some(id) = id else {
-            debug!(
-                session_key = %session_key,
-                "clarify dispatcher: fast-path skipped — no active session wait"
-            );
+            // debug!(
+            //     session_key = %session_key,
+            //     "clarify dispatcher: fast-path skipped — no active session wait"
+            // );
             return false;
         };
         if !self.senders.lock().await.contains_key(&id) {

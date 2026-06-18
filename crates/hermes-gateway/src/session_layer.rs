@@ -70,6 +70,8 @@ pub(crate) struct SessionRuntimeState {
     pub(crate) verbose: bool,
     pub(crate) yolo: bool,
     pub(crate) reasoning: bool,
+    /// One-shot user message override (skill slash fallthrough to agent).
+    pub(crate) pending_inbound_text: Option<String>,
 }
 
 impl Default for SessionRuntimeState {
@@ -87,6 +89,7 @@ impl Default for SessionRuntimeState {
             verbose: false,
             yolo: false,
             reasoning: false,
+            pending_inbound_text: None,
         }
     }
 }

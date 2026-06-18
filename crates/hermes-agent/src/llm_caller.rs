@@ -44,12 +44,12 @@ pub(crate) fn build_turn_api_messages(
     if let Ok(state) = agent.state.lock() {
         if let Some((cached_key, arc)) = state.turn_api_messages_cache.as_ref() {
             if *cached_key == key {
-                tracing::debug!(cache = "hit", msg_count = arc.len());
+                // tracing::debug!(cache = "hit", msg_count = arc.len());
                 return Arc::clone(arc);
             }
         }
     }
-    tracing::debug!(cache = "miss");
+    // tracing::debug!(cache = "miss");
 
     let cfg = agent.config();
     let prefetch = agent
@@ -703,11 +703,12 @@ pub(crate) fn handle_reasoning_only_prefill(
     max_attempts: u32,
 ) {
     crate::hooks::emit_reasoning_from_message(agent, message);
-    tracing::debug!(
-        "reasoning-only assistant response; prefill continuation ({}/{})",
-        attempt,
-        max_attempts
-    );
+    // tracing::debug!(
+    //     "reasoning-only assistant response; prefill continuation ({}/{})",
+    //     attempt,
+    //     max_attempts
+    // );
+    let _ = (attempt, max_attempts);
 }
 
 // ---------------------------------------------------------------------------

@@ -84,73 +84,80 @@ pub fn parse_frontmatter(content: &str) -> (HashMap<String, Value>, String) {
 // Skill discovery
 // ---------------------------------------------------------------------------
 
-/// Scan multiple directories for skills (each subdirectory containing a SKILL.md).
+/// Scan multiple directories for skills (recursive; any nested `SKILL.md`).
 pub fn discover_skills(dirs: &[PathBuf]) -> Vec<SkillInfo> {
     let mut skills = Vec::new();
+    let mut seen_paths = HashSet::new();
 
     for dir in dirs {
-        if !dir.exists() || !dir.is_dir() {
-            continue;
-        }
+        discover_skills_recursive(dir, &mut skills, &mut seen_paths);
+    }
 
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            continue;
-        };
+    skills
+}
 
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let skill_md = path.join("SKILL.md");
-            if !skill_md.exists() {
-                continue;
-            }
-
-            let Ok(content) = std::fs::read_to_string(&skill_md) else {
-                continue;
-            };
-
-            let name = path
-                .file_name()
+fn skill_name_from_frontmatter(frontmatter: &HashMap<String, Value>, path: &Path) -> String {
+    frontmatter
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            path.file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
-                .into_owned();
+                .into_owned()
+        })
+}
 
-            let (frontmatter, body) = parse_frontmatter(&content);
+fn load_skill_info(skill_dir: &Path, skill_md: &Path) -> Option<SkillInfo> {
+    let content = std::fs::read_to_string(skill_md).ok()?;
+    let (frontmatter, body) = parse_frontmatter(&content);
+    let name = skill_name_from_frontmatter(&frontmatter, skill_dir);
+    Some(SkillInfo {
+        name,
+        path: skill_dir.to_path_buf(),
+        content,
+        frontmatter,
+        body,
+    })
+}
 
-            skills.push(SkillInfo {
-                name,
-                path: path.clone(),
-                content,
-                frontmatter,
-                body,
-            });
-        }
+fn discover_skills_recursive(
+    dir: &Path,
+    out: &mut Vec<SkillInfo>,
+    seen_paths: &mut HashSet<PathBuf>,
+) {
+    if !dir.is_dir() {
+        return;
+    }
+    if dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.starts_with('.'))
+    {
+        return;
+    }
 
-        // Also check for standalone SKILL.md files (not in subdirs)
-        let standalone = dir.join("SKILL.md");
-        if standalone.exists() {
-            if let Ok(content) = std::fs::read_to_string(&standalone) {
-                let name = dir
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let (frontmatter, body) = parse_frontmatter(&content);
-                skills.push(SkillInfo {
-                    name,
-                    path: dir.clone(),
-                    content,
-                    frontmatter,
-                    body,
-                });
+    let skill_md = dir.join("SKILL.md");
+    if skill_md.is_file() {
+        if let Some(info) = load_skill_info(dir, &skill_md) {
+            if seen_paths.insert(info.path.clone()) {
+                out.push(info);
             }
         }
     }
 
-    skills
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            discover_skills_recursive(&path, out, seen_paths);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +355,22 @@ pub fn match_platform(skill: &SkillInfo, platform: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discover_skills_finds_nested_category_skills() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let finance = tmp.path().join("finance").join("equity-research");
+        std::fs::create_dir_all(&finance).expect("mkdir");
+        std::fs::write(
+            finance.join("SKILL.md"),
+            "---\nname: equity-research\ndescription: test\n---\n# Body\n",
+        )
+        .expect("write skill");
+
+        let found = discover_skills(&[tmp.path().to_path_buf()]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "equity-research");
+    }
 
     #[test]
     fn test_parse_frontmatter_with_yaml() {

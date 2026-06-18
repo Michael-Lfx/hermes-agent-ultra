@@ -1122,6 +1122,30 @@ impl Gateway {
         }
 
         let result = handle_command(&incoming.text);
+        if matches!(&result, GatewayCommandResult::Unknown(_)) {
+            let (cmd, args) = Self::split_slash_command(&incoming.text);
+            match hermes_tools::skill_commands::resolve_installed_skill_slash_command(
+                &cmd,
+                &args,
+                &hermes_tools::skill_commands::SkillCommandResolverConfig::default(),
+            ) {
+                Ok(Some(invocation)) => {
+                    self.set_pending_inbound_text(session_key, invocation.message)
+                        .await;
+                    return Ok(false);
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    self.send_incoming_reply(
+                        incoming,
+                        &format!("Skill invocation blocked: {err}"),
+                        None,
+                    )
+                    .await?;
+                    return Ok(true);
+                }
+            }
+        }
         if !matches!(result, GatewayCommandResult::Unknown(_)) {
             if let Some(command_name) = Self::extract_command_name(&incoming.text) {
                 self.emit_hook_event(
@@ -1150,6 +1174,19 @@ impl Gateway {
         result: GatewayCommandResult,
     ) -> Result<bool, GatewayError> {
         crate::command_runtime::apply_command(self, incoming, session_key, result).await
+    }
+
+    pub(crate) async fn set_pending_inbound_text(&self, session_key: &str, text: String) {
+        let mut states = self.session.runtime_state.write().await;
+        let state = states.entry(session_key.to_string()).or_default();
+        state.pending_inbound_text = Some(text);
+    }
+
+    pub(crate) async fn take_pending_inbound_text(&self, session_key: &str) -> Option<String> {
+        let mut states = self.session.runtime_state.write().await;
+        states
+            .get_mut(session_key)
+            .and_then(|state| state.pending_inbound_text.take())
     }
 
     // -----------------------------------------------------------------------

@@ -75,9 +75,7 @@ impl AlertEngine {
                 let triggered = match &alert.condition {
                     AlertCondition::PriceAbove { threshold } => quote.price >= *threshold,
                     AlertCondition::PriceBelow { threshold } => quote.price <= *threshold,
-                    AlertCondition::ChangePctExceeds { pct } => {
-                        quote.change_pct.abs() >= *pct
-                    }
+                    AlertCondition::ChangePctExceeds { pct } => quote.change_pct.abs() >= *pct,
                     AlertCondition::VolumeAbove { threshold } => quote.volume >= *threshold,
                 };
                 if triggered {

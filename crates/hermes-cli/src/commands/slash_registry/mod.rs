@@ -566,7 +566,26 @@ pub(crate) async fn dispatch(
     let canonical = canonical_command(cmd);
     match COMMAND_LOOKUP.get(canonical) {
         Some(id) => invoke_handler(*id, host, cmd, args).await,
-        None => {
+        None => try_dispatch_skill_slash(host, cmd, args).await,
+    }
+}
+
+async fn try_dispatch_skill_slash(
+    host: &mut (impl crate::app::SlashCommandHost + crate::app::AcpServerRuntime),
+    cmd: &str,
+    args: &[&str],
+) -> Result<CommandResult, AgentError> {
+    let config = host.config();
+    let resolver = hermes_tools::skill_commands::skill_command_resolver_config(
+        &config.skills.enabled,
+        &config.skills.disabled,
+    );
+    let args_text = args.join(" ");
+    match hermes_tools::skill_commands::resolve_installed_skill_slash_command(
+        cmd, &args_text, &resolver,
+    ) {
+        Ok(Some(invocation)) => Ok(CommandResult::RunAgent(invocation.message)),
+        Ok(None) => {
             emit_command_output(
                 host,
                 format!(
@@ -574,6 +593,10 @@ pub(crate) async fn dispatch(
                     cmd
                 ),
             );
+            Ok(CommandResult::Handled)
+        }
+        Err(err) => {
+            emit_command_output(host, format!("Skill invocation blocked: {err}"));
             Ok(CommandResult::Handled)
         }
     }

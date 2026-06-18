@@ -386,13 +386,11 @@ pub fn make_gateway_on_thinking_callback(
     _stream_emit: Option<Arc<dyn Fn(String) + Send + Sync>>,
 ) -> Box<dyn Fn(&str) + Send + Sync> {
     struct ThinkingLogState {
-        started_at: Instant,
         last_flush: Instant,
         delta_count: u64,
         total_chars: usize,
     }
     let state = Arc::new(StdMutex::new(ThinkingLogState {
-        started_at: Instant::now(),
         last_flush: Instant::now(),
         delta_count: 0,
         total_chars: 0,
@@ -411,13 +409,13 @@ pub fn make_gateway_on_thinking_callback(
         if now.duration_since(guard.last_flush) >= Duration::from_millis(1000)
             || guard.delta_count >= 32
         {
-            tracing::debug!(
-                thinking_delta_count = guard.delta_count,
-                thinking_total_chars = guard.total_chars,
-                thinking_window_ms = now.duration_since(guard.last_flush).as_millis() as u64,
-                thinking_elapsed_ms = now.duration_since(guard.started_at).as_millis() as u64,
-                "gateway thinking deltas aggregated (not sent to chat)"
-            );
+            // tracing::debug!(
+            //     thinking_delta_count = guard.delta_count,
+            //     thinking_total_chars = guard.total_chars,
+            //     thinking_window_ms = now.duration_since(guard.last_flush).as_millis() as u64,
+            //     thinking_elapsed_ms = now.duration_since(guard.started_at).as_millis() as u64,
+            //     "gateway thinking deltas aggregated (not sent to chat)"
+            // );
             guard.delta_count = 0;
             guard.total_chars = 0;
             guard.last_flush = now;

@@ -115,23 +115,10 @@ impl AgentLoop {
         Ok(Some(response.message))
     }
 
-    pub(crate) fn emit_background_review_metrics(&self, turn: u32, ctx: &ContextManager) {
+    pub(crate) fn emit_background_review_metrics(&self, _turn: u32, _ctx: &ContextManager) {
         if !self.config().background_review_metrics_enabled {
             return;
         }
-        let snapshot = ctx.get_messages().to_vec();
-        tokio::spawn(async move {
-            let tool_msg_count = snapshot
-                .iter()
-                .filter(|m| matches!(m.role, hermes_core::MessageRole::Tool))
-                .count();
-            tracing::debug!(
-                turn,
-                tool_messages = tool_msg_count,
-                total_messages = snapshot.len(),
-                "Background review snapshot captured"
-            );
-        });
     }
 
     /// Metrics (always) + optional Python-style memory/skill review LLM pass on session end.
@@ -294,7 +281,8 @@ impl AgentLoop {
             .filter(|c| c.contains("TODO") || c.contains("[ ]") || c.contains("[x]"))
             .count();
         if todo_markers > 0 {
-            tracing::debug!(todo_markers, "Hydrated todo markers from prior context");
+            // tracing::debug!(todo_markers, "Hydrated todo markers from prior context");
+            let _ = todo_markers;
         }
     }
 }

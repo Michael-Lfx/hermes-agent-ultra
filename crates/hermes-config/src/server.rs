@@ -27,8 +27,7 @@ impl ServerLoginMethod {
 }
 
 /// Top-level remote server settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ServerConfig {
     /// When true, Hermes uses the remote server for LLM calls (after login).
     #[serde(default)]
