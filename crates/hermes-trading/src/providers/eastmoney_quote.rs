@@ -33,6 +33,14 @@ impl EastmoneyQuoteProvider {
     }
 }
 
+=======
+impl Default for EastmoneyQuoteProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+>>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
 #[async_trait]
 impl QuoteProvider for EastmoneyQuoteProvider {
     async fn fetch_quote(&self, symbol: &str) -> Result<QuoteData, TradingError> {
@@ -42,6 +50,7 @@ impl QuoteProvider for EastmoneyQuoteProvider {
                 "Eastmoney quote only supports A-shares: {symbol}"
             )));
         }
+<<<<<<< HEAD
         crate::providers::akshare::fetch_a_share_quote_chain(&canonical).await
     }
 

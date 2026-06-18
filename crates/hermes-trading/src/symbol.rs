@@ -12,6 +12,10 @@ pub fn is_a_share(symbol: &str) -> bool {
 >>>>>>> 3a6234f77 (feat(trading): reject US/HK OHLCV and backtest until live data is wired)
 
     }
+    // Yahoo/Bloomberg Shanghai suffix → Hermes `.SH`
+    if upper.ends_with(".SS") {
+        return format!("{}.SH", &upper[..upper.len() - 3]);
+    }
     upper
 }
 
@@ -24,8 +28,8 @@ pub fn ensure_ohlcv_supported(symbol: &str) -> Result<(), TradingError> {
              Use get_quote for US/HK spot prices; backtest A-share or crypto symbols only."
         )));
     }
-<<<<<<< HEAD
     Ok(())
 }
 
+<<<<<<< HEAD
 }

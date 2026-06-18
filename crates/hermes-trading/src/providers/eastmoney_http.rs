@@ -615,6 +615,7 @@ mod tests {
     }
 
     #[tokio::test]
+<<<<<<< HEAD
     async fn fetch_push2_quote_decodes_gzip_body() {
         use flate2::Compression;
         use flate2::write::GzEncoder;
@@ -660,6 +661,8 @@ mod tests {
     }
 
     #[tokio::test]
+=======
+>>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
     #[ignore = "live network"]
     async fn live_push2_quote_600519() {
         let client = default_client();

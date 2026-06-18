@@ -35,10 +35,7 @@ impl EastmoneyProvider {
     /// Convert user-facing symbol to Eastmoney `secid` format.
 <<<<<<< HEAD
 =======
-    ///
-    /// - `"000001.SZ"` → `"0.000001"` (深市 / Shenzhen = market 0)
-    /// - `"600519.SH"` → `"1.600519"` (沪市 / Shanghai = market 1)
->>>>>>> cc681fb4b (feat(trading): spot quote stack with get_quote tool and spot-quote skill)
+>>>>>>> f76b705d1 (feat(trading): shared eastmoney HTTP layer with Tencent qt fallback)
     pub(crate) fn to_secid(symbol: &str) -> Result<String, TradingError> {
         let parts: Vec<&str> = symbol.split('.').collect();
         if parts.len() != 2 {
