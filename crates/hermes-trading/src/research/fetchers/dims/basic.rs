@@ -96,7 +96,6 @@ impl BasicFetcher {
             "shares_outstanding_yi": snap.shares_outstanding_yi,
             "change_pct": snap.change_pct,
             "industry": snap.industry,
-<<<<<<< HEAD
             }
             Ok(snap) => {
                 warn!(
@@ -232,18 +231,6 @@ mod tests {
         }
     }
 
-=======
-    #[test]
-    fn needs_push2_merge_always_for_capital_fields() {
-        assert!(BasicFetcher::needs_push2_merge(&sample_quote(
-            "akshare",
-            Some("牧原股份"),
-            Some(12.0)
-        )));
-    }
-
-<<<<<<< HEAD
->>>>>>> 98eae4748 (feat(trading): akshare-rs primary path for A-share research dims)
     #[test]
     fn needs_push2_merge_always_for_capital_fields() {
         assert!(BasicFetcher::needs_push2_merge(&sample_quote(
@@ -282,6 +269,9 @@ mod tests {
         let dim = BasicFetcher::merge_snap_and_quote("600519.SH", snap, &q).await;
         assert!(dim.error.is_none());
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
         assert_eq!(dim.source, "akshare+eastmoney_push2+akshare_info");
         assert_eq!(dim.data.get("price").and_then(|v| v.as_f64()), Some(1407.0));
         assert_eq!(

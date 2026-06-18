@@ -10,6 +10,79 @@ use hermes_trading::research::models::{
     project_three_stmt, quick_lbo,
 };
 use hermes_trading::research::scoring::{generate_panel, score_dimensions};
+=======
+use hermes_trading::research::types::FeatureVector;
+
+#[derive(Debug, serde::Deserialize)]
+struct FixtureFile {
+    #[allow(dead_code)]
+    schema_version: u32,
+    #[allow(dead_code)]
+    fixture_group: String,
+    cases: Vec<FixtureCase>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FixtureCase {
+    id: String,
+    op: String,
+    input: Value,
+    expected: Value,
+    #[serde(default)]
+    skip: bool,
+}
+
+fn fixture_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/trading_research/models_golden.json")
+}
+
+fn load_fixtures() -> FixtureFile {
+    let content = fs::read_to_string(fixture_path()).expect("read models_golden.json");
+    serde_json::from_str(&content).expect("parse fixture")
+}
+
+fn features_from(v: &Value) -> FeatureVector {
+    let mut f: FeatureVector =
+        serde_json::from_value(v.clone()).unwrap_or_else(|_| FeatureVector {
+            symbol: v
+                .get("symbol")
+                .and_then(|s| s.as_str())
+                .unwrap_or("TEST")
+                .to_string(),
+            ..Default::default()
+        });
+    if f.symbol.is_empty() {
+        f.symbol = "TEST".into();
+    }
+    macro_rules! set_f64 {
+        ($field:ident) => {
+            if f.$field.is_none() {
+                if let Some(n) = v.get(stringify!($field)).and_then(|x| x.as_f64()) {
+                    f.$field = Some(n);
+                }
+            }
+        };
+    }
+    set_f64!(price);
+    set_f64!(market_cap_yi);
+    set_f64!(shares_outstanding_yi);
+    set_f64!(revenue_latest_yi);
+    set_f64!(net_margin);
+    set_f64!(total_debt_yi);
+    set_f64!(cash_yi);
+    set_f64!(fcf_latest_yi);
+    set_f64!(ebitda_yi);
+    set_f64!(equity_yi);
+    if let Some(b) = v.get("fcf_positive").and_then(|x| x.as_bool()) {
+        f.fcf_positive = Some(b);
+    }
+    if let Some(n) = v.get("debt_ratio").and_then(|x| x.as_f64()) {
+        f.debt_ratio = Some(n);
+    }
+    if let Some(n) = v.get("pe_quantile_5y").and_then(|x| x.as_f64()) {
+        f.pe_quantile_5y = Some(n);
+    }
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
     f
 }
 
@@ -93,37 +166,9 @@ fn run_case(case: &FixtureCase) {
             ));
         }
 <<<<<<< HEAD
-        "persona_panel" => {
-            let f = features_from(&case.input);
-            let raw = case
-                .input
-                .get("raw_dims")
-                .cloned()
-                .unwrap_or(serde_json::json!({}));
-            let scored = score_dimensions(f.symbol.as_str(), &raw, &f);
-            let p1 = generate_panel(&scored, &f);
-            let p2 = generate_panel(&scored, &f);
-            assert_eq!(
-                p1.panel_consensus, p2.panel_consensus,
-                "{} panel not deterministic",
-                case.id
-            );
-            if let Some(exp) = case
-                .expected
-                .get("panel_consensus")
-                .and_then(|v| v.as_f64())
-            {
-                assert!(
-                    approx_eq(p1.panel_consensus, exp, 0.02),
-                    "{} panel {} vs {}",
-                    case.id,
-                    p1.panel_consensus,
-                    exp
-                );
-            }
-        }
+<<<<<<< HEAD
 =======
->>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
         other => panic!("unknown op {other}"),
     }
 }

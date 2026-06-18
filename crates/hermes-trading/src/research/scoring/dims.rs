@@ -192,57 +192,25 @@ pub fn score_dimensions(
     let main_5d = f64_val(&cf, "main_fund_5d_net_yi").unwrap_or(0.0);
     let fh = get("6_fund_holders");
     let holder_chg = f64_val(&fh, "holder_change_ratio").unwrap_or(0.0);
+=======
+    let mut score_12: i32 = 5;
+    if main_5d > 0.0 {
+        score_12 += 2;
+    } else if main_5d < 0.0 {
+        score_12 -= 1;
+    }
+    if holder_chg < -5.0 {
+        score_12 += 1;
+    } else if holder_chg > 10.0 {
+        score_12 -= 1;
+    }
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
     out.insert(
         "12_capital_flow".into(),
         DimScore {
             score: score_12.clamp(1, 10) as u8,
             weight: 4,
-            display_name: String::new(),
-            label: format!("主力 5日 {main_5d:.2} 亿 · 户数变化 {holder_chg:+.1}%"),
-            missing: if main_5d == 0.0 && holder_chg == 0.0 {
-                vec!["capital_flow".into()]
-            } else {
-                vec![]
-            },
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-    out.insert("13_policy".into(), neutral_dim(6, 3, "政策环境中性"));
-    out.insert("14_moat".into(), neutral_dim(6, 3, "护城河需定性评估"));
-    out.insert(
-        "15_events".into(),
-        DimScore {
-            score: 6,
-            weight: 4,
-            display_name: String::new(),
-            label: format!("近 30 天上榜 {lhb_count} 次"),
-            missing: vec![],
-            reasons_pass: vec![],
-            reasons_fail: vec![],
-        },
-    );
-    out.insert("17_sentiment".into(), neutral_dim(6, 3, "舆情"));
-    let events = get("15_events");
-    let trap_keywords = ["涨停", "牛股", "翻倍", "龙头", "妖股"];
-    let mut trap_score: i32 = 9;
-    let mut trap_label = "🟢 未发现推广痕迹".to_string();
-    if let Some(items) = events.get("news").and_then(|v| v.as_array()) {
-        for item in items {
-            if let Some(title) = item.get("title").and_then(|v| v.as_str())
-                && trap_keywords.iter().any(|k| title.contains(k))
-            {
-                trap_score = 3;
-                trap_label = "🔴 舆情含推广措辞".into();
-                break;
-            }
-        }
-    }
-    out.insert(
-        "18_trap".into(),
-        DimScore {
-            score: trap_score.clamp(1, 10) as u8,
-            weight: 5,
+<<<<<<< HEAD
             display_name: String::new(),
             label: trap_label,
             missing: if events.is_null() {

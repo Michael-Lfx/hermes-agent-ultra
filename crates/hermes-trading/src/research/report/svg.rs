@@ -38,4 +38,23 @@ pub fn render_svg_percentile(pe_percentile: f64) -> String {
     )
 }
 
+<<<<<<< HEAD
+=======
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn svg_contains_score() {
+        let s = render_svg_gauge(72.0, 100.0);
+        assert!(s.contains("72/100"));
+    }
+
+    #[test]
+    fn percentile_svg() {
+        let s = render_svg_percentile(35.0);
+        assert!(s.contains("35%"));
+        assert!(s.contains("#22c55e"));
+    }
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
 }

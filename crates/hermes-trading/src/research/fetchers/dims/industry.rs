@@ -7,6 +7,36 @@ use tracing::warn;
 use super::super::r#trait::DimFetcher;
 use super::super::types::{DimQuality, DimResult, FetcherSpec, Market};
 use crate::providers::akshare::DEFAULT_INDUSTRY;
+<<<<<<< HEAD
+=======
+use crate::providers::akshare::{fetch_industry_growth, median_peer_pe};
+use crate::research::fetchers::context::FetchContext;
+use crate::research::fetchers::dim_keys;
+use crate::settlement::is_a_share;
+
+pub struct IndustryFetcher;
+
+impl IndustryFetcher {
+    pub const SPEC: FetcherSpec = FetcherSpec {
+        dim_key: dim_keys::INDUSTRY,
+        depends_on: &[dim_keys::BASIC, dim_keys::PEERS],
+        markets: &[Market::A, Market::H, Market::U],
+        sources: &["0_basic", "akshare"],
+        web_only: false,
+    };
+}
+
+#[async_trait]
+impl DimFetcher for IndustryFetcher {
+    fn spec(&self) -> &FetcherSpec {
+        &Self::SPEC
+    }
+
+    async fn fetch(&self, ctx: &FetchContext) -> DimResult {
+        let industry = ctx
+            .prior_industry()
+            .unwrap_or_else(|| DEFAULT_INDUSTRY.into());
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
         let industry_pe = ctx
             .prior_data("4_peers")
             .and_then(|d| d.get("peer_table"))

@@ -42,8 +42,6 @@
 <<<<<<< HEAD
 | API 字段字面量 | `providers/akshare/labels.rs` | 财务/基金列名集中维护 |
 | 中文名解析 | `providers/akshare/symbol_resolve.rs` | `stock_info_a_code_name` 缓存 |
-=======
->>>>>>> 98eae4748 (feat(trading): akshare-rs primary path for A-share research dims)
 | basic 维 fallback | `research/fetchers/dims/basic.rs` | akshare → basic → QuoteRouter |
 
 ## P1a HTTP Transport Gate（blocking）

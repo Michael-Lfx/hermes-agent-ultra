@@ -22,6 +22,92 @@ fn apply_one_dim(snap: &mut FundamentalsSnapshot, result: &DimResult) {
         "6_research" => apply_research(snap, &result.data),
         "12_capital_flow" => apply_capital_flow(snap, &result.data),
         "15_events" => apply_events(snap, &result.data),
+=======
+        "0_basic" => apply_basic(snap, &result.data),
+        "1_financials" => apply_financials(snap, &result.data),
+        "2_kline" => apply_kline(snap, &result.data),
+        "10_valuation" => apply_valuation(snap, &result.data),
+        "16_lhb" => apply_lhb(snap, &result.data),
+        "7_industry" => apply_industry(snap, &result.data),
+        _ => {}
+    }
+}
+
+fn mark(snap: &mut FundamentalsSnapshot, field: &str) {
+    snap.provenance
+        .insert(field.into(), ProvenanceSource::Provider);
+}
+
+fn set_f64(snap: &mut FundamentalsSnapshot, field: &str, data: &Value, key: &str) {
+    if let Some(v) = data.get(key).and_then(|v| v.as_f64()) {
+        match field {
+            "price" => snap.price = Some(v),
+            "pe" => snap.pe = Some(v),
+            "pb" => snap.pb = Some(v),
+            "eps" => snap.eps = Some(v),
+            "ps" => snap.ps = Some(v),
+            "bvps" => snap.bvps = Some(v),
+            "market_cap_yi" => snap.market_cap_yi = Some(v),
+            "shares_outstanding_yi" => snap.shares_outstanding_yi = Some(v),
+            "roe_latest" => snap.roe_latest = Some(v),
+            "net_margin" => snap.net_margin = Some(v),
+            "gross_margin" => snap.gross_margin = Some(v),
+            "revenue_growth_latest" => snap.revenue_growth_latest = Some(v),
+            "fcf_latest_yi" => snap.fcf_latest_yi = Some(v),
+            "revenue_latest_yi" => snap.revenue_latest_yi = Some(v),
+            "equity_yi" => snap.equity_yi = Some(v),
+            "total_debt_yi" => snap.total_debt_yi = Some(v),
+            "cash_yi" => snap.cash_yi = Some(v),
+            "ebitda_yi" => snap.ebitda_yi = Some(v),
+            "debt_ratio" => snap.debt_ratio = Some(v),
+            "current_ratio" => snap.current_ratio = Some(v),
+            "fcf_margin" => snap.fcf_margin = Some(v),
+            "max_drawdown_1y" => snap.max_drawdown_1y = Some(v),
+            "pe_quantile_5y" => snap.pe_quantile_5y = Some(v),
+            "industry_pe" => snap.industry_pe = Some(v),
+            _ => {}
+        }
+        mark(snap, field);
+    }
+}
+
+fn apply_basic(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if let Some(v) = data.get("name").and_then(|v| v.as_str()) {
+        snap.name = Some(v.to_string());
+        mark(snap, "name");
+    }
+    if let Some(v) = data.get("industry").and_then(|v| v.as_str()) {
+        snap.industry = Some(v.to_string());
+        mark(snap, "industry");
+    }
+    set_f64(snap, "price", data, "price");
+    set_f64(snap, "pe", data, "pe_ttm");
+    set_f64(snap, "pb", data, "pb");
+    set_f64(snap, "eps", data, "eps");
+    set_f64(snap, "market_cap_yi", data, "market_cap_yi");
+    set_f64(snap, "shares_outstanding_yi", data, "shares_outstanding_yi");
+}
+
+fn apply_financials(snap: &mut FundamentalsSnapshot, data: &Value) {
+    set_f64(snap, "roe_latest", data, "roe");
+    set_f64(snap, "net_margin", data, "net_margin");
+    set_f64(snap, "gross_margin", data, "gross_margin");
+    set_f64(snap, "revenue_growth_latest", data, "revenue_growth");
+    set_f64(snap, "fcf_latest_yi", data, "fcf_yi");
+    set_f64(snap, "revenue_latest_yi", data, "revenue_latest_yi");
+    set_f64(snap, "equity_yi", data, "equity_yi");
+    set_f64(snap, "total_debt_yi", data, "total_debt_yi");
+    set_f64(snap, "cash_yi", data, "cash_yi");
+    set_f64(snap, "ebitda_yi", data, "ebitda_yi");
+    if let Some(h) = data.get("financial_health") {
+        set_f64(snap, "debt_ratio", h, "debt_ratio");
+        set_f64(snap, "current_ratio", h, "current_ratio");
+        set_f64(snap, "fcf_margin", h, "fcf_margin");
+    }
+    if snap.debt_ratio.is_none() {
+        set_f64(snap, "debt_ratio", data, "debt_ratio");
+    }
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
     if let Some(arr) = data.get("roe_history").and_then(|v| v.as_array()) {
         snap.roe_history = arr.iter().filter_map(|v| v.as_f64()).collect();
         if !snap.roe_history.is_empty() {
@@ -81,63 +167,9 @@ fn apply_lhb(snap: &mut FundamentalsSnapshot, data: &Value) {
 }
 
 <<<<<<< HEAD
-fn apply_peers(snap: &mut FundamentalsSnapshot, data: &Value) {
-    if snap.industry_pe.is_none()
-        && let Some(median) = data
-            .get("peer_table")
-            .and_then(|v| v.as_array())
-            .and_then(|a| crate::providers::akshare::median_peer_pe(a))
-    {
-        snap.industry_pe = Some(median);
-        mark(snap, "industry_pe");
-    }
-}
-
-fn apply_fund_holders(snap: &mut FundamentalsSnapshot, data: &Value) {
-    if data
-        .get("fund_holdings")
-        .and_then(|v| v.as_array())
-        .is_some_and(|a| !a.is_empty())
-    {
-        mark(snap, "fund_holdings");
-    }
-    if data.get("holder_count").and_then(|v| v.as_f64()).is_some() {
-        mark(snap, "holder_count");
-    }
-}
-
-fn apply_research(snap: &mut FundamentalsSnapshot, data: &Value) {
-    if data
-        .get("research_count")
-        .and_then(|v| v.as_u64())
-        .is_some_and(|n| n > 0)
-    {
-        mark(snap, "research_reports");
-    }
-}
-
-fn apply_capital_flow(snap: &mut FundamentalsSnapshot, data: &Value) {
-    if data
-        .get("main_fund_5d_net_yi")
-        .and_then(|v| v.as_f64())
-        .is_some()
-    {
-        mark(snap, "main_fund_5d");
-    }
-}
-
-fn apply_events(snap: &mut FundamentalsSnapshot, data: &Value) {
-    if data
-        .get("announcement_count")
-        .and_then(|v| v.as_u64())
-        .is_some_and(|n| n > 0)
-    {
-        mark(snap, "announcements");
-    }
-}
-
+<<<<<<< HEAD
 =======
->>>>>>> d5f5467b3 (feat(trading): UZI equity research engine and analyze_stock tool)
+>>>>>>> 2071fbf41 (feat(trading): 4-wave equity research end-state)
 fn apply_industry(snap: &mut FundamentalsSnapshot, data: &Value) {
     if let Some(v) = data.get("industry").and_then(|v| v.as_str()) {
         snap.industry = Some(v.to_string());
