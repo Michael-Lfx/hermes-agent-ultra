@@ -155,10 +155,9 @@ pub(crate) async fn run_gateway(
                     .iter()
                     .map(|dep| format!("{} ({})", dep, hermes_config::dep_check::description(*dep)))
                     .collect();
-                tracing::warn!(
+                tracing::info!(
                     deps = %labels.join(", "),
-                    "runtime dependencies missing on PATH; run `hermes gateway setup` to install, \
-                     or place binaries under $HERMES_HOME/bin"
+                    "runtime dependencies missing; starting background install"
                 );
 <<<<<<< HEAD
 <<<<<<< HEAD
