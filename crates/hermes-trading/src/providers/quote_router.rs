@@ -103,7 +103,14 @@ impl QuoteRouter {
 
         let data = match source {
             QuoteSource::Auto => self.select(&canonical)?.fetch_quote(&canonical).await?,
-            QuoteSource::Yahoo => self.yahoo.fetch_quote(&canonical).await?,
+            QuoteSource::Yahoo => {
+                if is_a_share(&canonical) {
+                    return Err(TradingError::SymbolNotFound(format!(
+                        "Yahoo quote does not support A-shares like '{canonical}'. Use source=auto or eastmoney."
+                    )));
+                }
+                self.yahoo.fetch_quote(&canonical).await?
+            }
             QuoteSource::Eastmoney => self.eastmoney.fetch_quote(&canonical).await?,
             QuoteSource::Binance => self.binance.fetch_quote(&canonical).await?,
         };

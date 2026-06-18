@@ -11,6 +11,7 @@ pub mod cache;
 pub mod error;
 pub mod http;
 pub mod indicators;
+pub mod network_preflight;
 pub mod provider;
 pub mod providers;
 pub mod quote_cache;

@@ -3,6 +3,7 @@
 pub mod binance;
 pub mod binance_quote;
 pub mod eastmoney;
+pub mod eastmoney_http;
 pub mod eastmoney_quote;
 #[cfg(any(test, feature = "test-mock"))]
 pub mod mock;
