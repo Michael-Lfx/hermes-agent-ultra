@@ -156,8 +156,6 @@ pub(crate) async fn run_gateway(
                     .collect();
                 tracing::info!(
                     deps = %labels.join(", "),
-                tracing::info!(
-                    deps = %labels.join(", "),
                     "runtime dependencies missing; starting background install"
                 );
                 if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
