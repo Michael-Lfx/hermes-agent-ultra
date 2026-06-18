@@ -1736,6 +1736,7 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .iter()
         .map(|tc_| serde_json::from_str(&tc_.function.arguments).unwrap_or(Value::Null))
         .collect();
+<<<<<<< HEAD
     // Pre-parse tool args once; reused by hooks, guardrails, and file mutation.
     let tool_args: Vec<Value> = tool_calls
         .iter()
@@ -1752,6 +1753,8 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         streaming = true,
         "agent tool batch start"
     );
+=======
+>>>>>>> 6632bbb7e (feat(gateway): recursive skill discovery and equity-research slash routing)
 
     for (tc_, args) in tool_calls.iter().zip(tool_args.iter()) {
         let tc_ctx = serde_json::json!({"tool": &tc_.function.name, "turn": tc.total_turns});
