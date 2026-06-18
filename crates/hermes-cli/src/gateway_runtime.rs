@@ -157,9 +157,12 @@ pub(crate) async fn run_gateway(
                     .collect();
                 tracing::info!(
                     deps = %labels.join(", "),
-                    "runtime dependencies missing; attempting silent install"
+                    "runtime dependencies missing; starting background install"
                 );
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> c2e9b83fc (feat(deps): background parallel runtime deps and build-time bundled ripgrep)
                 if hermes_cli::runtime_dep_install::auto_ensure_enabled() {
                     hermes_config::spawn_background_install(missing_runtime_deps);
                 } else {
