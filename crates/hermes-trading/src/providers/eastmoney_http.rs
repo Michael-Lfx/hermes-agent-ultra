@@ -2,7 +2,7 @@
 //!
 //! All A-share realtime quote and push2 endpoints must go through this module.
 
-use reqwest::header::REFERER;
+use reqwest::header::{CONTENT_ENCODING, REFERER};
 use reqwest::{Client, RequestBuilder};
 use serde::Deserialize;
 use tracing::warn;
@@ -338,7 +338,34 @@ pub async fn fetch_push2_quote(
         )));
     }
 
-    let parsed: Push2QuoteResponse = resp.json().await?;
+    let status = resp.status();
+    let encoding = resp
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let body = resp
+        .bytes()
+        .await
+        .map_err(|e| TradingError::InvalidResponse(e.to_string()))?;
+
+    let parsed: Push2QuoteResponse = match serde_json::from_slice(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            let prefix = String::from_utf8_lossy(&body[..body.len().min(120)]);
+            warn!(
+                %status,
+                content_encoding = %encoding,
+                body_prefix = %prefix,
+                error = %e,
+                "eastmoney push2 JSON decode failed"
+            );
+            return Err(TradingError::InvalidResponse(format!(
+                "Eastmoney quote JSON decode: {e}"
+            )));
+        }
+    };
     let Some(data) = parsed.data else {
         return Err(TradingError::NoData);
     };
@@ -585,6 +612,51 @@ mod tests {
         );
         assert_eq!(snap.price, Some(1407.04));
         assert_eq!(snap.source, "tencent_qt");
+    }
+
+    #[tokio::test]
+    async fn fetch_push2_quote_decodes_gzip_body() {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use std::io::Write;
+        use wiremock::matchers::{method, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let body = r#"{"data":{"f57":"600519","f58":"贵州茅台","f43":140704,"f116":2100000000000,"f162":1850,"f184":1256197800}}"#;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(body.as_bytes()).unwrap();
+        let gzip_body = encoder.finish().unwrap();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("secid", "1.600519"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_bytes(gzip_body)
+                    .insert_header("Content-Encoding", "gzip"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = reqwest::Client::builder().gzip(true).build().unwrap();
+        let url = format!(
+            "{}/api/qt/stock/get?secid=1.600519&fields={}&ut={}",
+            server.uri(),
+            QUOTE_FIELDS_MIN,
+            EASTMONEY_UT
+        );
+        let resp = client
+            .get(&url)
+            .header(REFERER, EASTMONEY_REFERER)
+            .send()
+            .await
+            .unwrap();
+        let parsed: Push2QuoteResponse =
+            serde_json::from_slice(&resp.bytes().await.unwrap()).unwrap();
+        let raw = parsed.data.unwrap().into_raw();
+        assert_eq!(raw.name.as_deref(), Some("贵州茅台"));
+        assert_eq!(scaled_price(raw.price_raw), Some(1407.04));
+        assert_eq!(market_cap_yi(raw.market_cap_raw), Some(21_000.0));
     }
 
     #[tokio::test]

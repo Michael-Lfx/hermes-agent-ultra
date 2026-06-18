@@ -2,11 +2,14 @@
 
 use async_trait::async_trait;
 use serde_json::json;
+use tracing::warn;
 
 use super::super::r#trait::DimFetcher;
 use super::super::types::{DimQuality, DimResult, FetcherSpec, Market};
+use crate::providers::akshare::fetch_peer_table;
 use crate::research::fetchers::context::FetchContext;
 use crate::research::fetchers::dim_keys;
+use crate::settlement::is_a_share;
 
 pub struct PeersFetcher;
 
@@ -15,7 +18,7 @@ impl PeersFetcher {
         dim_key: dim_keys::PEERS,
         depends_on: &[dim_keys::BASIC],
         markets: &[Market::A, Market::H, Market::U],
-        sources: &["eastmoney_data", "web_search"],
+        sources: &["akshare", "eastmoney_data"],
         web_only: false,
     };
 }
@@ -28,16 +31,55 @@ impl DimFetcher for PeersFetcher {
 
     async fn fetch(&self, ctx: &FetchContext) -> DimResult {
         let industry = ctx.prior_industry().unwrap_or_default();
-        DimResult::ok(
-            dim_keys::PEERS,
-            &ctx.symbol,
-            json!({
-                "industry": industry,
-                "peer_table": [],
-                "_note": "同业 PE/PB 需 agent 传 peers 参数或 web_search",
-            }),
-            "agent_or_web",
-            DimQuality::Missing,
-        )
+        if !is_a_share(&ctx.symbol) {
+            return DimResult::ok(
+                dim_keys::PEERS,
+                &ctx.symbol,
+                json!({
+                    "industry": industry,
+                    "peer_table": [],
+                    "_note": "港美股同业需 web_search",
+                }),
+                "web_search",
+                DimQuality::Missing,
+            );
+        }
+
+        match fetch_peer_table(&ctx.symbol).await {
+            Ok(peer_table) if !peer_table.is_empty() => DimResult::ok(
+                dim_keys::PEERS,
+                &ctx.symbol,
+                json!({
+                    "industry": industry,
+                    "peer_table": peer_table,
+                }),
+                "akshare",
+                DimQuality::Partial,
+            ),
+            Ok(_) => DimResult::ok(
+                dim_keys::PEERS,
+                &ctx.symbol,
+                json!({
+                    "industry": industry,
+                    "peer_table": [],
+                }),
+                "akshare",
+                DimQuality::Missing,
+            ),
+            Err(e) => {
+                warn!(symbol = %ctx.symbol, error = %e, "peers fetch failed");
+                DimResult::ok(
+                    dim_keys::PEERS,
+                    &ctx.symbol,
+                    json!({
+                        "industry": industry,
+                        "peer_table": [],
+                        "_note": format!("peers fetch failed: {e}"),
+                    }),
+                    "akshare",
+                    DimQuality::Missing,
+                )
+            }
+        }
     }
 }

@@ -1,6 +1,6 @@
 //! Dimension collection orchestrator (mirrors UZI `pipeline/collect.py`).
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::bridge::apply_dims_to_snapshot;
 use super::context::FetchContext;
@@ -47,6 +47,14 @@ pub async fn collect_dims(
         let result = fetcher.fetch(&ctx).await;
         ctx.prior.insert(result.dim_key.clone(), result.clone());
         output.dims.insert(result.dim_key.clone(), result);
+    }
+
+    if !output.dims.is_empty() {
+        info!(
+            symbol = %output.ticker,
+            dim_summary = %output.summary_line(),
+            "dimension collection complete"
+        );
     }
 
     output

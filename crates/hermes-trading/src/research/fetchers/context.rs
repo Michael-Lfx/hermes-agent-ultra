@@ -46,4 +46,12 @@ impl FetchContext {
             .and_then(|v| v.as_str())
             .map(str::to_string)
     }
+
+    /// Prior `0_basic` dim payload and source tag.
+    #[must_use]
+    pub fn prior_basic(&self) -> Option<(&serde_json::Value, &str)> {
+        self.prior
+            .get("0_basic")
+            .map(|r| (&r.data, r.source.as_str()))
+    }
 }

@@ -1,10 +1,11 @@
-//! Dimension 6_fund_holders · 股东户数 / 基金持仓（P2 骨架）.
+//! Dimension 6_fund_holders · 股东户数 / 基金持仓.
 
 use async_trait::async_trait;
-use serde_json::json;
+use tracing::warn;
 
 use super::super::r#trait::DimFetcher;
 use super::super::types::{DimQuality, DimResult, FetcherSpec, Market};
+use crate::providers::akshare::fetch_fund_holders_dim;
 use crate::research::fetchers::context::FetchContext;
 use crate::research::fetchers::dim_keys;
 use crate::settlement::is_a_share;
@@ -16,7 +17,7 @@ impl FundHoldersFetcher {
         dim_key: dim_keys::FUND_HOLDERS,
         depends_on: &[],
         markets: &[Market::A],
-        sources: &["eastmoney_datacenter"],
+        sources: &["akshare", "eastmoney_datacenter"],
         web_only: false,
     };
 }
@@ -31,13 +32,43 @@ impl DimFetcher for FundHoldersFetcher {
         if !is_a_share(&ctx.symbol) {
             return DimResult::skipped(dim_keys::FUND_HOLDERS, &ctx.symbol, "仅 A 股");
         }
-        // ponytail: full fund_hold_detail 9-endpoint chain deferred; agent can web_search
-        DimResult::ok(
-            dim_keys::FUND_HOLDERS,
-            &ctx.symbol,
-            json!({ "_note": "基金持仓完整链 P2 · 暂空" }),
-            "eastmoney_datacenter",
-            DimQuality::Missing,
-        )
+
+        // ponytail: UZI 9-endpoint fund_hold_detail chain deferred; gdhs + Sina fund holder cover P0.
+        match fetch_fund_holders_dim(&ctx.symbol).await {
+            Ok(data) => {
+                let has_holder = data
+                    .get("holder_count")
+                    .and_then(|v| v.as_f64())
+                    .is_some_and(|v| v > 0.0);
+                let has_funds = data
+                    .get("fund_holdings")
+                    .and_then(|v| v.as_array())
+                    .is_some_and(|a| !a.is_empty());
+                let quality = if has_holder && has_funds {
+                    DimQuality::Full
+                } else if has_holder {
+                    DimQuality::Partial
+                } else {
+                    DimQuality::Missing
+                };
+                DimResult::ok(
+                    dim_keys::FUND_HOLDERS,
+                    &ctx.symbol,
+                    data,
+                    "akshare",
+                    quality,
+                )
+            }
+            Err(e) => {
+                warn!(symbol = %ctx.symbol, error = %e, "fund_holders fetch failed");
+                DimResult::ok(
+                    dim_keys::FUND_HOLDERS,
+                    &ctx.symbol,
+                    serde_json::json!({ "_note": format!("fetch failed: {e}") }),
+                    "akshare",
+                    DimQuality::Missing,
+                )
+            }
+        }
     }
 }
