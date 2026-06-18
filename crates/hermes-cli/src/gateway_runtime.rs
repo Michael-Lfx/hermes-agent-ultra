@@ -716,6 +716,13 @@ pub(crate) async fn run_webhook_inbound_loop(
     }
 }
 
+pub(crate) async fn run_talk_inbound_loop(
+    gateway: Arc<Gateway>,
+    rx: mpsc::Receiver<GatewayIncomingMessage>,
+) {
+    run_gateway_incoming_loop(gateway, rx, "aipc_talk").await;
+}
+
 pub(crate) async fn run_gateway_incoming_loop(
     gateway: Arc<Gateway>,
     mut rx: mpsc::Receiver<GatewayIncomingMessage>,
