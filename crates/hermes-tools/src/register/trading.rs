@@ -70,13 +70,15 @@ pub fn register(ctx: &RegistryContext<'_>) {
         reg(
             ctx,
             "trading",
-            Arc::new(
-                crate::tools::trading_create_strategy::CreateStrategyHandler::new(
-                    strategies_dir,
-                    strategy_registry,
-                ),
-            ),
-            "⚡",
+            Arc::new(crate::tools::trading_resolve_symbol::ResolveAShareSymbolHandler::new()),
+            "🔍",
+            vec![],
+        );
+        reg(
+            ctx,
+            "trading",
+            Arc::new(crate::tools::trading_analyze_stock::AnalyzeStockHandler::new()),
+            "📋",
             vec![],
         );
     }

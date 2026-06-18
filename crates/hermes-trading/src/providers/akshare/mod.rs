@@ -6,10 +6,12 @@ mod capital_flow;
 mod events;
 mod financials;
 mod fund_holders;
+mod labels;
 mod lhb;
 mod peers;
 mod quote;
 mod research;
+mod symbol_resolve;
 mod valuation;
 
 use std::sync::OnceLock;
@@ -74,12 +76,14 @@ pub use capital_flow::fetch_capital_flow_dim_akshare;
 pub use events::fetch_events_dim_akshare;
 pub use financials::fetch_financials_dim_akshare;
 pub use fund_holders::fetch_fund_holders_dim;
+pub use labels::DEFAULT_INDUSTRY;
 pub use lhb::fetch_lhb_dim_akshare;
 pub use peers::{
     em_prefix_symbol, fetch_industry_growth, fetch_peer_table, map_peer_table, median_peer_pe,
 };
 pub use quote::fetch_a_share_quote_chain;
 pub use research::fetch_research_dim_akshare;
+pub use symbol_resolve::resolve_a_share_symbol;
 pub use valuation::{fetch_valuation_percentiles, percentile_rank};
 
 #[cfg(test)]

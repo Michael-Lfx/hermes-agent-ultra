@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 
 use crate::error::TradingError;
 
-use super::{client, code6, map_err};
+use super::{client, code6, labels, map_err};
 
 pub async fn fetch_fund_holders_dim(symbol: &str) -> Result<Value, TradingError> {
     let code = code6(symbol)?;
@@ -37,13 +37,13 @@ pub fn map_fund_holdings(rows: &[HashMap<String, Value>]) -> Vec<Value> {
         .take(10)
         .filter_map(|row| {
             let fund_name = row
-                .get("基金名称")
-                .or_else(|| row.get("股东名称"))
+                .get(labels::fund_holders::FUND_NAME)
+                .or_else(|| row.get(labels::fund_holders::HOLDER_NAME))
                 .and_then(|v| v.as_str())
                 .map(str::to_string)?;
             let hold_ratio = row
-                .get("占流通股比例")
-                .or_else(|| row.get("持股比例"))
+                .get(labels::fund_holders::FLOAT_RATIO)
+                .or_else(|| row.get(labels::fund_holders::HOLD_RATIO))
                 .and_then(|v| {
                     v.as_f64()
                         .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn map_fund_holdings_fixture() {
         let mut row = HashMap::new();
-        row.insert("基金名称".into(), json!("易方达蓝筹"));
-        row.insert("占流通股比例".into(), json!(1.2));
+        row.insert(labels::fund_holders::FUND_NAME.into(), json!("易方达蓝筹"));
+        row.insert(labels::fund_holders::FLOAT_RATIO.into(), json!(1.2));
         let out = map_fund_holdings(&[row]);
         assert_eq!(out.len(), 1);
         assert_eq!(

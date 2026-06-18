@@ -1,5 +1,7 @@
 //! Symbol format detection and normalization for multi-market routing.
 
+use crate::error::TradingError;
+
 /// Whether a symbol is an A-share (Shenzhen `.SZ` or Shanghai `.SH`).
 #[must_use]
 pub fn is_a_share(symbol: &str) -> bool {
@@ -61,7 +63,23 @@ pub fn normalize_symbol(symbol: &str) -> String {
         let code: u32 = suffix.parse().unwrap_or(0);
         return format!("{code:04}.HK");
     }
+    // Yahoo/Bloomberg Shanghai suffix → Hermes `.SH`
+    if upper.ends_with(".SS") {
+        return format!("{}.SH", &upper[..upper.len() - 3]);
+    }
     upper
+}
+
+/// Reject US/HK symbols for historical OHLCV and backtest until live APIs are wired.
+pub fn ensure_ohlcv_supported(symbol: &str) -> Result<(), TradingError> {
+    let canonical = normalize_symbol(symbol);
+    if is_hk_share(&canonical) || is_us_share(&canonical) {
+        return Err(TradingError::SymbolNotFound(format!(
+            "Historical OHLCV for '{symbol}' is not supported yet. \
+             Use get_quote for US/HK spot prices; backtest A-share or crypto symbols only."
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -96,5 +114,19 @@ mod tests {
         assert_eq!(normalize_symbol("BTC"), "BTC-USDT");
         assert_eq!(normalize_symbol("eth"), "ETH-USDT");
         assert_eq!(normalize_symbol("比特币"), "BTC-USDT");
+    }
+
+    #[test]
+    fn normalize_shanghai_ss_alias() {
+        assert_eq!(normalize_symbol("600519.SS"), "600519.SH");
+        assert_eq!(normalize_symbol("600519.SH"), "600519.SH");
+    }
+
+    #[test]
+    fn ohlcv_rejects_us_hk() {
+        assert!(ensure_ohlcv_supported("AAPL").is_err());
+        assert!(ensure_ohlcv_supported("0700.HK").is_err());
+        assert!(ensure_ohlcv_supported("BTC-USDT").is_ok());
+        assert!(ensure_ohlcv_supported("000001.SZ").is_ok());
     }
 }

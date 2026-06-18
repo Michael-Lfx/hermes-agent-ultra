@@ -57,6 +57,8 @@ pub mod voice_mode;
 pub mod web;
 
 #[cfg(feature = "trading-research")]
+pub mod trading_analyze_stock;
+#[cfg(feature = "trading-research")]
 pub mod trading_backtest;
 #[cfg(feature = "trading-research")]
 pub mod trading_create_strategy;
@@ -66,5 +68,7 @@ pub mod trading_market_data;
 pub mod trading_quote;
 #[cfg(feature = "trading-research")]
 pub mod trading_report;
+#[cfg(feature = "trading-research")]
+pub mod trading_resolve_symbol;
 #[cfg(feature = "trading-research")]
 pub mod trading_strategies;

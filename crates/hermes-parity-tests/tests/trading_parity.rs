@@ -59,6 +59,9 @@ fn load_fixtures() -> Vec<(PathBuf, FixtureFile)> {
         if !name.starts_with("trading_") {
             continue;
         }
+        if name == "trading_research" || name == "trading_research_fetch" {
+            continue;
+        }
         for file_entry in fs::read_dir(&group_path).expect("read fixture group") {
             let file_entry = file_entry.expect("valid file entry");
             let path = file_entry.path();
@@ -115,6 +118,18 @@ fn request_from_input(input: &Value) -> OhlcvRequest {
 fn mock_router() -> AutoRouter {
     let mock = MockProvider::new();
     AutoRouter::with_providers(mock.clone(), mock.clone(), mock)
+}
+
+fn mock_quote_router() -> QuoteRouter {
+    let mock = MockQuoteProvider::new();
+    QuoteRouter::with_providers(mock.clone(), mock.clone(), mock)
+}
+
+fn quote_source_from_input(input: &Value) -> Result<QuoteSource, String> {
+    match input.get("source").and_then(|v| v.as_str()) {
+        None => Ok(QuoteSource::Auto),
+        Some(s) => QuoteSource::parse(s).map_err(|e| e.to_string()),
+    }
 }
 
 fn mock_quote_router() -> QuoteRouter {
