@@ -61,6 +61,92 @@
       "op": "project_three_stmt",
       "input": { "symbol": "TEST", "revenue_latest_yi": 52, "equity_yi": 92 },
       "expected": { "y5_ni": 9.82 }
+    },
+    {
+      "id": "dcf_moutai",
+      "op": "compute_dcf",
+      "input": {
+        "symbol": "600519.SH",
+        "price": 1680.0,
+        "market_cap_yi": 21000,
+        "shares_outstanding_yi": 12.56,
+        "revenue_latest_yi": 1500,
+        "net_margin": 52.0,
+        "pe": 28.5,
+        "pb": 8.2,
+        "total_debt_yi": 30,
+        "cash_yi": 1500,
+        "fcf_latest_yi": 600,
+        "ebitda_yi": 900,
+        "equity_yi": 2200
+      },
+      "expected": {
+        "intrinsic_per_share": 1788.54,
+        "safety_margin_pct": 6.5,
+        "center_cell": 1788.54
+      }
+    },
+    {
+      "id": "dcf_loss_maker",
+      "op": "compute_dcf",
+      "input": {
+        "symbol": "600157.SH",
+        "price": 1.2,
+        "market_cap_yi": 260,
+        "shares_outstanding_yi": 220,
+        "revenue_latest_yi": 300,
+        "net_margin": -5.0,
+        "pe": -5.0,
+        "total_debt_yi": 400,
+        "cash_yi": 20,
+        "fcf_latest_yi": -10,
+        "equity_yi": 80
+      },
+      "expected": {
+        "intrinsic_per_share": 0.34,
+        "safety_margin_pct": -71.7,
+        "center_cell": 0.34
+      }
+    },
+    {
+      "id": "dcf_small_cap",
+      "op": "compute_dcf",
+      "input": {
+        "symbol": "300999.SZ",
+        "price": 32.0,
+        "market_cap_yi": 180,
+        "shares_outstanding_yi": 5.6,
+        "revenue_latest_yi": 2200,
+        "net_margin": 2.5,
+        "pe": 45.0,
+        "total_debt_yi": 200,
+        "cash_yi": 50,
+        "fcf_latest_yi": 15,
+        "equity_yi": 300
+      },
+      "expected": {
+        "intrinsic_per_share": 66.94,
+        "safety_margin_pct": 109.2,
+        "center_cell": 66.94
+      }
+    },
+    {
+      "id": "panel_buffett_smoke",
+      "op": "persona_panel",
+      "input": {
+        "symbol": "600519.SH",
+        "price": 1680,
+        "pe": 28.5,
+        "roe_latest": 32,
+        "net_margin": 52,
+        "fcf_positive": true,
+        "debt_ratio": 18,
+        "pe_quantile_5y": 35,
+        "raw_dims": {
+          "10_valuation": { "data": { "pe_percentile": 35 } }
+        }
+      },
+      "expected": { "panel_consensus": 3.1 }
     }
   ]
 }

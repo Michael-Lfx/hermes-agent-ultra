@@ -37,7 +37,7 @@ impl ToolHandler for AnalyzeStockHandler {
         let use_providers = params
             .get("use_providers")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
 
         let router = QuoteRouter::new();
         let quote = router
@@ -93,7 +93,7 @@ impl ToolHandler for AnalyzeStockHandler {
             "use_providers".into(),
             json!({
                 "type": "boolean",
-                "description": "Run UZI-style 22-dim HTTP fetchers + DCF/scoring/persona panel (A-share Eastmoney). Sets raw_dims for scoring."
+                "description": "Run UZI-style 22-dim HTTP fetchers + DCF/scoring/persona panel (A-share Eastmoney). Default true; set false to skip provider fetch."
             }),
         );
         props.insert(

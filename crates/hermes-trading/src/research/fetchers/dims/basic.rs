@@ -348,7 +348,7 @@ mod tests {
         };
         let dim = BasicFetcher::merge_snap_and_quote("600519.SH", snap, &q).await;
         assert!(dim.error.is_none());
-        assert_eq!(dim.source, "akshare+eastmoney_push2");
+        assert_eq!(dim.source, "akshare+eastmoney_push2+akshare_info");
         assert_eq!(dim.data.get("price").and_then(|v| v.as_f64()), Some(1407.0));
         assert_eq!(
             dim.data.get("name").and_then(|v| v.as_str()),

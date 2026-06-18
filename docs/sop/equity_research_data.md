@@ -39,6 +39,8 @@
 | `parse_ticker` | `symbol::normalize_symbol` | `.SS`→`.SH` 等 |
 | 合并 snapshot | `eastmoney_http::fetch_a_share_snapshot` | push2 → 腾讯 |
 | akshare 主路 | `providers/akshare/*` | akshare-rs → eastmoney fallback |
+| API 字段字面量 | `providers/akshare/labels.rs` | 财务/基金列名集中维护 |
+| 中文名解析 | `providers/akshare/symbol_resolve.rs` | `stock_info_a_code_name` 缓存 |
 | basic 维 fallback | `research/fetchers/dims/basic.rs` | akshare → basic → QuoteRouter |
 
 ## P1a HTTP Transport Gate（blocking）

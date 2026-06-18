@@ -17,6 +17,11 @@ pub fn apply_dims_to_snapshot(snap: &mut FundamentalsSnapshot, output: &CollectO
 
 fn apply_one_dim(snap: &mut FundamentalsSnapshot, result: &DimResult) {
     match result.dim_key.as_str() {
+        "4_peers" => apply_peers(snap, &result.data),
+        "6_fund_holders" => apply_fund_holders(snap, &result.data),
+        "6_research" => apply_research(snap, &result.data),
+        "12_capital_flow" => apply_capital_flow(snap, &result.data),
+        "15_events" => apply_events(snap, &result.data),
         "0_basic" => apply_basic(snap, &result.data),
         "1_financials" => apply_financials(snap, &result.data),
         "2_kline" => apply_kline(snap, &result.data),
@@ -98,6 +103,9 @@ fn apply_financials(snap: &mut FundamentalsSnapshot, data: &Value) {
         set_f64(snap, "current_ratio", h, "current_ratio");
         set_f64(snap, "fcf_margin", h, "fcf_margin");
     }
+    if snap.debt_ratio.is_none() {
+        set_f64(snap, "debt_ratio", data, "debt_ratio");
+    }
     if let Some(arr) = data.get("roe_history").and_then(|v| v.as_array()) {
         snap.roe_history = arr.iter().filter_map(|v| v.as_f64()).collect();
         if !snap.roe_history.is_empty() {
@@ -153,6 +161,61 @@ fn apply_lhb(snap: &mut FundamentalsSnapshot, data: &Value) {
         if !snap.matched_youzi.is_empty() {
             mark(snap, "matched_youzi");
         }
+    }
+}
+
+fn apply_peers(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if snap.industry_pe.is_none()
+        && let Some(median) = data
+            .get("peer_table")
+            .and_then(|v| v.as_array())
+            .and_then(|a| crate::providers::akshare::median_peer_pe(a))
+    {
+        snap.industry_pe = Some(median);
+        mark(snap, "industry_pe");
+    }
+}
+
+fn apply_fund_holders(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if data
+        .get("fund_holdings")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        mark(snap, "fund_holdings");
+    }
+    if data.get("holder_count").and_then(|v| v.as_f64()).is_some() {
+        mark(snap, "holder_count");
+    }
+}
+
+fn apply_research(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if data
+        .get("research_count")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|n| n > 0)
+    {
+        mark(snap, "research_reports");
+    }
+}
+
+fn apply_capital_flow(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if data
+        .get("main_fund_5d_net_yi")
+        .and_then(|v| v.as_f64())
+        .is_some()
+    {
+        mark(snap, "main_fund_5d");
+    }
+}
+
+fn apply_events(snap: &mut FundamentalsSnapshot, data: &Value) {
+    if data
+        .get("announcement_count")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|n| n > 0)
+    {
+        mark(snap, "announcements");
     }
 }
 

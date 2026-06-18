@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "fixture_group": "trading_research_fetch",
+  "cases": [
+    {
+      "id": "moutai_bridge_score",
+      "op": "bridge_and_score",
+      "input": {
+        "symbol": "600519.SH",
+        "dims": {
+          "0_basic": {
+            "data": {
+              "name": "贵州茅台",
+              "industry": "白酒",
+              "price": 1680.0,
+              "pe_ttm": 28.5,
+              "pb": 8.2,
+              "market_cap_yi": 21000,
+              "shares_outstanding_yi": 12.56
+            }
+          },
+          "1_financials": {
+            "data": {
+              "roe": 32.0,
+              "net_margin": 52.0,
+              "revenue_latest_yi": 1500,
+              "fcf_yi": 600,
+              "financial_health": { "debt_ratio": 18.0 }
+            }
+          },
+          "10_valuation": {
+            "data": { "pe_ttm": 28.5, "pe_percentile": 35.0 }
+          },
+          "4_peers": {
+            "data": {
+              "peer_table": [
+                { "name": "五粮液", "pe": 18.0 },
+                { "name": "泸州老窖", "pe": 16.0 }
+              ]
+            }
+          },
+          "6_research": { "data": { "research_count": 10 } },
+          "7_industry": { "data": { "industry": "白酒", "growth": 12.0, "industry_pe": 22.0 } },
+          "6_fund_holders": { "data": { "holder_change_ratio": -8.0, "holder_count": 95000 } },
+          "12_capital_flow": { "data": { "main_fund_5d_net_yi": 3.5 } }
+        }
+      },
+      "expected": {
+        "min_confidence": 0.55,
+        "min_fundamental_score": 6.0,
+        "has_industry_pe": true,
+        "pe_dim_score_lte": 7
+      }
+    },
+    {
+      "id": "loss_maker_bridge_score",
+      "op": "bridge_and_score",
+      "input": {
+        "symbol": "600157.SH",
+        "dims": {
+          "0_basic": {
+            "data": {
+              "name": "永泰能源",
+              "price": 1.2,
+              "pe_ttm": -5.0,
+              "market_cap_yi": 260
+            }
+          },
+          "1_financials": {
+            "data": {
+              "roe": -2.0,
+              "net_margin": -5.0,
+              "revenue_latest_yi": 300
+            }
+          },
+          "10_valuation": { "data": { "pe_percentile": 80.0 } }
+        }
+      },
+      "expected": {
+        "max_confidence": 0.52,
+        "max_fundamental_score": 6.5
+      }
+    },
+    {
+      "id": "small_cap_bridge_score",
+      "op": "bridge_and_score",
+      "input": {
+        "symbol": "300999.SZ",
+        "dims": {
+          "0_basic": {
+            "data": {
+              "name": "金龙鱼",
+              "price": 32.0,
+              "pe_ttm": 45.0,
+              "market_cap_yi": 180
+            }
+          },
+          "1_financials": {
+            "data": { "roe": 6.0, "net_margin": 2.5, "revenue_latest_yi": 2200 }
+          },
+          "4_peers": { "data": { "peer_table": [] } },
+          "6_research": { "data": { "research_count": 1 } }
+        }
+      },
+      "expected": {
+        "min_confidence": 0.25,
+        "max_confidence": 0.55
+      }
+    }
+  ]
+}
