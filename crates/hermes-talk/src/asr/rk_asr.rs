@@ -77,7 +77,7 @@ mod ffi {
         pub result_callback: Option<unsafe extern "C" fn(*const RockAsrResult, i32, *mut c_void)>,
     }
 
-    extern "C" {
+    unsafe extern "C" {
         pub fn RockXCreate() -> RockXHandle;
         pub fn RockXDestroy(handle: RockXHandle) -> i32;
         pub fn RockXInit(handle: RockXHandle) -> i32;
@@ -411,7 +411,7 @@ async fn run_rkasr_driver(
         info!("rkasr RockXInit ok");
 
         // Force ASR shared libs load (their ELF constructors register LLMASR)
-        extern "C" {
+        unsafe extern "C" {
             fn force_asr_libs_init();
         }
         unsafe {

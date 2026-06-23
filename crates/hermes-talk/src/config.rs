@@ -51,7 +51,7 @@ fn default_ws_url() -> String {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AsrConfig {
-    /// "bailian" (default) or "local"/"rockchip"
+    /// ASR backend: `bailian`/`cloud`/`dashscope` (云端百炼), `sherpa` (本地 SenseVoice), `local`/`rockchip` (板端 NPU 或桌面 sherpa)
     #[serde(default = "default_asr_backend")]
     pub backend: String,
     #[serde(default = "default_asr_model")]
@@ -68,6 +68,9 @@ pub struct AsrConfig {
     /// Configuration for local Rockchip ASR backend
     #[serde(default)]
     pub local: Option<RockchipAsrConfig>,
+    /// Configuration for sherpa-onnx SenseVoice (Windows / x86 CPU)
+    #[serde(default)]
+    pub sherpa: Option<SherpaAsrConfig>,
 }
 
 impl Default for AsrConfig {
@@ -80,7 +83,14 @@ impl Default for AsrConfig {
             format: default_pcm(),
             language_hints: None,
             local: None,
+            sherpa: None,
         }
+    }
+}
+
+impl AsrConfig {
+    pub fn effective_sherpa(&self) -> SherpaAsrConfig {
+        self.sherpa.clone().unwrap_or_default()
     }
 }
 
@@ -106,7 +116,7 @@ impl Default for RockchipAsrConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TtsConfig {
-    /// "bailian" (default) or "local"/"rockchip"
+    /// TTS backend: `bailian`/`cloud`/`dashscope` (云端百炼), `sherpa` (本地 Kokoro), `local`/`rockchip` (板端 NPU 或桌面 sherpa)
     #[serde(default = "default_tts_backend")]
     pub backend: String,
     #[serde(default = "default_tts_model")]
@@ -126,6 +136,9 @@ pub struct TtsConfig {
     /// Deprecated alias for local config
     #[serde(default)]
     pub rockchip: Option<RockchipTtsConfig>,
+    /// Configuration for sherpa-onnx Kokoro (Windows / x86 CPU)
+    #[serde(default)]
+    pub sherpa: Option<SherpaTtsConfig>,
 }
 
 impl Default for TtsConfig {
@@ -139,7 +152,14 @@ impl Default for TtsConfig {
             language_hints: None,
             local: None,
             rockchip: None,
+            sherpa: None,
         }
+    }
+}
+
+impl TtsConfig {
+    pub fn effective_sherpa(&self) -> SherpaTtsConfig {
+        self.sherpa.clone().unwrap_or_default()
     }
 }
 
@@ -170,6 +190,85 @@ impl Default for RockchipTtsConfig {
             dicts_path: default_rktts_dicts_path(),
             speaker_id: 0,
             alpha: default_rktts_alpha(),
+        }
+    }
+}
+
+/// sherpa-onnx SenseVoice offline ASR (see https://k2-fsa.github.io/sherpa/onnx/sense-voice/index.html)
+#[derive(Debug, Clone, Deserialize)]
+pub struct SherpaAsrConfig {
+    #[serde(default = "default_sensevoice_model")]
+    pub model: String,
+    #[serde(default = "default_sensevoice_tokens")]
+    pub tokens: String,
+    #[serde(default = "default_sensevoice_language")]
+    pub language: String,
+    #[serde(default = "default_true")]
+    pub use_itn: bool,
+    #[serde(default = "default_sherpa_threads")]
+    pub num_threads: i32,
+    #[serde(default = "default_sherpa_provider")]
+    pub provider: String,
+}
+
+impl Default for SherpaAsrConfig {
+    fn default() -> Self {
+        Self {
+            model: default_sensevoice_model(),
+            tokens: default_sensevoice_tokens(),
+            language: default_sensevoice_language(),
+            use_itn: true,
+            num_threads: default_sherpa_threads(),
+            provider: default_sherpa_provider(),
+        }
+    }
+}
+
+/// sherpa-onnx Kokoro offline TTS (see https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html)
+#[derive(Debug, Clone, Deserialize)]
+pub struct SherpaTtsConfig {
+    #[serde(default = "default_kokoro_model")]
+    pub model: String,
+    #[serde(default = "default_kokoro_voices")]
+    pub voices: String,
+    #[serde(default = "default_kokoro_tokens")]
+    pub tokens: String,
+    #[serde(default = "default_kokoro_data_dir")]
+    pub data_dir: String,
+    #[serde(default = "default_kokoro_dict_dir")]
+    pub dict_dir: String,
+    #[serde(default = "default_kokoro_lexicon")]
+    pub lexicon: String,
+    #[serde(default = "default_kokoro_length_scale")]
+    pub length_scale: f32,
+    #[serde(default)]
+    pub lang: Option<String>,
+    /// Kokoro speaker id (0..num_speakers-1)
+    #[serde(default)]
+    pub sid: i32,
+    #[serde(default = "default_kokoro_speed")]
+    pub speed: f32,
+    #[serde(default = "default_sherpa_threads")]
+    pub num_threads: i32,
+    #[serde(default = "default_sherpa_provider")]
+    pub provider: String,
+}
+
+impl Default for SherpaTtsConfig {
+    fn default() -> Self {
+        Self {
+            model: default_kokoro_model(),
+            voices: default_kokoro_voices(),
+            tokens: default_kokoro_tokens(),
+            data_dir: default_kokoro_data_dir(),
+            dict_dir: default_kokoro_dict_dir(),
+            lexicon: default_kokoro_lexicon(),
+            length_scale: default_kokoro_length_scale(),
+            lang: None,
+            sid: 0,
+            speed: default_kokoro_speed(),
+            num_threads: default_sherpa_threads(),
+            provider: default_sherpa_provider(),
         }
     }
 }
@@ -370,6 +469,9 @@ pub struct WakeConfig {
     pub grace_after_wake_sec: u64,
     #[serde(default = "default_idle_after_turn")]
     pub idle_after_turn_sec: u64,
+    /// Exact-match phrases that skip LLM and enter dormant (e.g. 安静, mute).
+    #[serde(default = "default_sleep_phrases")]
+    pub sleep_phrases: Vec<String>,
     #[serde(default = "default_kws_threads")]
     pub num_threads: i32,
 }
@@ -393,6 +495,7 @@ impl Default for WakeConfig {
             trigger_threshold: default_wake_threshold(),
             grace_after_wake_sec: default_grace_after_wake(),
             idle_after_turn_sec: default_idle_after_turn(),
+            sleep_phrases: default_sleep_phrases(),
             num_threads: default_kws_threads(),
         }
     }
@@ -412,6 +515,14 @@ impl WakeConfig {
 
     pub fn effective_phrases(&self) -> Vec<String> {
         self.phrases
+            .iter()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    pub fn effective_sleep_phrases(&self) -> Vec<String> {
+        self.sleep_phrases
             .iter()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -519,7 +630,7 @@ fn default_rkasr_data_path() -> String {
     "data".to_string()
 }
 fn default_rkasr_auth_config() -> String {
-    r#"{ "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "key.lic" }] }"#
+    r#"{ "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "auth/key_asr.lic" }] }"#
         .to_string()
 }
 fn default_asr_model() -> String {
@@ -532,7 +643,7 @@ fn default_voice() -> String {
     "longanyang".to_string()
 }
 fn default_rktts_auth() -> String {
-    r#"{ "trial": 1, "license_path": "key.lic" }"#.to_string()
+    r#"{ "trial": 1, "license_path": "auth/key_tts.lic" }"#.to_string()
 }
 fn default_rktts_model_path() -> String {
     "models".to_string()
@@ -542,6 +653,45 @@ fn default_rktts_dicts_path() -> String {
 }
 fn default_rktts_alpha() -> f32 {
     1.0
+}
+fn default_sensevoice_model() -> String {
+    "models/sensevoice/model.int8.onnx".to_string()
+}
+fn default_sensevoice_tokens() -> String {
+    "models/sensevoice/tokens.txt".to_string()
+}
+fn default_sensevoice_language() -> String {
+    "auto".to_string()
+}
+fn default_kokoro_model() -> String {
+    "models/kokoro/model.onnx".to_string()
+}
+fn default_kokoro_voices() -> String {
+    "models/kokoro/voices.bin".to_string()
+}
+fn default_kokoro_tokens() -> String {
+    "models/kokoro/tokens.txt".to_string()
+}
+fn default_kokoro_data_dir() -> String {
+    "models/kokoro/espeak-ng-data".to_string()
+}
+fn default_kokoro_dict_dir() -> String {
+    "models/kokoro/dict".to_string()
+}
+fn default_kokoro_lexicon() -> String {
+    "models/kokoro/lexicon-us-en.txt,models/kokoro/lexicon-zh.txt".to_string()
+}
+fn default_kokoro_length_scale() -> f32 {
+    1.0
+}
+fn default_kokoro_speed() -> f32 {
+    1.0
+}
+fn default_sherpa_threads() -> i32 {
+    2
+}
+fn default_sherpa_provider() -> String {
+    "cpu".to_string()
 }
 fn default_16k() -> u32 {
     16000
@@ -626,6 +776,18 @@ fn default_grace_after_wake() -> u64 {
 }
 fn default_idle_after_turn() -> u64 {
     30
+}
+fn default_sleep_phrases() -> Vec<String> {
+    vec![
+        "休眠".into(),
+        "安静".into(),
+        "mute".into(),
+        "闭嘴".into(),
+        "别说了".into(),
+        "停止".into(),
+        "silence".into(),
+        "shut up".into(),
+    ]
 }
 fn default_kws_threads() -> i32 {
     1
@@ -801,29 +963,57 @@ fn default_aec_preprocess() -> bool {
     false
 }
 
+/// How `call_hermes` reaches the full Hermes agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AipcTalkTransport {
+    /// In-process `mpsc` channel (default for board / co-located agents).
+    #[serde(alias = "in_process")]
+    #[default]
+    Channel,
+    /// Remote `aipc_talk` WebSocket bridge.
+    Ws,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AipcTalkConfig {
+    #[serde(default)]
+    pub transport: AipcTalkTransport,
     #[serde(default = "default_aipc_talk_url")]
     pub url: String,
     #[serde(default)]
     pub timeout_secs: Option<u64>,
     pub model: Option<String>,
     pub provider: Option<String>,
+    #[serde(default = "default_aipc_talk_session_key")]
+    pub session_key: String,
 }
 
 impl Default for AipcTalkConfig {
     fn default() -> Self {
         Self {
+            transport: AipcTalkTransport::default(),
             url: default_aipc_talk_url(),
             timeout_secs: None,
             model: None,
             provider: None,
+            session_key: default_aipc_talk_session_key(),
         }
+    }
+}
+
+impl AipcTalkConfig {
+    pub fn uses_channel(&self) -> bool {
+        self.transport == AipcTalkTransport::Channel
     }
 }
 
 fn default_aipc_talk_url() -> String {
     "ws://127.0.0.1:9100".to_string()
+}
+
+fn default_aipc_talk_session_key() -> String {
+    "talk-hermes".to_string()
 }
 
 impl Config {
@@ -853,8 +1043,11 @@ impl Config {
             toml::from_str(&raw).map_err(|e| DemoError::Config(format!("parse toml: {e}")))?;
 
         cfg.resolve_paths_against(base);
+        merge_gateway_llm_defaults(&mut cfg);
+        merge_dashscope_defaults(&mut cfg);
         cfg.wake.normalize();
         cfg.wake.validate()?;
+        validate_talk_backends(&cfg)?;
         Ok(cfg)
     }
 
@@ -871,14 +1064,34 @@ impl Config {
     fn resolve_paths_against(&mut self, base: &Path) {
         if let Some(ref mut local) = self.asr.local {
             local.data_path = join_if_relative(base, &local.data_path);
+            local.auth_config = resolve_auth_license_paths(&local.auth_config, base);
         }
         if let Some(ref mut local) = self.tts.local {
             local.model_path = join_if_relative(base, &local.model_path);
             local.dicts_path = join_if_relative(base, &local.dicts_path);
+            local.auth_config = resolve_auth_license_paths(&local.auth_config, base);
         }
         if let Some(ref mut rockchip) = self.tts.rockchip {
             rockchip.model_path = join_if_relative(base, &rockchip.model_path);
             rockchip.dicts_path = join_if_relative(base, &rockchip.dicts_path);
+            rockchip.auth_config = resolve_auth_license_paths(&rockchip.auth_config, base);
+        }
+        if let Some(ref mut sherpa) = self.asr.sherpa {
+            sherpa.model = join_if_relative(base, &sherpa.model);
+            sherpa.tokens = join_if_relative(base, &sherpa.tokens);
+        }
+        if let Some(ref mut sherpa) = self.tts.sherpa {
+            sherpa.model = join_if_relative(base, &sherpa.model);
+            sherpa.voices = join_if_relative(base, &sherpa.voices);
+            sherpa.tokens = join_if_relative(base, &sherpa.tokens);
+            sherpa.data_dir = join_if_relative(base, &sherpa.data_dir);
+            sherpa.dict_dir = join_if_relative(base, &sherpa.dict_dir);
+            sherpa.lexicon = sherpa
+                .lexicon
+                .split(',')
+                .map(|p| join_if_relative(base, p.trim()))
+                .collect::<Vec<_>>()
+                .join(",");
         }
         self.wake.model_dir = join_if_relative(base, &self.wake.model_dir);
         self.wake.encoder = join_if_relative(base, &self.wake.encoder);
@@ -896,6 +1109,88 @@ impl Config {
     }
 }
 
+/// Fill talk LLM settings from `$HERMES_HOME/config.yaml` `llm_providers.custom` when unset or stale.
+fn merge_gateway_llm_defaults(cfg: &mut Config) {
+    let Ok(gw) = hermes_config::load_config(None) else {
+        return;
+    };
+    let Some(custom) = gw.llm_providers.get("custom") else {
+        return;
+    };
+
+    if cfg.llm.api_key.is_empty() {
+        if let Some(key) = custom.api_key.as_ref().filter(|k| !k.is_empty()) {
+            cfg.llm.api_key = key.clone();
+        }
+    }
+
+    if let Some(url) = custom.base_url.as_ref().filter(|u| !u.is_empty()) {
+        let normalized = url.trim().trim_end_matches('/').to_string();
+        if cfg.llm.base_url.is_empty()
+            || cfg.llm.base_url.contains("11888")
+            || cfg.llm.base_url.contains("8080/v1")
+        {
+            cfg.llm.base_url = normalized;
+        }
+    }
+
+    if let Some(model) = custom.model.as_ref().filter(|m| !m.is_empty()) {
+        if cfg.llm.model.is_empty() || cfg.llm.model == "your-model" {
+            cfg.llm.model = model.clone();
+        }
+    }
+}
+
+/// Hydrate `[dashscope]` from env / gateway config so cloud ASR/TTS works on every platform.
+fn merge_dashscope_defaults(cfg: &mut Config) {
+    if cfg.dashscope.api_key.is_empty() {
+        if let Ok(key) = std::env::var("DASHSCOPE_API_KEY") {
+            if !key.trim().is_empty() {
+                cfg.dashscope.api_key = key.trim().to_string();
+            }
+        }
+    }
+    if cfg.dashscope.api_key.is_empty() {
+        if let Ok(gw) = hermes_config::load_config(None) {
+            for provider in ["qwen", "alibaba", "dashscope"] {
+                if let Some(key) = gw
+                    .llm_providers
+                    .get(provider)
+                    .and_then(|c| c.api_key.as_deref())
+                    .map(str::trim)
+                    .filter(|k| !k.is_empty())
+                {
+                    cfg.dashscope.api_key = key.to_string();
+                    break;
+                }
+            }
+        }
+    }
+    if cfg.dashscope.api_key.is_empty() && !cfg.llm.api_key.is_empty() {
+        cfg.dashscope.api_key = cfg.llm.api_key.clone();
+    }
+}
+
+fn validate_talk_backends(cfg: &Config) -> Result<()> {
+    use crate::backends::{uses_cloud_asr, uses_cloud_tts};
+
+    if uses_cloud_asr(&cfg.asr.backend) && cfg.dashscope.api_key.trim().is_empty() {
+        return Err(DemoError::Config(
+            "asr backend is cloud (bailian/cloud/dashscope) but dashscope.api_key is empty; \
+             set [dashscope].api_key or DASHSCOPE_API_KEY"
+                .into(),
+        ));
+    }
+    if uses_cloud_tts(&cfg.tts.backend) && cfg.dashscope.api_key.trim().is_empty() {
+        return Err(DemoError::Config(
+            "tts backend is cloud (bailian/cloud/dashscope) but dashscope.api_key is empty; \
+             set [dashscope].api_key or DASHSCOPE_API_KEY"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn join_if_relative(base: &Path, path: &str) -> String {
     if path.is_empty() {
         return String::new();
@@ -905,5 +1200,130 @@ fn join_if_relative(base: &Path, path: &str) -> String {
         path.to_string()
     } else {
         base.join(p).to_string_lossy().into_owned()
+    }
+}
+
+fn resolve_auth_license_paths(auth_config: &str, base: &Path) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(auth_config) else {
+        return auth_config.to_string();
+    };
+    if let Some(path) = value
+        .get_mut("license_path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+    {
+        value["license_path"] = serde_json::Value::String(join_if_relative(base, &path));
+    }
+    if let Some(modules) = value
+        .get_mut("rkauth_modules_config")
+        .and_then(|v| v.as_array_mut())
+    {
+        for module in modules {
+            if let Some(path) = module
+                .get_mut("license_path")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+            {
+                module["license_path"] = serde_json::Value::String(join_if_relative(base, &path));
+            }
+        }
+    }
+    value.to_string()
+}
+
+#[cfg(test)]
+mod aipc_talk_config_tests {
+    use super::{AipcTalkConfig, AipcTalkTransport};
+
+    #[test]
+    fn default_transport_is_channel() {
+        let cfg: AipcTalkConfig = toml::from_str("transport = \"channel\"\n").unwrap();
+        assert_eq!(cfg.transport, AipcTalkTransport::Channel);
+        assert!(cfg.uses_channel());
+    }
+
+    #[test]
+    fn parses_ws_transport() {
+        let cfg: AipcTalkConfig = toml::from_str(
+            r#"
+transport = "ws"
+url = "ws://127.0.0.1:9100"
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.transport, AipcTalkTransport::Ws);
+        assert!(!cfg.uses_channel());
+    }
+
+    #[test]
+    fn parses_in_process_alias() {
+        let cfg: AipcTalkConfig = toml::from_str("transport = \"in_process\"\n").unwrap();
+        assert_eq!(cfg.transport, AipcTalkTransport::Channel);
+    }
+}
+
+#[cfg(test)]
+mod sherpa_backend_config_tests {
+    use super::Config;
+    use crate::asr::AsrBackend;
+    use crate::backends::classify_talk_backend;
+    use crate::backends::TalkBackendKind;
+    use crate::tts::TtsBackend;
+
+    #[test]
+    fn sherpa_backend_string_maps_to_sherpa() {
+        let asr: super::AsrConfig = toml::from_str("backend = \"sherpa\"\n").unwrap();
+        assert_eq!(AsrBackend::from_config(&asr), AsrBackend::Sherpa);
+        let tts: super::TtsConfig = toml::from_str("backend = \"sherpa\"\n").unwrap();
+        assert_eq!(TtsBackend::from_config(&tts), TtsBackend::Sherpa);
+    }
+
+    #[test]
+    fn cloud_backend_aliases_map_to_bailian() {
+        for alias in ["bailian", "cloud", "dashscope", "aliyun"] {
+            let asr: super::AsrConfig = toml::from_str(&format!("backend = \"{alias}\"\n")).unwrap();
+            assert_eq!(
+                AsrBackend::from_config(&asr),
+                AsrBackend::Bailian,
+                "asr alias {alias}"
+            );
+            assert_eq!(
+                classify_talk_backend(alias),
+                TalkBackendKind::Cloud,
+                "classify {alias}"
+            );
+            let tts: super::TtsConfig = toml::from_str(&format!("backend = \"{alias}\"\n")).unwrap();
+            assert_eq!(
+                TtsBackend::from_config(&tts),
+                TtsBackend::Bailian,
+                "tts alias {alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_sherpa_model_sections() {
+        let raw = r#"
+[asr]
+backend = "sherpa"
+[asr.sherpa]
+model = "models/sensevoice/model.int8.onnx"
+tokens = "models/sensevoice/tokens.txt"
+[tts]
+backend = "sherpa"
+sample_rate = 24000
+[tts.sherpa]
+model = "models/kokoro/model.onnx"
+voices = "models/kokoro/voices.bin"
+[llm]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "k"
+model = "m"
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        let asr = cfg.asr.effective_sherpa();
+        assert!(asr.model.contains("sensevoice"));
+        let tts = cfg.tts.effective_sherpa();
+        assert!(tts.model.contains("kokoro"));
     }
 }

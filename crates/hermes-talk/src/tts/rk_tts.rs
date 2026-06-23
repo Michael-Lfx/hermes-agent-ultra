@@ -12,7 +12,7 @@ use crate::error::{DemoError, Result};
 use super::TtsEngine;
 use super::bailian::TtsAudio;
 
-extern "C" {
+unsafe extern "C" {
     fn rktts_create() -> *mut std::ffi::c_void;
     fn rktts_init(
         handle: *mut std::ffi::c_void,
@@ -204,8 +204,8 @@ async fn run_rktts_driver(
                         }
 
                         let text = std::mem::take(&mut text_buf);
-                        let gen = infer_gen.load(Ordering::SeqCst);
-                        let infer_done = run_inference(&handle, &text, &infer_gen, gen).await;
+                        let generation = infer_gen.load(Ordering::SeqCst);
+                        let infer_done = run_inference(&handle, &text, &infer_gen, generation).await;
                         let _ = done.send(infer_done);
                     }
                     RkCommand::InterruptTurn(done) => {

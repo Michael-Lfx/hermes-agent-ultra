@@ -18,17 +18,20 @@ use crate::kws::WakeDetectorHandle;
 use crate::kws::start_wake_detector;
 use crate::llm::{AccumulatedToolCall, ChatMessage, LlmClient, OpenAiCompatClient, ToolCall};
 use crate::orchestrator::{
-    SessionState, WakePhase, flush_remainder, normalize_tts_text, take_early_chunk, take_sentence,
-    texts_compatible,
+    SessionState, WakePhase, flush_remainder, matches_sleep_keyword, normalize_tts_text,
+    take_early_chunk, take_sentence, texts_compatible,
 };
 use crate::speaker::SpeakerVerifier;
 use crate::tools;
-use crate::tools::hermes_queue::{HermesMessage, HermesQueue, HermesQueueSender};
+use crate::tools::hermes_queue::{HermesMessage, HermesQueue, HermesQueueSender, HermesWorkItem};
 use crate::tts::{TtsBackend, TtsEngine, create_tts};
 use crate::vad::{EndpointDetector, SileroVad, VadEngine, WebRtcVad};
 
 pub struct Session {
     cfg: Config,
+    hermes_work_tx: Option<mpsc::Sender<HermesWorkItem>>,
+    hermes_msg_tx: Option<mpsc::Sender<HermesMessage>>,
+    hermes_msg_rx: Option<mpsc::Receiver<HermesMessage>>,
 }
 
 /// Per-turn latency markers for KPI logs.
@@ -72,10 +75,34 @@ struct ActiveTurn {
 
 impl Session {
     pub fn new(cfg: Config) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            hermes_work_tx: None,
+            hermes_msg_tx: None,
+            hermes_msg_rx: None,
+        }
     }
 
-    pub async fn run(mut self) -> Result<()> {
+    pub fn with_hermes_work_tx(mut self, work_tx: mpsc::Sender<HermesWorkItem>) -> Self {
+        self.hermes_work_tx = Some(work_tx);
+        self
+    }
+
+    pub fn with_hermes_msg_channels(
+        mut self,
+        msg_tx: mpsc::Sender<HermesMessage>,
+        msg_rx: mpsc::Receiver<HermesMessage>,
+    ) -> Self {
+        self.hermes_msg_tx = Some(msg_tx);
+        self.hermes_msg_rx = Some(msg_rx);
+        self
+    }
+
+    pub async fn run(self) -> Result<()> {
+        self.run_inner().await
+    }
+
+    async fn run_inner(mut self) -> Result<()> {
         let orch = self.cfg.orchestrator.clone();
         let capture = AudioCapture::start(&self.cfg.audio, self.cfg.asr.chunk_ms)?;
         let playback = Arc::new(AudioPlayback::start(
@@ -85,6 +112,7 @@ impl Session {
 
         let wake_cfg = self.cfg.wake.clone();
         let wake_enabled = wake_cfg.enabled;
+        let sleep_phrases = wake_cfg.effective_sleep_phrases();
 
         let asr_backend = AsrBackend::from_config(&self.cfg.asr);
         let (asr, mut asr_rx) = create_asr(
@@ -287,12 +315,35 @@ impl Session {
 
         let (_hermes_queue, mut hermes_msg_rx, hermes_sender_for_spawn) =
             if self.cfg.llm.tools_enabled {
-                let (queue, rx, _handle) = HermesQueue::new(self.cfg.llm.aipc_talk.clone());
+                let aipc = self.cfg.llm.aipc_talk.clone();
+                let external_msg = self.hermes_msg_tx.take().zip(self.hermes_msg_rx.take());
+                let (queue, rx, _handle) = if aipc.uses_channel() {
+                    let work_tx = self.hermes_work_tx.ok_or_else(|| {
+                        crate::error::DemoError::Config(
+                            "call_hermes channel transport requires embedded Hermes runtime \
+                             (missing work channel)"
+                                .to_string(),
+                        )
+                    })?;
+                    if let Some((msg_tx, msg_rx)) = external_msg {
+                        HermesQueue::new_channel_shared(aipc, work_tx, msg_tx, msg_rx)
+                    } else {
+                        let (q, rx, h, _push) = HermesQueue::new_channel(aipc, work_tx);
+                        (q, rx, h)
+                    }
+                } else if let Some((msg_tx, msg_rx)) = external_msg {
+                    HermesQueue::new_shared(aipc, msg_tx, msg_rx, None)
+                } else {
+                    let (q, rx, h, _push) = HermesQueue::new(aipc);
+                    (q, rx, h)
+                };
                 let sender = queue.sender.clone();
                 (Some(queue), rx, Some(sender))
             } else {
-                let (_tx, rx) = mpsc::channel::<HermesMessage>(1);
-                drop(_tx);
+                let rx = self.hermes_msg_rx.take().unwrap_or_else(|| {
+                    let (_tx, rx) = mpsc::channel::<HermesMessage>(1);
+                    rx
+                });
                 (None, rx, None)
             };
         let mut pending_hermes_msgs: VecDeque<HermesMessage> = VecDeque::new();
@@ -322,6 +373,9 @@ impl Session {
         );
         if wake_enabled {
             info!(phrases = ?wake_cfg.effective_phrases(), "waiting for wake word");
+        }
+        if !sleep_phrases.is_empty() {
+            info!(phrases = ?sleep_phrases, "sleep keywords enabled");
         }
 
         if let Err(e) = tts.warmup().await {
@@ -630,8 +684,16 @@ impl Session {
                                 &turn_epoch,
                                 asr.clone(),
                                 wake_enabled,
+                                &sleep_phrases,
                                 &self.cfg.llm,
                                 hermes_sender_for_spawn.clone(),
+                                &mut wake_phase,
+                                &mut asr_rx,
+                                &mut partial_stable_since,
+                                &mut last_partial,
+                                &mut speaker_gate,
+                                &mut speaker_verify_buffer,
+                                speaker_verify_gate,
                             )
                             .await;
                             continue;
@@ -658,8 +720,16 @@ impl Session {
                             &turn_epoch,
                             asr.clone(),
                             wake_enabled,
+                            &sleep_phrases,
                             &self.cfg.llm,
                             hermes_sender_for_spawn.clone(),
+                            &mut wake_phase,
+                            &mut asr_rx,
+                            &mut partial_stable_since,
+                            &mut last_partial,
+                            &mut speaker_gate,
+                            &mut speaker_verify_buffer,
+                            speaker_verify_gate,
                         )
                         .await;
                         }
@@ -753,6 +823,32 @@ impl Session {
                                                 && text.trim().chars().count() >= orch.min_final_chars
                                                 && active_turn.is_none()
                                             {
+                                                if matches_sleep_keyword(&text, &sleep_phrases) {
+                                                    apply_sleep_keyword(
+                                                        &text,
+                                                        wake_enabled,
+                                                        asr.clone(),
+                                                        tts.clone(),
+                                                        &playback,
+                                                        &play_gen,
+                                                        &turn_epoch,
+                                                        &mut llm_cancel,
+                                                        &mut wake_phase,
+                                                        &mut state,
+                                                        &mut active_turn,
+                                                        &mut last_final,
+                                                        &mut asr_final_at,
+                                                        &mut partial_stable_since,
+                                                        &mut last_partial,
+                                                        &current_latency,
+                                                        &mut asr_rx,
+                                                        &mut speaker_gate,
+                                                        &mut speaker_verify_buffer,
+                                                        speaker_verify_gate,
+                                                    )
+                                                    .await;
+                                                    continue;
+                                                }
                                                 info!(%text, "speculative llm start");
                                                 start_reply_turn(
                                                     text,
@@ -773,8 +869,18 @@ impl Session {
                                                     &turn_epoch,
                                                     asr.clone(),
                                                     wake_enabled,
+                                                    &sleep_phrases,
                                                     &self.cfg.llm,
                                                     hermes_sender_for_spawn.clone(),
+                                                    &mut wake_phase,
+                                                    &mut asr_rx,
+                                                    &mut last_final,
+                                                    &mut asr_final_at,
+                                                    &mut partial_stable_since,
+                                                    &mut last_partial,
+                                                    &mut speaker_gate,
+                                                    &mut speaker_verify_buffer,
+                                                    speaker_verify_gate,
                                                 )
                                                 .await;
                 }
@@ -790,6 +896,32 @@ impl Session {
                                         allows_dialog = wake_phase.allows_dialog(),
                                         "asr final"
                                     );
+                                    if matches_sleep_keyword(&text, &sleep_phrases) {
+                                        apply_sleep_keyword(
+                                            &text,
+                                            wake_enabled,
+                                            asr.clone(),
+                                            tts.clone(),
+                                            &playback,
+                                            &play_gen,
+                                            &turn_epoch,
+                                            &mut llm_cancel,
+                                            &mut wake_phase,
+                                            &mut state,
+                                            &mut active_turn,
+                                            &mut last_final,
+                                            &mut asr_final_at,
+                                            &mut partial_stable_since,
+                                            &mut last_partial,
+                                            &current_latency,
+                                            &mut asr_rx,
+                                            &mut speaker_gate,
+                                            &mut speaker_verify_buffer,
+                                            speaker_verify_gate,
+                                        )
+                                        .await;
+                                        continue;
+                                    }
                                     if speaker_verify_gate && vad.speech_start() && speaker_gate == SpeakerGate::Idle {
                                         speaker_gate = SpeakerGate::Verifying;
                                         speaker_verify_buffer.clear();
@@ -915,8 +1047,16 @@ impl Session {
                                                 &turn_epoch,
                                                 asr.clone(),
                                                 wake_enabled,
+                                                &sleep_phrases,
                                                 &self.cfg.llm,
                                                 hermes_sender_for_spawn.clone(),
+                                                &mut wake_phase,
+                                                &mut asr_rx,
+                                                &mut partial_stable_since,
+                                                &mut last_partial,
+                                                &mut speaker_gate,
+                                                &mut speaker_verify_buffer,
+                                                speaker_verify_gate,
                                             ).await;
                                         } else if !wake_enabled || !orch.barge_in_requires_wake {
                                             let prev_user_text = turn.user_text.clone();
@@ -948,8 +1088,16 @@ impl Session {
                                                 &turn_epoch,
                                                 asr.clone(),
                                                 wake_enabled,
+                                                &sleep_phrases,
                                                 &self.cfg.llm,
                                                 hermes_sender_for_spawn.clone(),
+                                                &mut wake_phase,
+                                                &mut asr_rx,
+                                                &mut partial_stable_since,
+                                                &mut last_partial,
+                                                &mut speaker_gate,
+                                                &mut speaker_verify_buffer,
+                                                speaker_verify_gate,
                                             ).await;
                                         } else {
                                             // Wake word required to interrupt — save text for next turn
@@ -980,8 +1128,16 @@ impl Session {
                                             &current_latency, &turn_epoch,
                                             asr.clone(),
                                             wake_enabled,
+                                            &sleep_phrases,
                                             &self.cfg.llm,
                                             hermes_sender_for_spawn.clone(),
+                                            &mut wake_phase,
+                                            &mut asr_rx,
+                                            &mut partial_stable_since,
+                                            &mut last_partial,
+                                            &mut speaker_gate,
+                                            &mut speaker_verify_buffer,
+                                            speaker_verify_gate,
                                         ).await;
                                     }
                                 }
@@ -1165,6 +1321,77 @@ fn promote_wake_on_speech(wake: &mut WakePhase) -> bool {
             true
         }
         _ => false,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn apply_sleep_keyword(
+    text: &str,
+    wake_enabled: bool,
+    asr: Arc<dyn AsrEngine>,
+    tts: Arc<dyn TtsEngine>,
+    playback: &Arc<AudioPlayback>,
+    play_gen: &Arc<AtomicU64>,
+    turn_epoch: &Arc<AtomicU64>,
+    llm_cancel: &mut Option<CancellationToken>,
+    wake_phase: &mut WakePhase,
+    state: &mut SessionState,
+    active_turn: &mut Option<ActiveTurn>,
+    last_final: &mut Option<String>,
+    asr_final_at: &mut Option<Instant>,
+    partial_stable_since: &mut Option<Instant>,
+    last_partial: &mut String,
+    current_latency: &Arc<std::sync::Mutex<Option<Arc<TurnLatency>>>>,
+    asr_rx: &mut mpsc::Receiver<AsrEvent>,
+    speaker_gate: &mut SpeakerGate,
+    speaker_verify_buffer: &mut Vec<f32>,
+    speaker_verify_gate: bool,
+) {
+    info!(phrase = %text.trim(), "sleep keyword matched; skipping LLM");
+    turn_epoch.fetch_add(1, Ordering::SeqCst);
+    playback.stop_clear();
+    play_gen.store(playback.current_generation(), Ordering::SeqCst);
+    if let Some(c) = llm_cancel.take() {
+        c.cancel();
+    }
+    let tts_int = tts.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tts_int.interrupt_turn().await {
+            warn!(error = %e, "tts interrupt on sleep keyword failed");
+        }
+    });
+    *active_turn = None;
+    if wake_enabled {
+        enter_dormant(
+            asr,
+            wake_phase,
+            state,
+            active_turn,
+            last_final,
+            asr_final_at,
+            partial_stable_since,
+            last_partial,
+            llm_cancel,
+            current_latency,
+            asr_rx,
+            speaker_gate,
+            speaker_verify_buffer,
+            speaker_verify_gate,
+        )
+        .await;
+    } else {
+        *state = SessionState::Listening;
+        *last_final = None;
+        *asr_final_at = None;
+        *partial_stable_since = None;
+        last_partial.clear();
+        *speaker_gate = SpeakerGate::Idle;
+        if !speaker_verify_gate {
+            *speaker_gate = SpeakerGate::Passed;
+        }
+        speaker_verify_buffer.clear();
+        *current_latency.lock().unwrap() = None;
+        info!("sleep keyword matched (wake disabled); back to listening");
     }
 }
 
@@ -1409,8 +1636,16 @@ async fn maybe_trigger(
     turn_epoch: &Arc<AtomicU64>,
     asr: Arc<dyn AsrEngine>,
     wake_enabled: bool,
+    sleep_phrases: &[String],
     llm_cfg: &LlmConfig,
     hermes_sender: Option<HermesQueueSender>,
+    wake_phase: &mut WakePhase,
+    asr_rx: &mut mpsc::Receiver<AsrEvent>,
+    partial_stable_since: &mut Option<Instant>,
+    last_partial: &mut String,
+    speaker_gate: &mut SpeakerGate,
+    speaker_verify_buffer: &mut Vec<f32>,
+    speaker_verify_gate: bool,
 ) {
     if *state != SessionState::Listening || active_turn.is_some() {
         return;
@@ -1433,6 +1668,33 @@ async fn maybe_trigger(
     }
     let text = last_final.take().unwrap();
     let trimmed = text.trim();
+
+    if matches_sleep_keyword(trimmed, sleep_phrases) {
+        apply_sleep_keyword(
+            trimmed,
+            wake_enabled,
+            asr.clone(),
+            tts.clone(),
+            playback,
+            play_gen,
+            turn_epoch,
+            llm_cancel,
+            wake_phase,
+            state,
+            active_turn,
+            last_final,
+            asr_final_at,
+            partial_stable_since,
+            last_partial,
+            current_latency,
+            asr_rx,
+            speaker_gate,
+            speaker_verify_buffer,
+            speaker_verify_gate,
+        )
+        .await;
+        return;
+    }
 
     info!(
         trigger_text = %trimmed,
@@ -1461,8 +1723,18 @@ async fn maybe_trigger(
         turn_epoch,
         asr,
         wake_enabled,
+        sleep_phrases,
         llm_cfg,
         hermes_sender,
+        wake_phase,
+        asr_rx,
+        last_final,
+        asr_final_at,
+        partial_stable_since,
+        last_partial,
+        speaker_gate,
+        speaker_verify_buffer,
+        speaker_verify_gate,
     )
     .await;
 }
@@ -1487,8 +1759,18 @@ async fn start_reply_turn(
     turn_epoch: &Arc<AtomicU64>,
     asr: Arc<dyn AsrEngine>,
     wake_enabled: bool,
+    sleep_phrases: &[String],
     llm_cfg: &LlmConfig,
     hermes_sender: Option<HermesQueueSender>,
+    wake_phase: &mut WakePhase,
+    asr_rx: &mut mpsc::Receiver<AsrEvent>,
+    last_final: &mut Option<String>,
+    asr_final_at_slot: &mut Option<Instant>,
+    partial_stable_since: &mut Option<Instant>,
+    last_partial: &mut String,
+    speaker_gate: &mut SpeakerGate,
+    speaker_verify_buffer: &mut Vec<f32>,
+    speaker_verify_gate: bool,
 ) {
     if *state != SessionState::Listening && !speculative {
         return;
@@ -1497,6 +1779,33 @@ async fn start_reply_turn(
         return;
     }
     if !speculative && is_output_busy(*state, playback, active_turn) {
+        return;
+    }
+
+    if matches_sleep_keyword(text.trim(), sleep_phrases) {
+        apply_sleep_keyword(
+            text.trim(),
+            wake_enabled,
+            asr.clone(),
+            tts.clone(),
+            playback,
+            play_gen,
+            turn_epoch,
+            llm_cancel,
+            wake_phase,
+            state,
+            active_turn,
+            last_final,
+            asr_final_at_slot,
+            partial_stable_since,
+            last_partial,
+            current_latency,
+            asr_rx,
+            speaker_gate,
+            speaker_verify_buffer,
+            speaker_verify_gate,
+        )
+        .await;
         return;
     }
 
@@ -1818,7 +2127,7 @@ async fn handle_hermes_result(
         msg.text
     );
 
-    if msg.status != "final" && msg.status != "error" {
+    if msg.status != "final" && msg.status != "error" && msg.status != "ok" {
         info!(
             request_id = %msg.request_id,
             status = %msg.status,

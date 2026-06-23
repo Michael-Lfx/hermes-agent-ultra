@@ -15,18 +15,18 @@ use hermes_tools::tools::clarify::MAX_CHOICES;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
-use hermes_cli::app::bridge_tool_registry;
-use hermes_cli::platform_toolsets::{
+use crate::app::bridge_tool_registry;
+use crate::platform_toolsets::{
     cross_platform_system_hint, resolve_platform_tool_schemas, tool_definition_summary,
 };
-use hermes_cli::tool_preview::{build_tool_preview_from_value, tool_emoji};
+use crate::tool_preview::{build_tool_preview_from_value, tool_emoji};
 
 use crate::gateway_main::{
     GatewayAgentCache, get_or_build_gateway_cached_agent, resolve_model_for_gateway,
     truncate_hook_tool_result,
 };
 use crate::gateway_plan_mode::{finalize_gateway_agent_reply, prepare_gateway_plan_turn};
-use hermes_cli::plan_mode::PlanTurnPrep;
+use crate::plan_mode::PlanTurnPrep;
 
 fn gateway_reply_log_tail(text: &str, max_chars: usize) -> String {
     let trimmed = text.trim();
@@ -327,14 +327,14 @@ pub(crate) async fn gateway_handle_message_non_streaming(
             let _ = gw.send_message(&platform, &chat_id, &msg, None).await;
         });
     });
-    let status_cb = hermes_cli::gateway_inbound_wiring::make_gateway_status_callback(
+    let status_cb = crate::gateway_inbound_wiring::make_gateway_status_callback(
         gateway_for_review.clone(),
         ctx.platform.clone(),
         ctx.chat_id.clone(),
         ctx.user_id.clone(),
         ctx.session_key.clone(),
     );
-    let on_thinking = hermes_cli::gateway_inbound_wiring::make_gateway_on_thinking_callback(
+    let on_thinking = crate::gateway_inbound_wiring::make_gateway_on_thinking_callback(
         gateway_for_review.clone(),
         ctx.platform.clone(),
         ctx.chat_id.clone(),
@@ -623,14 +623,14 @@ pub(crate) async fn gateway_handle_message_streaming(
             let _ = gw.send_message(&platform, &chat_id, &msg, None).await;
         });
     });
-    let status_cb = hermes_cli::gateway_inbound_wiring::make_gateway_status_callback(
+    let status_cb = crate::gateway_inbound_wiring::make_gateway_status_callback(
         gateway_for_review.clone(),
         ctx.platform.clone(),
         ctx.chat_id.clone(),
         ctx.user_id.clone(),
         ctx.session_key.clone(),
     );
-    let on_thinking = hermes_cli::gateway_inbound_wiring::make_gateway_on_thinking_callback(
+    let on_thinking = crate::gateway_inbound_wiring::make_gateway_on_thinking_callback(
         gateway_for_review.clone(),
         ctx.platform.clone(),
         ctx.chat_id.clone(),

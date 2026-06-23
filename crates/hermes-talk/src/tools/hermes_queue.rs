@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
@@ -10,10 +11,56 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tracing::{info, warn};
 
-use crate::config::AipcTalkConfig;
+use crate::config::{AipcTalkConfig, AipcTalkTransport};
 use crate::error::{DemoError, Result};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// Work item dispatched to the in-process Hermes agent worker.
+#[derive(Debug)]
+pub struct HermesWorkItem {
+    pub request_id: String,
+    pub text: String,
+    pub model: Option<String>,
+    pub provider: Option<String>,
+    pub respond: oneshot::Sender<Result<String>>,
+}
+
+/// Push unsolicited Hermes messages (e.g. cron completions) into the voice session.
+#[derive(Clone)]
+pub struct TalkPushBridge {
+    tx: mpsc::Sender<HermesMessage>,
+}
+
+impl TalkPushBridge {
+    pub fn new(tx: mpsc::Sender<HermesMessage>) -> Self {
+        Self { tx }
+    }
+
+    pub async fn push(&self, msg: HermesMessage) {
+        let _ = self.tx.send(msg).await;
+    }
+}
+
+fn normalize_delivery_status(status: &str) -> String {
+    match status {
+        "ok" | "final" => "final".to_string(),
+        "error" => "error".to_string(),
+        other => other.to_string(),
+    }
+}
+
+#[async_trait]
+trait HermesTransport: Send {
+    async fn submit(&mut self, req: &HermesRequest, timeout_secs: Option<u64>) -> Result<String>;
+    async fn poll_push(&mut self) -> Option<HermesMessage>;
+}
+
+struct WsTransport {
+    config: AipcTalkConfig,
+    conn: Option<HermesConnection>,
+    msg_tx: mpsc::Sender<HermesMessage>,
+}
 
 struct HermesConnection {
     ws: WsStream,
@@ -55,8 +102,6 @@ impl HermesConnection {
 
         eprintln!("\n══════════ 发送给 hermes ══════════\n{text}\n══════════════════════════");
 
-        // Read responses in a loop — forward any message whose request_id
-        // does not match (e.g. cron deliveries) and keep waiting for ours.
         loop {
             let response_msg = match timeout_secs {
                 Some(secs) => tokio::time::timeout(Duration::from_secs(secs), self.ws.next())
@@ -91,9 +136,8 @@ impl HermesConnection {
 
             let resp_id = response["request_id"].as_str().unwrap_or("");
             if resp_id == request_id {
-                // This is our response
                 let status = response["status"].as_str().unwrap_or("");
-                if status != "ok" {
+                if status != "ok" && status != "final" {
                     warn!(%status, %response_text, "hermes: non-ok status");
                 }
 
@@ -110,9 +154,8 @@ impl HermesConnection {
                 return Ok(text);
             }
 
-            // Not our response — forward as unsolicited message (e.g. cron delivery)
             let text = response["text"].as_str().unwrap_or("").to_string();
-            let status = response["status"].as_str().unwrap_or("ok").to_string();
+            let status = normalize_delivery_status(response["status"].as_str().unwrap_or("ok"));
             info!(%resp_id, %text, "hermes: forwarding unsolicited message");
             let _ = msg_tx
                 .send(HermesMessage {
@@ -121,6 +164,159 @@ impl HermesConnection {
                     status,
                 })
                 .await;
+        }
+    }
+}
+
+#[async_trait]
+impl HermesTransport for WsTransport {
+    async fn submit(&mut self, req: &HermesRequest, timeout_secs: Option<u64>) -> Result<String> {
+        if self.conn.is_none() {
+            self.conn = Some(HermesConnection::connect(&self.config).await?);
+        }
+        let conn = self.conn.as_mut().expect("connection just established");
+        match conn
+            .request(&req.id, &req.text, timeout_secs, &self.msg_tx)
+            .await
+        {
+            Ok(text) => Ok(text),
+            Err(e) => {
+                self.conn = None;
+                Err(e)
+            }
+        }
+    }
+
+    async fn poll_push(&mut self) -> Option<HermesMessage> {
+        let conn = self.conn.as_mut()?;
+        match conn.ws.next().await {
+            Some(Ok(WsMessage::Text(t))) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                    let id = v["request_id"].as_str().unwrap_or("").to_string();
+                    let txt = v["text"].as_str().unwrap_or("").to_string();
+                    let st = normalize_delivery_status(v["status"].as_str().unwrap_or("ok"));
+                    info!(%id, %txt, "hermes: unsolicited message received");
+                    return Some(HermesMessage {
+                        request_id: id,
+                        text: txt,
+                        status: st,
+                    });
+                }
+                None
+            }
+            Some(Ok(WsMessage::Close(_))) | None => {
+                self.conn = None;
+                None
+            }
+            Some(Err(e)) => {
+                warn!(%e, "hermes: WS error in idle read");
+                self.conn = None;
+                None
+            }
+            _ => None,
+        }
+    }
+}
+
+struct ChannelTransport {
+    work_tx: mpsc::Sender<HermesWorkItem>,
+}
+
+#[async_trait]
+impl HermesTransport for ChannelTransport {
+    async fn submit(&mut self, req: &HermesRequest, timeout_secs: Option<u64>) -> Result<String> {
+        let (tx, rx) = oneshot::channel();
+        self.work_tx
+            .send(HermesWorkItem {
+                request_id: req.id.clone(),
+                text: req.text.clone(),
+                model: req.model.clone(),
+                provider: req.provider.clone(),
+                respond: tx,
+            })
+            .await
+            .map_err(|_| DemoError::Tool("hermes bridge worker closed".to_string()))?;
+
+        eprintln!(
+            "\n══════════ 发送给 hermes ══════════\n{}\n══════════════════════════",
+            req.text
+        );
+
+        match timeout_secs {
+            Some(secs) => tokio::time::timeout(Duration::from_secs(secs), rx)
+                .await
+                .map_err(|_| DemoError::Tool(format!("hermes response timeout (>{secs}s)")))?
+                .map_err(|_| DemoError::Tool("hermes bridge response lost".to_string()))?,
+            None => rx
+                .await
+                .map_err(|_| DemoError::Tool("hermes bridge response lost".to_string()))?,
+        }
+    }
+
+    async fn poll_push(&mut self) -> Option<HermesMessage> {
+        None
+    }
+}
+
+enum TransportBackend {
+    WebSocket(Box<WsTransport>),
+    Channel(ChannelTransport),
+}
+
+impl TransportBackend {
+    fn from_config(
+        config: &AipcTalkConfig,
+        work_tx: Option<mpsc::Sender<HermesWorkItem>>,
+        msg_tx: mpsc::Sender<HermesMessage>,
+    ) -> Result<Self> {
+        match config.transport {
+            AipcTalkTransport::Ws => Ok(Self::WebSocket(Box::new(WsTransport {
+                config: config.clone(),
+                conn: None,
+                msg_tx,
+            }))),
+            AipcTalkTransport::Channel => {
+                let work_tx = work_tx.ok_or_else(|| {
+                    DemoError::Tool(
+                        "call_hermes channel transport requires embedded Hermes runtime"
+                            .to_string(),
+                    )
+                })?;
+                Ok(Self::Channel(ChannelTransport { work_tx }))
+            }
+        }
+    }
+
+    async fn submit(&mut self, req: &HermesRequest, timeout_secs: Option<u64>) -> Result<String> {
+        match self {
+            Self::WebSocket(t) => t.submit(req, timeout_secs).await,
+            Self::Channel(t) => t.submit(req, timeout_secs).await,
+        }
+    }
+
+    async fn poll_push(&mut self) -> Option<HermesMessage> {
+        match self {
+            Self::WebSocket(t) => t.poll_push().await,
+            Self::Channel(t) => t.poll_push().await,
+        }
+    }
+
+    async fn ensure_connected(&mut self) -> Result<()> {
+        match self {
+            Self::WebSocket(t) => {
+                if t.conn.is_none() {
+                    t.conn = Some(HermesConnection::connect(&t.config).await?);
+                    info!(url = %t.config.url, "hermes: connected");
+                }
+                Ok(())
+            }
+            Self::Channel(_) => Ok(()),
+        }
+    }
+
+    fn clear_connection(&mut self) {
+        if let Self::WebSocket(t) = self {
+            t.conn = None;
         }
     }
 }
@@ -286,99 +482,122 @@ pub struct HermesQueue {
 }
 
 impl HermesQueue {
-    pub fn new(config: AipcTalkConfig) -> (Self, mpsc::Receiver<HermesMessage>, JoinHandle<()>) {
+    pub fn new(
+        config: AipcTalkConfig,
+    ) -> (
+        Self,
+        mpsc::Receiver<HermesMessage>,
+        JoinHandle<()>,
+        TalkPushBridge,
+    ) {
+        Self::start(config, None, None, None)
+    }
+
+    pub fn new_channel(
+        config: AipcTalkConfig,
+        work_tx: mpsc::Sender<HermesWorkItem>,
+    ) -> (
+        Self,
+        mpsc::Receiver<HermesMessage>,
+        JoinHandle<()>,
+        TalkPushBridge,
+    ) {
+        Self::start(config, Some(work_tx), None, None)
+    }
+
+    pub fn new_channel_shared(
+        config: AipcTalkConfig,
+        work_tx: mpsc::Sender<HermesWorkItem>,
+        msg_tx: mpsc::Sender<HermesMessage>,
+        msg_rx: mpsc::Receiver<HermesMessage>,
+    ) -> (Self, mpsc::Receiver<HermesMessage>, JoinHandle<()>) {
+        let (queue, rx, handle, _) = Self::start(config, Some(work_tx), Some(msg_tx), Some(msg_rx));
+        (queue, rx, handle)
+    }
+
+    pub fn new_shared(
+        config: AipcTalkConfig,
+        msg_tx: mpsc::Sender<HermesMessage>,
+        msg_rx: mpsc::Receiver<HermesMessage>,
+        work_tx: Option<mpsc::Sender<HermesWorkItem>>,
+    ) -> (Self, mpsc::Receiver<HermesMessage>, JoinHandle<()>) {
+        let (queue, rx, handle, _) = Self::start(config, work_tx, Some(msg_tx), Some(msg_rx));
+        (queue, rx, handle)
+    }
+
+    fn start(
+        config: AipcTalkConfig,
+        work_tx: Option<mpsc::Sender<HermesWorkItem>>,
+        external_msg_tx: Option<mpsc::Sender<HermesMessage>>,
+        external_msg_rx: Option<mpsc::Receiver<HermesMessage>>,
+    ) -> (
+        Self,
+        mpsc::Receiver<HermesMessage>,
+        JoinHandle<()>,
+        TalkPushBridge,
+    ) {
         let (cmd_tx, cmd_rx) = mpsc::channel(128);
-        let (msg_tx, msg_rx) = mpsc::channel(128);
-        let handle = tokio::spawn(hermes_worker(config, cmd_rx, msg_tx));
+        let (msg_tx, msg_rx) = match (external_msg_tx, external_msg_rx) {
+            (Some(tx), Some(rx)) => (tx, rx),
+            _ => {
+                let (tx, rx) = mpsc::channel(128);
+                (tx, rx)
+            }
+        };
+        let push_bridge = TalkPushBridge::new(msg_tx.clone());
+        let handle = tokio::spawn(hermes_worker(config, work_tx, cmd_rx, msg_tx));
         (
             Self {
                 sender: HermesQueueSender { cmd_tx },
             },
             msg_rx,
             handle,
+            push_bridge,
         )
     }
 }
 
 async fn hermes_worker(
     config: AipcTalkConfig,
+    work_tx: Option<mpsc::Sender<HermesWorkItem>>,
     mut cmd_rx: mpsc::Receiver<QueueCommand>,
     msg_tx: mpsc::Sender<HermesMessage>,
 ) {
     let mut heap: BinaryHeap<HermesRequest> = BinaryHeap::new();
     let mut history: VecDeque<CompletedTask> = VecDeque::new();
 
-    let mut conn = match HermesConnection::connect(&config).await {
-        Ok(c) => {
-            info!(url = %config.url, "hermes: connected at startup");
-            Some(c)
-        }
+    let mut transport = match TransportBackend::from_config(&config, work_tx, msg_tx.clone()) {
+        Ok(t) => t,
         Err(e) => {
-            warn!(%e, url = %config.url, "hermes: initial connect failed, will retry on first request");
-            None
+            warn!(error = %e, "hermes_queue: transport init failed");
+            return;
         }
     };
 
+    if config.transport == AipcTalkTransport::Ws {
+        if let Err(e) = transport.ensure_connected().await {
+            warn!(%e, url = %config.url, "hermes: initial connect failed, will retry on first request");
+        }
+    }
+
     loop {
         let cmd = if heap.is_empty() {
-            // When queue is empty, also poll the WebSocket for unsolicited
-            // messages (cron deliveries) while waiting for commands.
-            if let Some(ref mut c) = conn {
-                tokio::select! {
-                    cmd = cmd_rx.recv() => {
-                        match cmd {
-                            Some(cmd) => cmd,
-                            None => break,
-                        }
-                    }
-                    msg = c.ws.next() => {
-                        match msg {
-                            Some(Ok(WsMessage::Text(t))) => {
-                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
-                                    let id = v["request_id"].as_str().unwrap_or("").to_string();
-                                    let txt = v["text"].as_str().unwrap_or("").to_string();
-                                    let st = v["status"].as_str().unwrap_or("ok").to_string();
-                                    info!(%id, %txt, "hermes: unsolicited message received");
-                                    let _ = msg_tx.try_send(HermesMessage {
-                                        request_id: id,
-                                        text: txt,
-                                        status: st,
-                                    });
-                                }
-                            }
-                            Some(Ok(WsMessage::Close(_))) | None => {
-                                conn = None;
-                            }
-                            Some(Err(e)) => {
-                                warn!(%e, "hermes: WS error in idle read");
-                                conn = None;
-                            }
-                            _ => {}
-                        }
-                        continue;
+            tokio::select! {
+                cmd = cmd_rx.recv() => {
+                    match cmd {
+                        Some(cmd) => cmd,
+                        None => break,
                     }
                 }
-            } else {
-                // No connection — retry periodically while waiting for commands
-                tokio::select! {
-                    cmd = cmd_rx.recv() => {
-                        match cmd {
-                            Some(cmd) => cmd,
-                            None => break,
-                        }
+                push = transport.poll_push() => {
+                    if let Some(msg) = push {
+                        let _ = msg_tx.try_send(msg);
                     }
-                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                        match HermesConnection::connect(&config).await {
-                            Ok(c) => {
-                                info!(url = %config.url, "hermes: reconnected after retry");
-                                conn = Some(c);
-                            }
-                            Err(e) => {
-                                warn!(%e, "hermes: reconnect failed, will retry in 5s");
-                            }
-                        }
-                        continue;
-                    }
+                    continue;
+                }
+                _ = tokio::time::sleep(Duration::from_secs(5)), if config.transport == AipcTalkTransport::Ws => {
+                    let _ = transport.ensure_connected().await;
+                    continue;
                 }
             }
         } else {
@@ -447,17 +666,9 @@ async fn hermes_worker(
             continue;
         }
 
-        if conn.is_none() {
-            match HermesConnection::connect(&config).await {
-                Ok(c) => {
-                    info!(url = %config.url, "hermes: reconnected");
-                    conn = Some(c);
-                }
-                Err(e) => {
-                    warn!(%e, "hermes: reconnect failed, requeuing");
-                    continue;
-                }
-            }
+        if let Err(e) = transport.ensure_connected().await {
+            warn!(%e, "hermes: reconnect failed, requeuing");
+            continue;
         }
 
         let req = heap.pop().unwrap();
@@ -468,40 +679,17 @@ async fn hermes_worker(
             "hermes_queue: processing"
         );
 
-        let mut c = Some(conn.take().unwrap());
-        let result;
-        loop {
-            let cur = c.as_mut().unwrap();
-            match cur
-                .request(&req.id, &req.text, config.timeout_secs, &msg_tx)
-                .await
-            {
-                Ok(text) => {
-                    result = Ok(text);
-                    break;
-                }
-                Err(e) => {
-                    warn!(id = %req.id, error = %e, "hermes_queue: request failed, reconnecting and retrying");
-                    c = None; // drop old broken connection
-                    match HermesConnection::connect(&config).await {
-                        Ok(new_conn) => {
-                            info!(url = %config.url, "hermes: reconnected for retry");
-                            c = Some(new_conn);
-                        }
-                        Err(reconnect_err) => {
-                            warn!(%reconnect_err, "hermes: reconnect for retry failed");
-                            result = Err(e);
-                            break;
-                        }
-                    }
-                }
+        let mut result = transport.submit(&req, config.timeout_secs).await;
+        if result.is_err() && config.transport == AipcTalkTransport::Ws {
+            transport.clear_connection();
+            if transport.ensure_connected().await.is_ok() {
+                result = transport.submit(&req, config.timeout_secs).await;
             }
         }
 
         match result {
             Ok(text) => {
                 info!(id = %req.id, len = text.len(), "hermes_queue: got reply");
-                conn = c;
                 let summary = text.chars().take(200).collect::<String>();
                 let summary = if text.chars().count() > 200 {
                     format!("{summary}...")
@@ -513,7 +701,7 @@ async fn hermes_worker(
                 }
                 history.push_back(CompletedTask {
                     request_id: req.id.clone(),
-                    status: "ok".to_string(),
+                    status: "final".to_string(),
                     text: summary,
                     completed_at_secs: req.created_at.elapsed().as_secs(),
                 });
@@ -521,12 +709,12 @@ async fn hermes_worker(
                     .send(HermesMessage {
                         request_id: req.id,
                         text,
-                        status: "ok".to_string(),
+                        status: "final".to_string(),
                     })
                     .await;
             }
             Err(e) => {
-                warn!(id = %req.id, error = %e, "hermes_queue: request failed after retries, giving up");
+                warn!(id = %req.id, error = %e, "hermes_queue: request failed, giving up");
                 if history.len() >= MAX_HISTORY_SIZE {
                     history.pop_front();
                 }

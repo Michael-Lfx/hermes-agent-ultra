@@ -1128,8 +1128,8 @@ pub fn parse_ensure_dep(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 /// Fully-specified subcommands for shell completion (built on demand, not at startup).
 pub fn all_subcommand_commands() -> Vec<clap::Command> {
     macro_rules! commands {
-        ($($parser:ty),* $(,)?) => {
-            vec![$(<$parser as CommandFactory>::command()),*]
+        ($($(#[$attr:meta])* $parser:ty),* $(,)?) => {
+            vec![$($(#[$attr])* <$parser as CommandFactory>::command()),*]
         };
     }
 

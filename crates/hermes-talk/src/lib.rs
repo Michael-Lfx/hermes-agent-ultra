@@ -20,6 +20,7 @@
 pub mod aec;
 pub mod asr;
 pub mod audio;
+pub mod backends;
 pub mod config;
 pub mod dashscope;
 pub mod denoise;
@@ -39,5 +40,6 @@ pub mod vad;
 pub use config::Config;
 pub use enroll::run_enroll;
 pub use error::{DemoError, Result};
-pub use init::init_talk_home;
+pub use init::{ensure_talk_home, init_talk_home};
 pub use session::Session;
+pub use tools::hermes_queue::{HermesMessage, HermesWorkItem, TalkPushBridge};

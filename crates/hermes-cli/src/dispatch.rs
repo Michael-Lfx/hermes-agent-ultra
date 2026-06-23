@@ -56,6 +56,7 @@ pub(crate) async fn run(cli: Cli) {
             CliCommand::Hermes | CliCommand::Resume { .. }
         ),
         matches!(effective_command, CliCommand::Gateway { .. }),
+        matches!(effective_command, CliCommand::Talk { .. }),
     );
     if let Err(err) = hydrate_provider_env_from_vault_for_cli(&cli).await {
         tracing::warn!("Secret-vault hydration skipped: {}", err);

@@ -1,6 +1,9 @@
 # ============================================================
 # hermes-talk 配置示例（`hermes talk init` 会复制到 $HERMES_HOME/hermes-talk/）
-# 本地 TTS + ASR 基于 Rockchip NPU（RK3588）；云后端使用阿里云百炼
+# 支持三种 ASR/TTS 后端（任意平台可切换）：
+#   bailian / cloud / dashscope — 阿里云百炼云端
+#   sherpa — 本地 SenseVoice + Kokoro（Windows/Linux x86）
+#   local / rockchip — RK3588 板端 NPU（需 talk-rockchip 构建）
 # ============================================================
 
 # ============================================================
@@ -8,7 +11,7 @@
 # ============================================================
 [asr]
 
-# ASR 后端: "local"（本地 NPU）或 "bailian"（阿里云）
+# 云端: backend = "bailian"  本地 NPU: backend = "local"  桌面 sherpa: backend = "sherpa"
 backend = "local"
 
 [asr.local]
@@ -18,21 +21,21 @@ data_path = "data"
 
 # 认证配置
 # trial=1 为试用模式；填入 license_path 则为正式授权
-# 格式: { "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "/path/to/lic" }] }
-auth_config = '{ "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "/home/key.lic" }] }'
+# 格式: { "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "auth/key_asr.lic" }] }
+auth_config = '{ "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "auth/key_asr.lic" }] }'
 
 # ============================================================
 # 语音合成 (TTS)
 # ============================================================
 [tts]
 
-# TTS 后端: "local"（本地 NPU）或 "bailian"（阿里云）
+# TTS 后端: 与 ASR 相同，可独立设置 backend = "bailian" 使用云端 CosyVoice
 backend = "local"
 
 [tts.local]
 
 # 认证配置，格式与 ASR 不同，参考 Rockchip SDK 文档
-auth_config = '{ "trial": 1, "license_path": "key.lic" }'
+auth_config = '{ "trial": 1, "license_path": "auth/key_tts.lic" }'
 
 # TTS 模型目录，包含 am_part1.data / am_part2.data / voc.data
 model_path = "models/rk3588"
@@ -52,7 +55,7 @@ dicts_path = "frontend_extras"
 [llm]
 
 # OpenAI 兼容 API 地址
-base_url = "http://127.0.0.1:8080/v1"
+base_url = "http://127.0.0.1:11080/v1"
 
 # API Key
 api_key = "sk-your-key"
@@ -70,7 +73,10 @@ max_tokens = 80
 # tools_enabled = true
 
 # [llm.aipc_talk]
-# call_hermes 工具连接的 Gateway WebSocket（需 gateway 启用 aipc_talk，尚未内置）
+# call_hermes 与完整 Hermes agent 通信（默认进程内 channel）
+# transport = "channel"
+# session_key = "talk-hermes"
+# transport = "ws" 时使用远程 bridge
 # url = "ws://127.0.0.1:9100"
 
 # 启用深度思考（思维链）
@@ -96,16 +102,18 @@ phrases = ["小白小白"]
 # 一轮对话结束后静默多少秒回到休眠
 # idle_after_turn_sec = 30
 
+# 休眠关键词：ASR 去标点/空白后完整匹配则跳过 LLM 进入休眠（可自定义列表）
+sleep_phrases = ["休眠", "安静", "mute", "闭嘴", "别说了", "停止", "silence", "shut up"]
+
 # ============================================================
 # 以下配置项均有代码中的合理默认值，可按需取消注释
 # ============================================================
 
 # [dashscope]
-#
-# 阿里云 DashScope API key（仅云后端需要）
-# api_key = "sk-your-key"
-# WebSocket 地址
+# 云端 ASR/TTS 必填（backend = bailian/cloud/dashscope 时）
+# api_key = "sk-your-dashscope-key"
 # ws_url = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+# 也可设置环境变量 DASHSCOPE_API_KEY
 
 # [orchestrator]
 #

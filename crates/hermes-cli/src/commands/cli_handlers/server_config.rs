@@ -24,9 +24,7 @@ pub fn normalize_server_config_key(key: &str) -> Result<String, AgentError> {
     let normalized = key.trim().to_ascii_lowercase().replace('-', "_");
     let full = match normalized.as_str() {
         "base_url" | "url" | "baseurl" => "server.base_url".to_string(),
-        "wechat_base_url" | "wechat_url" | "wechat_baseurl" => {
-            "server.wechat_base_url".to_string()
-        }
+        "wechat_base_url" | "wechat_url" | "wechat_baseurl" => "server.wechat_base_url".to_string(),
         "channel" => "server.channel".to_string(),
         "app" => "server.app".to_string(),
         "invite_code" | "invite" => "server.invite_code".to_string(),
@@ -34,9 +32,7 @@ pub fn normalize_server_config_key(key: &str) -> Result<String, AgentError> {
         "preferred_method" | "login_method" | "login_default" => {
             "server.auth.preferred_method".to_string()
         }
-        "llm_model" | "default_model" | "server_model" => {
-            "server.llm.default_model".to_string()
-        }
+        "llm_model" | "default_model" | "server_model" => "server.llm.default_model".to_string(),
         "wechat_app_id" | "wx_app_id" => "server.auth.wechat_app_id".to_string(),
         "poll_interval_ms" | "poll_interval" => "server.auth.poll_interval_ms".to_string(),
         "otp_ttl_seconds" | "otp_ttl" => "server.auth.otp_ttl_seconds".to_string(),
@@ -59,7 +55,8 @@ pub fn save_server_field(
     value: &str,
 ) -> Result<PathBuf, AgentError> {
     let cfg_path = config_yaml_path(config_dir);
-    let mut disk = load_user_config_file(&cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
+    let mut disk =
+        load_user_config_file(&cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
     let full_key = normalize_server_config_key(key)?;
     apply_user_config_patch(&mut disk, &full_key, value)
         .map_err(|e| AgentError::Config(e.to_string()))?;
@@ -72,10 +69,7 @@ pub fn print_server_config(config: &ServerConfig, cfg_path: &Path) {
     println!("Remote server configuration");
     println!("  config file: {}", cfg_path.display());
     println!("  enabled: {}", config.enabled);
-    println!(
-        "  base_url: {}",
-        display_opt_str(config.base_url.trim())
-    );
+    println!("  base_url: {}", display_opt_str(config.base_url.trim()));
     println!(
         "  wechat_base_url: {}",
         if config.wechat_base_url.trim().is_empty() {
@@ -133,7 +127,9 @@ pub fn print_config_help() {
     println!();
     println!("Keys (short names for `set` / `get`):");
     println!("  base_url          Flowy API root (required for login)");
-    println!("  wechat_base_url   WeChat OAuth API root (default: domestic server.flowyaipc.cn/claw)");
+    println!(
+        "  wechat_base_url   WeChat OAuth API root (default: domestic server.flowyaipc.cn/claw)"
+    );
     println!("  channel           Brand channel (default: flowy)");
     println!("  app               Client app id (default: flowymes)");
     println!("  wechat_app_id     WeChat Open Platform app id (default: by channel)");
@@ -191,8 +187,8 @@ pub async fn handle_server_config(
                 AgentError::Config("usage: hermes server config get <key>".into())
             })?;
             let full_key = normalize_server_config_key(key)?;
-            let disk = load_user_config_file(&cfg_path)
-                .map_err(|e| AgentError::Config(e.to_string()))?;
+            let disk =
+                load_user_config_file(&cfg_path).map_err(|e| AgentError::Config(e.to_string()))?;
             match user_config_field_display(&disk, &full_key) {
                 Ok(value) => println!("{value}"),
                 Err(e) => return Err(AgentError::Config(e.to_string())),
@@ -209,11 +205,7 @@ async fn run_config_init(config_dir: Option<&str>) -> Result<(), AgentError> {
     println!("Remote server setup wizard");
     println!("Press Enter to accept [default] values.\n");
 
-    let base_url = prompt_with_default(
-        "Flowy API base URL",
-        DEFAULT_BASE_URL,
-    )
-    .await?;
+    let base_url = prompt_with_default("Flowy API base URL", DEFAULT_BASE_URL).await?;
     if base_url.trim().is_empty() {
         return Err(AgentError::Config("base_url is required".into()));
     }
@@ -228,28 +220,22 @@ async fn run_config_init(config_dir: Option<&str>) -> Result<(), AgentError> {
         &wechat_default,
     )
     .await?;
-    let wechat_base_url = if wechat_raw.trim().is_empty()
-        || wechat_raw.trim() == DEFAULT_WECHAT_FLOWY_SERVER_BASE
-    {
-        String::new()
-    } else {
-        wechat_raw.trim().trim_end_matches('/').to_string()
-    };
+    let wechat_base_url =
+        if wechat_raw.trim().is_empty() || wechat_raw.trim() == DEFAULT_WECHAT_FLOWY_SERVER_BASE {
+            String::new()
+        } else {
+            wechat_raw.trim().trim_end_matches('/').to_string()
+        };
 
     let invite_code = prompt_optional("Invite code (optional, Enter to skip)").await?;
 
-    let enable_llm = prompt_with_default(
-        "Enable remote LLM routing now? (true/false)",
-        "false",
-    )
-    .await?;
+    let enable_llm =
+        prompt_with_default("Enable remote LLM routing now? (true/false)", "false").await?;
 
     let llm_model = if enable_llm.trim().eq_ignore_ascii_case("true") {
-        prompt_optional(
-            "Default remote LLM model id (Enter = AIPC-glm-4.7)",
-        )
-        .await?
-        .unwrap_or_default()
+        prompt_optional("Default remote LLM model id (Enter = AIPC-glm-4.7)")
+            .await?
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -272,7 +258,9 @@ async fn run_config_init(config_dir: Option<&str>) -> Result<(), AgentError> {
 
     println!();
     println!("Server configuration saved → {}", cfg_path.display());
-    println!("Next: run `hermes server doctor`, then `hermes server login` (choose WeChat or email).");
+    println!(
+        "Next: run `hermes server doctor`, then `hermes server login` (choose WeChat or email)."
+    );
     Ok(())
 }
 
