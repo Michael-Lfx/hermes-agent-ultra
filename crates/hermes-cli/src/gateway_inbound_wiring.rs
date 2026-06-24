@@ -69,6 +69,12 @@ pub async fn wire_gateway_inbound_vision(
         Some(voice_tools),
     );
 
+    crate::media_wiring::wire_flowy_media_backends(
+        tool_registry,
+        config,
+        &hermes_config::hermes_home(),
+    );
+
     let preparer = Arc::new(AgentInboundPreparer::new(auxiliary));
     gateway.set_inbound_preparer(preparer).await;
 

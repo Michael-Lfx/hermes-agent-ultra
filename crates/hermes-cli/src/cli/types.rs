@@ -239,6 +239,10 @@ pub enum CliCommand {
         rest: Vec<String>,
         method: Option<String>,
     },
+    Media {
+        action: Option<String>,
+        rest: Vec<String>,
+    },
     Mcp {
         action: Option<String>,
         name: Option<String>,

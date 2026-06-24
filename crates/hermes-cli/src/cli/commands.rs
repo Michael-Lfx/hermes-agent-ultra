@@ -845,6 +845,24 @@ pub fn parse_server(args: &[OsString]) -> Result<CliCommand, clap::Error> {
 }
 
 #[derive(Parser, Debug, Clone)]
+#[command(
+    name = "media",
+    about = "Image/video generation setup (models, workflows, config)"
+)]
+struct MediaArgs {
+    action: Option<String>,
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    rest: Vec<String>,
+}
+
+pub fn parse_media(args: &[OsString]) -> Result<CliCommand, clap::Error> {
+    parse_subcommand::<MediaArgs, _>(args, |a| CliCommand::Media {
+        action: a.action,
+        rest: a.rest,
+    })
+}
+
+#[derive(Parser, Debug, Clone)]
 #[command(name = "mcp", about = "mcp command")]
 struct McpArgs {
     action: Option<String>,
@@ -1144,6 +1162,7 @@ pub fn all_subcommand_commands() -> Vec<clap::Command> {
         InterestArgs,
         ContributeArgs,
         ServerArgs,
+        MediaArgs,
         McpArgs,
         MeetingArgs,
         SessionsArgs,

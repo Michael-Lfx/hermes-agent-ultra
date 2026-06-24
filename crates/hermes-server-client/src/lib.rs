@@ -22,7 +22,9 @@ pub use auth::{
 pub use doctor::{DoctorReport, run_doctor};
 pub use error::ServerClientError;
 pub use flowy::{
-    ClawModelEntry, CreditsBalance, CreditsCheckinResponse, FlowyApiClient, UserMe,
+    ClawModelEntry, CreateVideoTaskResponse, CreditsBalance, CreditsCheckinResponse,
+    FlowyApiClient, ImageGenerationRequest, MODEL_CATEGORY_IMAGE, MODEL_CATEGORY_VIDEO, UserMe,
+    VideoTaskRecord,
 };
 pub use llm::ServerLlmProvider;
 pub use profile::ProfileStore;

@@ -102,7 +102,7 @@ pub use tools::homeassistant::{
     HaCallServiceHandler, HaGetStateHandler, HaListEntitiesHandler, HaListServicesHandler,
     HomeAssistantBackend,
 };
-pub use tools::image_gen::{ImageGenBackend, ImageGenerateHandler};
+pub use tools::image_gen::{ImageGenBackend, ImageGenRequest, ImageGenerateHandler};
 pub use tools::managed_tool_gateway::ManagedToolGatewayHandler;
 pub use tools::memory::{MemoryBackend, MemoryHandler};
 pub use tools::messaging::{MessagingBackend, SendMessageHandler};

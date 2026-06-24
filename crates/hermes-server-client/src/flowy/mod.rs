@@ -1,8 +1,16 @@
 //! Flowy `/claw` REST API client.
 
+mod media;
+mod media_types;
 mod response;
 mod types;
 
+pub use media::{video_task_failure_message, video_task_status_label};
+pub use media_types::{
+    CreateVideoTaskResponse, ImageGenerationRequest, MODEL_CATEGORY_IMAGE, MODEL_CATEGORY_VIDEO,
+    VIDEO_TASK_STATUS_CANCELLED, VIDEO_TASK_STATUS_EXPIRED, VIDEO_TASK_STATUS_FAILED,
+    VIDEO_TASK_STATUS_SUCCEEDED, VideoTaskRecord,
+};
 pub use response::{FlowyEnvelope, handle_http_and_envelope};
 pub use types::*;
 
@@ -254,13 +262,8 @@ impl FlowyApiClient {
         let body = ChatSessionReportRequest {
             session_id: session_id.trim().to_string(),
         };
-        self.post_data_on(
-            &self.llm_transport,
-            "/chat/session",
-            Some(session),
-            &body,
-        )
-        .await
+        self.post_data_on(&self.llm_transport, "/chat/session", Some(session), &body)
+            .await
     }
 
     pub fn llm_transport(&self) -> &HttpTransport {
