@@ -13,6 +13,7 @@ pub mod insights;
 pub mod interest;
 pub mod loader;
 pub mod managed_gateway;
+pub mod media;
 pub mod merge;
 pub mod migrate;
 pub mod paths;
@@ -56,7 +57,10 @@ pub use managed_gateway::{
     read_nous_access_token, resolve_managed_tool_gateway, resolve_modal_backend_state,
     resolve_openai_audio_api_key,
 };
-pub use merge::{deep_merge, merge_configs};
+pub use media::{
+    ImageGenSettings, MediaGenConfig, MediaWorkflowSettings, MediaWorkflowTemplateMap,
+    VideoGenSettings, flowy_media_exposed, flowy_media_exposed_from_disk,
+};
 pub use migrate::{ensure_migrated_hermes_home, legacy_hermes_home_candidates, project_hermes_dir};
 pub use paths::{
     INTERMEDIATE_HOME_DIR, LEGACY_HOME_DIR, LEGACY_PROJECT_HOME_DIR,

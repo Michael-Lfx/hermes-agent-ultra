@@ -2693,6 +2693,7 @@ dependencies = [
  "hermes-insights",
  "hermes-intelligence",
  "hermes-mcp",
+ "hermes-media-workflows",
  "hermes-server-client",
  "hermes-skills",
  "hermes-telemetry",
@@ -3015,6 +3016,30 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "hermes-media-workflows"
+version = "0.17.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hermes-config",
+ "hermes-core",
+ "hermes-server-client",
+ "hermes-tools",
+ "indexmap",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+ "wiremock",
 ]
 
 [[package]]

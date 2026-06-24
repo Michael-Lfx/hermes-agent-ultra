@@ -200,9 +200,9 @@ pub(crate) use cli_handlers::{
 pub use cli_handlers::{
     handle_cli_acp, handle_cli_backup, handle_cli_chat, handle_cli_claw, handle_cli_contribute,
     handle_cli_external_plugin_subcommand, handle_cli_import, handle_cli_insights,
-    handle_cli_interest, handle_cli_login, handle_cli_logout, handle_cli_mcp, handle_cli_meeting,
-    handle_cli_memory, handle_cli_pairing, handle_cli_plugins, handle_cli_server,
-    handle_cli_sessions, handle_cli_version, handle_cli_whatsapp,
+    handle_cli_interest, handle_cli_login, handle_cli_logout, handle_cli_mcp, handle_cli_media,
+    handle_cli_meeting, handle_cli_memory, handle_cli_pairing, handle_cli_plugins,
+    handle_cli_server, handle_cli_sessions, handle_cli_version, handle_cli_whatsapp,
 };
 
 #[cfg(test)]

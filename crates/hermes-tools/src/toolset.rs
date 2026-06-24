@@ -42,6 +42,22 @@ pub const TOOLSET_VISION: &[&str] = &["vision_analyze", "video_analyze"];
 pub const TOOLSET_IMAGE_GEN: &[&str] = &["image_generate"];
 /// Video generation tools.
 pub const TOOLSET_VIDEO_GEN: &[&str] = &["video_generate"];
+/// Media workflow tools (plan / execute / status).
+pub const TOOLSET_MEDIA_WORKFLOW: &[&str] = &[
+    "media_workflow_plan",
+    "media_workflow_run",
+    "media_workflow_status",
+];
+/// Creative bundle: generation + vision + workflows.
+pub const TOOLSET_CREATIVE: &[&str] = &[
+    "image_generate",
+    "video_generate",
+    "vision_analyze",
+    "video_analyze",
+    "media_workflow_plan",
+    "media_workflow_run",
+    "media_workflow_status",
+];
 /// Spotify Web API tools.
 pub const TOOLSET_SPOTIFY: &[&str] = &[
     "spotify_playback",
@@ -254,6 +270,17 @@ impl ToolsetManager {
         self.register(Toolset::new(
             "video_gen",
             TOOLSET_VIDEO_GEN.iter().map(|s| s.to_string()).collect(),
+        ));
+        self.register(Toolset::new(
+            "media_workflow",
+            TOOLSET_MEDIA_WORKFLOW
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        ));
+        self.register(Toolset::new(
+            "creative",
+            TOOLSET_CREATIVE.iter().map(|s| s.to_string()).collect(),
         ));
         self.register(Toolset::new(
             "spotify",

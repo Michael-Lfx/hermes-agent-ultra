@@ -12,17 +12,23 @@ use std::sync::Arc;
 // ImageGenBackend trait
 // ---------------------------------------------------------------------------
 
+/// Parameters for image generation (text-to-image or image-to-image).
+#[derive(Debug, Clone, Default)]
+pub struct ImageGenRequest {
+    pub prompt: String,
+    pub model: Option<String>,
+    pub image_url: Option<String>,
+    pub size: Option<String>,
+    pub style: Option<String>,
+    pub n: Option<u32>,
+    pub extra: Option<Value>,
+}
+
 /// Backend for image generation operations.
 #[async_trait]
 pub trait ImageGenBackend: Send + Sync {
-    /// Generate an image from a prompt.
-    async fn generate(
-        &self,
-        prompt: &str,
-        size: Option<&str>,
-        style: Option<&str>,
-        n: Option<u32>,
-    ) -> Result<String, ToolError>;
+    /// Generate an image from a prompt (and optional reference image).
+    async fn generate(&self, request: ImageGenRequest) -> Result<String, ToolError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,11 +54,34 @@ impl ToolHandler for ImageGenerateHandler {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("Missing 'prompt' parameter".into()))?;
 
-        let size = params.get("size").and_then(|v| v.as_str());
-        let style = params.get("style").and_then(|v| v.as_str());
-        let n = params.get("n").and_then(|v| v.as_u64()).map(|n| n as u32);
+        let request = ImageGenRequest {
+            prompt: prompt.to_string(),
+            model: params
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            image_url: params
+                .get("image_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            size: params
+                .get("size")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            style: params
+                .get("style")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            n: params.get("n").and_then(|v| v.as_u64()).map(|n| n as u32),
+            extra: params.get("extra").cloned().or_else(|| {
+                params
+                    .get("parameters")
+                    .cloned()
+                    .or_else(|| params.get("input").cloned())
+            }),
+        };
 
-        self.backend.generate(prompt, size, style, n).await
+        self.backend.generate(request).await
     }
 
     fn schema(&self) -> ToolSchema {
@@ -62,6 +91,20 @@ impl ToolHandler for ImageGenerateHandler {
             json!({
                 "type": "string",
                 "description": "Text description of the image to generate"
+            }),
+        );
+        props.insert(
+            "model".into(),
+            json!({
+                "type": "string",
+                "description": "Model id (Flowy: AIPC-... or flowy/...; FAL: fal-ai/...)"
+            }),
+        );
+        props.insert(
+            "image_url".into(),
+            json!({
+                "type": "string",
+                "description": "Optional reference image URL for image-to-image / edit"
             }),
         );
         props.insert("size".into(), json!({
@@ -100,14 +143,8 @@ mod tests {
     struct MockImageGenBackend;
     #[async_trait]
     impl ImageGenBackend for MockImageGenBackend {
-        async fn generate(
-            &self,
-            prompt: &str,
-            _size: Option<&str>,
-            _style: Option<&str>,
-            _n: Option<u32>,
-        ) -> Result<String, ToolError> {
-            Ok(format!("Generated image for: {}", prompt))
+        async fn generate(&self, request: ImageGenRequest) -> Result<String, ToolError> {
+            Ok(format!("Generated image for: {}", request.prompt))
         }
     }
 
@@ -121,9 +158,9 @@ mod tests {
     async fn test_image_generate_execute() {
         let handler = ImageGenerateHandler::new(Arc::new(MockImageGenBackend));
         let result = handler
-            .execute(json!({"prompt": "a sunset"}))
+            .execute(json!({"prompt": "a red apple"}))
             .await
             .unwrap();
-        assert!(result.contains("sunset"));
+        assert!(result.contains("red apple"));
     }
 }

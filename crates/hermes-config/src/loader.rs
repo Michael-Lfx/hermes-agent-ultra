@@ -568,7 +568,7 @@ fn normalize_provider_secrets(config: &mut GatewayConfig) {
     });
 }
 
-const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider, server.enabled|base_url|wechat_base_url|channel|app|invite_code|auth.preferred_method|auth.poll_interval_ms|auth.otp_ttl_seconds|auth.heartbeat_interval_secs";
+const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider, server.enabled|base_url|wechat_base_url|channel|app|invite_code|auth.preferred_method|auth.poll_interval_ms|auth.otp_ttl_seconds|auth.heartbeat_interval_secs, media.provider, media.image.model|save_locally, media.video.model|default_duration|default_aspect_ratio|default_resolution|poll_timeout_seconds|save_locally, media.workflows.enabled|max_retries|default_templates.txt2img|txt2video|img2video|storyboard";
 
 fn parse_bool_config_value(value: &str, field: &str) -> Result<bool, ConfigError> {
     let normalized = value.trim().to_ascii_lowercase();
@@ -589,6 +589,14 @@ fn mask_secret(s: &str) -> String {
         "***".to_string()
     } else {
         format!("***{}", &s[s.len() - 4..])
+    }
+}
+
+fn display_optional_template(value: &str) -> String {
+    if value.trim().is_empty() {
+        "(not set)".to_string()
+    } else {
+        value.to_string()
     }
 }
 
@@ -1120,6 +1128,74 @@ fn apply_user_config_patch_dotted(
         ["server", "llm", "default_model"] => {
             config.server.llm.default_model = value.trim().to_string();
         }
+        ["media", "provider"] => {
+            config.media.provider = value.trim().to_string();
+        }
+        ["media", "image", "model"] => {
+            config.media.image.model = value.trim().to_string();
+        }
+        ["media", "image", "save_locally"] => {
+            config.media.image.save_locally =
+                parse_bool_config_value(value, "media.image.save_locally")?;
+        }
+        ["media", "video", "model"] => {
+            config.media.video.model = value.trim().to_string();
+        }
+        ["media", "video", "default_duration"] => {
+            config.media.video.default_duration = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.video.default_duration must be a non-negative integer: {value}"
+                ))
+            })?;
+        }
+        ["media", "video", "default_aspect_ratio"] => {
+            config.media.video.default_aspect_ratio = value.trim().to_string();
+        }
+        ["media", "video", "default_resolution"] => {
+            config.media.video.default_resolution = value.trim().to_string();
+        }
+        ["media", "video", "poll_timeout_seconds"] => {
+            config.media.video.poll_timeout_seconds = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.video.poll_timeout_seconds must be a positive integer: {value}"
+                ))
+            })?;
+        }
+        ["media", "video", "save_locally"] => {
+            config.media.video.save_locally =
+                parse_bool_config_value(value, "media.video.save_locally")?;
+        }
+        ["media", "workflows", "enabled"] => {
+            config.media.workflows.enabled =
+                parse_bool_config_value(value, "media.workflows.enabled")?;
+        }
+        ["media", "workflows", "max_retries"] => {
+            config.media.workflows.max_retries = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.workflows.max_retries must be a non-negative integer: {value}"
+                ))
+            })?;
+        }
+        ["media", "workflows", "default_templates", tpl] => match *tpl {
+            "txt2img" => {
+                config.media.workflows.default_templates.txt2img = value.trim().to_string()
+            }
+            "txt2video" => {
+                config.media.workflows.default_templates.txt2video = value.trim().to_string();
+            }
+            "img2video" => {
+                config.media.workflows.default_templates.img2video = value.trim().to_string();
+            }
+            "storyboard" => {
+                config.media.workflows.default_templates.storyboard = value.trim().to_string();
+            }
+            other => {
+                return Err(ConfigError::NotFound(format!(
+                    "unknown media workflow template: media.workflows.default_templates.{other} \
+                     (supported: txt2img, txt2video, img2video, storyboard)"
+                )));
+            }
+        },
         _ => {
             return Err(ConfigError::NotFound(format!(
                 "unknown config key: {} (supported: {})",
@@ -1487,6 +1563,48 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
                 format!("(not set, using built-in default: {effective})")
             } else {
                 effective
+            })
+        }
+        ["media", "provider"] => Ok(config.media.provider.clone()),
+        ["media", "image", "model"] => Ok(if config.media.image.model.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.media.image.model.clone()
+        }),
+        ["media", "image", "save_locally"] => Ok(config.media.image.save_locally.to_string()),
+        ["media", "video", "model"] => Ok(if config.media.video.model.trim().is_empty() {
+            "(not set)".to_string()
+        } else {
+            config.media.video.model.clone()
+        }),
+        ["media", "video", "default_duration"] => {
+            Ok(config.media.video.default_duration.to_string())
+        }
+        ["media", "video", "default_aspect_ratio"] => {
+            Ok(config.media.video.default_aspect_ratio.clone())
+        }
+        ["media", "video", "default_resolution"] => {
+            Ok(config.media.video.default_resolution.clone())
+        }
+        ["media", "video", "poll_timeout_seconds"] => {
+            Ok(config.media.video.poll_timeout_seconds.to_string())
+        }
+        ["media", "video", "save_locally"] => Ok(config.media.video.save_locally.to_string()),
+        ["media", "workflows", "enabled"] => Ok(config.media.workflows.enabled.to_string()),
+        ["media", "workflows", "max_retries"] => Ok(config.media.workflows.max_retries.to_string()),
+        ["media", "workflows", "default_templates", tpl] => {
+            let tpls = &config.media.workflows.default_templates;
+            Ok(match *tpl {
+                "txt2img" => display_optional_template(&tpls.txt2img),
+                "txt2video" => display_optional_template(&tpls.txt2video),
+                "img2video" => display_optional_template(&tpls.img2video),
+                "storyboard" => display_optional_template(&tpls.storyboard),
+                other => {
+                    return Err(ConfigError::NotFound(format!(
+                        "unknown media workflow template: media.workflows.default_templates.{other} \
+                         (supported: txt2img, txt2video, img2video, storyboard)"
+                    )));
+                }
             })
         }
         _ => Err(ConfigError::NotFound(format!(
@@ -3262,10 +3380,7 @@ custom_providers:
         apply_user_config_patch(&mut c, "server.channel", "flowy").unwrap();
         apply_user_config_patch(&mut c, "server.app", "flowymes").unwrap();
         apply_user_config_patch(&mut c, "server.auth.preferred_method", "email").unwrap();
-        assert_eq!(
-            c.server.base_url,
-            "https://server.flowyaipc.cn/claw"
-        );
+        assert_eq!(c.server.base_url, "https://server.flowyaipc.cn/claw");
         assert_eq!(c.server.channel, "flowy");
         assert_eq!(c.server.app, "flowymes");
         assert_eq!(
@@ -3274,6 +3389,35 @@ custom_providers:
         );
         let display = user_config_field_display(&c, "server.base_url").unwrap();
         assert_eq!(display, "https://server.flowyaipc.cn/claw");
+    }
+
+    #[test]
+    fn apply_patch_media_fields() {
+        let mut c = GatewayConfig::default();
+        apply_user_config_patch(&mut c, "media.provider", "flowy").unwrap();
+        apply_user_config_patch(&mut c, "media.image.model", "AIPC-z-image-turbo").unwrap();
+        apply_user_config_patch(&mut c, "media.video.default_duration", "8").unwrap();
+        apply_user_config_patch(
+            &mut c,
+            "media.workflows.default_templates.txt2img",
+            "simple_txt2img",
+        )
+        .unwrap();
+        assert_eq!(c.media.provider, "flowy");
+        assert_eq!(c.media.image.model, "AIPC-z-image-turbo");
+        assert_eq!(c.media.video.default_duration, 8);
+        assert_eq!(
+            c.media.workflows.default_templates.txt2img,
+            "simple_txt2img"
+        );
+        assert_eq!(
+            user_config_field_display(&c, "media.image.model").unwrap(),
+            "AIPC-z-image-turbo"
+        );
+        assert_eq!(
+            user_config_field_display(&c, "media.video.model").unwrap(),
+            "(not set)"
+        );
     }
 
     #[test]

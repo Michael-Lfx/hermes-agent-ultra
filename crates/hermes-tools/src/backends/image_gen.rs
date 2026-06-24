@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{Value, json};
 
-use crate::tools::image_gen::ImageGenBackend;
+use crate::tools::image_gen::{ImageGenBackend, ImageGenRequest};
 use hermes_config::managed_gateway::{
     ManagedToolGatewayConfig, ResolveOptions, resolve_managed_tool_gateway,
 };
@@ -148,7 +148,7 @@ impl FalImageGenBackend {
     }
 
     pub fn image_gen_is_configured() -> bool {
-        Self::from_env_or_managed().is_ok()
+        Self::from_env_or_managed().is_ok() || hermes_config::flowy_media_exposed_from_disk()
     }
 
     pub fn transport_label(&self) -> &'static str {
@@ -162,13 +162,10 @@ impl FalImageGenBackend {
 
 #[async_trait]
 impl ImageGenBackend for FalImageGenBackend {
-    async fn generate(
-        &self,
-        prompt: &str,
-        size: Option<&str>,
-        _style: Option<&str>,
-        n: Option<u32>,
-    ) -> Result<String, ToolError> {
+    async fn generate(&self, request: ImageGenRequest) -> Result<String, ToolError> {
+        let size = request.size.as_deref();
+        let n = request.n;
+        let prompt = &request.prompt;
         let (width, height) = match size {
             Some("256x256") => (256, 256),
             Some("512x512") => (512, 512),
@@ -363,7 +360,10 @@ mod fal_managed_tests {
     async fn unconfigured_backend_errors_before_network() {
         let backend = FalImageGenBackend::unconfigured();
         let err = backend
-            .generate("a prompt", None, None, None)
+            .generate(ImageGenRequest {
+                prompt: "a prompt".into(),
+                ..Default::default()
+            })
             .await
             .unwrap_err();
         assert!(err.to_string().contains("FAL_KEY"));
