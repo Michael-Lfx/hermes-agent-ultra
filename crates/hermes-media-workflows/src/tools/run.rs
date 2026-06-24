@@ -6,21 +6,18 @@ use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
-use crate::backends::FlowyMediaServices;
-use crate::workflows::WorkflowExecutor;
 use crate::workflows::WorkflowPlan;
-use crate::workflows::store::WorkflowRunStore;
+use crate::workflows::runner::WorkflowRunner;
+use crate::workflows::store::WorkflowRunStatus;
 use crate::workflows::templates::{builtin_template, default_template_inputs};
 
 pub struct MediaWorkflowRunHandler {
-    executor: Arc<WorkflowExecutor>,
+    runner: Arc<WorkflowRunner>,
 }
 
 impl MediaWorkflowRunHandler {
-    pub fn new(services: FlowyMediaServices, store: Arc<WorkflowRunStore>) -> Self {
-        Self {
-            executor: Arc::new(WorkflowExecutor::new(services, store)),
-        }
+    pub fn new(runner: Arc<WorkflowRunner>) -> Self {
+        Self { runner }
     }
 }
 
@@ -48,23 +45,23 @@ impl ToolHandler for MediaWorkflowRunHandler {
             WorkflowPlan::from_definition(&def, inputs)
         };
 
-        let record = self.executor.run_plan(&plan).await?;
-        let media_tags: Vec<String> = record
-            .artifacts
-            .iter()
-            .filter_map(|a| a.get("local_path").and_then(|p| p.as_str()))
-            .map(|p| format!("MEDIA:{p}"))
-            .collect();
+        let wait = params
+            .get("wait")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(!self.runner.async_execution_enabled());
 
+        if wait {
+            let record = self.runner.run_plan_sync(&plan).await?;
+            return Ok(serialize_run_result(&record));
+        }
+
+        let run_id = self.runner.spawn_plan(plan)?;
         Ok(json!({
             "success": true,
-            "run_id": record.run_id,
-            "workflow_id": record.workflow_id,
-            "status": record.status,
-            "artifacts": record.artifacts,
-            "step_outputs": record.step_outputs,
-            "media_tags": media_tags,
-            "hint": if media_tags.is_empty() { Value::Null } else { json!(format!("Include {} in your reply for native media delivery", media_tags.join(" "))) },
+            "run_id": run_id,
+            "status": "running",
+            "async": true,
+            "hint": "Poll media_workflow_status with run_id until status is succeeded or failed"
         })
         .to_string())
     }
@@ -83,10 +80,40 @@ impl ToolHandler for MediaWorkflowRunHandler {
             "prompt".into(),
             json!({"type":"string","description":"Objective when plan is omitted"}),
         );
+        props.insert(
+            "wait".into(),
+            json!({
+                "type": "boolean",
+                "description": "When true, block until complete. Default false when media.workflows.async_execution is true."
+            }),
+        );
         tool_schema(
             "media_workflow_run",
-            "Execute a media workflow plan (image/video multi-step pipeline).",
+            "Execute a media workflow plan (refined prompts, image/video pipeline). Async by default — poll media_workflow_status.",
             JsonSchema::object(props, vec![]),
         )
     }
+}
+
+fn serialize_run_result(record: &crate::workflows::store::WorkflowRunRecord) -> String {
+    let media_tags: Vec<String> = record
+        .artifacts
+        .iter()
+        .filter_map(|a| a.get("local_path").and_then(|p| p.as_str()))
+        .map(|p| format!("MEDIA:{p}"))
+        .collect();
+
+    json!({
+        "success": record.status == WorkflowRunStatus::Succeeded,
+        "run_id": record.run_id,
+        "workflow_id": record.workflow_id,
+        "status": record.status,
+        "error": record.error,
+        "artifacts": record.artifacts,
+        "step_outputs": record.step_outputs,
+        "media_tags": media_tags,
+        "manifest_path": format!("~/.hermes/media/workflows/{}/manifest.json", record.run_id),
+        "hint": if media_tags.is_empty() { Value::Null } else { json!(format!("Include {} in your reply for native media delivery", media_tags.join(" "))) },
+    })
+    .to_string()
 }

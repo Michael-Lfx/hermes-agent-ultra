@@ -1,8 +1,9 @@
 //! Shared Flowy media service handle.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use hermes_config::{GatewayConfig, MediaGenConfig};
+use hermes_config::{GatewayConfig, MediaGenConfig, ServerConfig};
 use hermes_server_client::{
     ClawModelEntry, FlowyApiClient, MODEL_CATEGORY_IMAGE, MODEL_CATEGORY_VIDEO, ServerSession,
     resolve_model_in_catalog,
@@ -16,6 +17,8 @@ pub struct FlowyMediaServices {
     pub api: Arc<FlowyApiClient>,
     pub session: ServerSession,
     pub media: MediaGenConfig,
+    pub server: ServerConfig,
+    pub hermes_home: PathBuf,
 }
 
 impl FlowyMediaServices {
@@ -29,6 +32,8 @@ impl FlowyMediaServices {
             api: Arc::new(api),
             session,
             media: config.media.clone(),
+            server: config.server.clone(),
+            hermes_home: hermes_home.to_path_buf(),
         })
     }
 
@@ -39,6 +44,52 @@ impl FlowyMediaServices {
             .ok()
             .flatten()
             .is_some_and(|t| !t.trim().is_empty())
+    }
+
+    pub async fn credit_balance(&self) -> Result<i64, hermes_core::ToolError> {
+        self.require_token().await?;
+        let balance = self
+            .api
+            .get_credits_balance(&self.session)
+            .await
+            .map_err(map_server_err)?;
+        Ok(balance.balance)
+    }
+
+    /// Ensure sufficient credits for image generation.
+    pub async fn ensure_image_credits(&self) -> Result<(), hermes_core::ToolError> {
+        if !self.media.workflows.check_credits {
+            return Ok(());
+        }
+        let min = self.media.workflows.image_min_credits;
+        self.ensure_min_credits(min, "image generation").await
+    }
+
+    /// Ensure sufficient credits for a video of `duration_secs` seconds.
+    pub async fn ensure_video_credits(
+        &self,
+        duration_secs: u32,
+    ) -> Result<(), hermes_core::ToolError> {
+        if !self.media.workflows.check_credits {
+            return Ok(());
+        }
+        let per_sec = self.media.workflows.video_credits_per_second;
+        let required = u64::from(duration_secs.max(1)).saturating_mul(per_sec);
+        self.ensure_min_credits(required, "video generation").await
+    }
+
+    async fn ensure_min_credits(
+        &self,
+        required: u64,
+        context: &str,
+    ) -> Result<(), hermes_core::ToolError> {
+        let balance = self.credit_balance().await?;
+        if balance < required as i64 {
+            return Err(hermes_core::ToolError::ExecutionFailed(format!(
+                "insufficient credits for {context}: need {required}, balance {balance}"
+            )));
+        }
+        Ok(())
     }
 
     pub async fn fetch_image_models(&self) -> Result<Vec<ClawModelEntry>, hermes_core::ToolError> {
@@ -61,7 +112,6 @@ impl FlowyMediaServices {
         Ok(models.cloud)
     }
 
-    /// Resolve image `model` for API requests (list `id` from `availableListClaw`).
     pub async fn resolve_image_model(
         &self,
         agent_model: Option<&str>,
@@ -75,7 +125,6 @@ impl FlowyMediaServices {
         )
     }
 
-    /// Resolve video `model` for API requests (list `id` from `availableListClaw`).
     pub async fn resolve_video_model(
         &self,
         agent_model: Option<&str>,

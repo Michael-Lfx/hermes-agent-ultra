@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use hermes_core::{
-    AgentError, AgentResult, LlmResponse, Message, StreamChunk, ToolCall, ToolResult, ToolSchema,
-    UsageStats,
+    AgentError, AgentResult, LlmResponse, Message, StreamChunk, ToolCall, ToolProgressGuard,
+    ToolResult, ToolSchema, UsageStats,
 };
 use serde_json::Value;
 
@@ -1810,6 +1810,12 @@ async fn turn_execute_tools(agent: &AgentLoop, tc: &mut TurnContext) -> TurnStat
         .iter()
         .map(|tc_| tc_.function.name.clone())
         .collect();
+    let _tool_progress_guard = agent.callbacks.status_callback.as_ref().map(|cb| {
+        let cb = Arc::clone(cb);
+        ToolProgressGuard::install(Arc::new(move |msg: &str| {
+            cb("tool_progress", msg);
+        }))
+    });
     let _tool_progress = ToolProgressWatchdog::start(
         agent.callbacks.status_callback.clone(),
         tc.total_turns,

@@ -37,6 +37,10 @@ pub struct VideoGenerateRequest {
     pub negative_prompt: Option<String>,
     pub audio: Option<bool>,
     pub seed: Option<i64>,
+    pub last_frame_url: Option<String>,
+    pub reference_video_url: Option<String>,
+    pub reference_audio_url: Option<String>,
+    pub generate_audio: Option<bool>,
 }
 
 /// Backend for video generation operations.
@@ -140,6 +144,10 @@ impl ToolHandler for VideoGenerateHandler {
             negative_prompt: optional_string(&params, "negative_prompt"),
             audio: params.get("audio").and_then(|v| v.as_bool()),
             seed: optional_i64(&params, "seed"),
+            last_frame_url: optional_string(&params, "last_frame_url"),
+            reference_video_url: optional_string(&params, "reference_video_url"),
+            reference_audio_url: optional_string(&params, "reference_audio_url"),
+            generate_audio: params.get("generate_audio").and_then(|v| v.as_bool()),
         };
 
         self.backend.generate_video(request).await

@@ -113,22 +113,13 @@ fn prepend_media_generation_hint(tool_schemas: &[ToolSchema], history: &mut Vec<
     if duplicate {
         return;
     }
-    let mut tools = Vec::new();
-    if has_image {
-        tools.push("`image_generate`");
-    }
-    if has_video {
-        tools.push("`video_generate`");
-    }
+    let has_workflow = tool_schemas
+        .iter()
+        .any(|s| s.name == "media_workflow_plan" || s.name == "media_workflow_run");
     history.insert(
         0,
-        Message::system(format!(
-            "[SYSTEM] You have Flowy cloud media tools: {}. When the user asks for AI image or \
-             video generation, call the appropriate tool with a detailed prompt (use `clarify` if \
-             the request is vague). Deliver generated files via MEDIA:/local_path from the tool \
-             result. Do NOT tell the user you cannot generate media or redirect them to external \
-             platforms (Kling, Sora, Pika, 海螺, etc.) when these tools are available.",
-            tools.join(" and ")
+        Message::system(hermes_media_workflows::gateway_media_system_hint(
+            has_workflow,
         )),
     );
 }

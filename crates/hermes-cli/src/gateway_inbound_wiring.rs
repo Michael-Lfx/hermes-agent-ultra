@@ -126,6 +126,27 @@ pub fn is_coalescable_web_tool_status(event_type: &str, message: &str) -> bool {
         || m.contains("browser_navigate")
 }
 
+/// Media generation progress lines — coalesce on platforms that cannot edit messages (WeCom).
+pub fn is_coalescable_media_tool_status(event_type: &str, message: &str) -> bool {
+    if event_type != "tool_progress" {
+        return false;
+    }
+    let m = message.trim();
+    m.contains("视频")
+        || m.contains("图片")
+        || m.contains("工作流")
+        || m.contains("分镜")
+        || m.contains("云端")
+        || m.contains("渲染")
+        || m.contains("video_generate")
+        || m.contains("image_generate")
+}
+
+fn is_coalescable_tool_status(event_type: &str, message: &str) -> bool {
+    is_coalescable_web_tool_status(event_type, message)
+        || is_coalescable_media_tool_status(event_type, message)
+}
+
 fn platform_supports_status_message_edit(platform: &str) -> bool {
     !matches!(
         platform.trim().to_ascii_lowercase().as_str(),
@@ -258,6 +279,7 @@ pub fn make_gateway_status_callback(
         anchor_message_id: None,
         debounce_gen: 0,
     }));
+    let last_tool_progress_text: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
     Arc::new(move |event_type: &str, message: &str| {
         if !gateway_status_message_visible(event_type, message) {
             return;
@@ -270,6 +292,13 @@ pub fn make_gateway_status_callback(
         if outbound.trim().is_empty() {
             return;
         }
+        if event_type == "tool_progress" {
+            let mut last = last_tool_progress_text.lock().unwrap();
+            if last.as_deref() == Some(outbound.as_str()) {
+                return;
+            }
+            *last = Some(outbound.clone());
+        }
         let progress_mode = hermes_gateway::display_config::resolve_display_setting(
             None,
             &platform,
@@ -277,11 +306,10 @@ pub fn make_gateway_status_callback(
             None,
         );
         if progress_mode.as_deref() == Some("off")
-            && (event_type == "tool_progress"
-                || is_coalescable_web_tool_status(event_type, message))
+            && (event_type == "tool_progress" || is_coalescable_tool_status(event_type, message))
         {
             // Hooks still fire below; skip chat delivery.
-        } else if is_coalescable_web_tool_status(event_type, message) {
+        } else if is_coalescable_tool_status(event_type, message) {
             let gw = gateway.clone();
             let platform_msg = platform.clone();
             let chat_id_msg = chat_id.clone();
@@ -290,7 +318,11 @@ pub fn make_gateway_status_callback(
             tokio::spawn(async move {
                 let (combined, generation, edit_capable) = {
                     let mut guard = coalescer.lock().unwrap();
-                    guard.push_line(&msg);
+                    if is_coalescable_media_tool_status("tool_progress", &msg) {
+                        guard.lines = vec![msg.clone()];
+                    } else {
+                        guard.push_line(&msg);
+                    }
                     guard.debounce_gen = guard.debounce_gen.saturating_add(1);
                     (
                         guard.combined_text(),

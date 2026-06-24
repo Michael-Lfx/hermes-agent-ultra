@@ -23,10 +23,16 @@ pub(crate) use cli_setup::{run_config, run_model, run_tools};
 pub(crate) use cron_main::{run_cron, run_webhook};
 pub(crate) use hermes_cli::auth_main;
 pub(crate) use hermes_cli::gateway_process;
-pub(crate) use hermes_cli::gateway_runtime::{gateway_platform_menu_label, run_gateway};
+#[cfg(test)]
+pub(crate) use hermes_cli::gateway_runtime::gateway_platform_menu_label;
+pub(crate) use hermes_cli::gateway_runtime::run_gateway;
 pub(crate) use hermes_cli::oneshot::{
-    handle_local_slash_query, infer_oauth_provider_from_error_message, oneshot_auth_is_refreshable,
-    oneshot_auto_verify_oauth_provider, oneshot_should_use_app_runtime, print_app_oneshot_result,
+    handle_local_slash_query, oneshot_auto_verify_oauth_provider, oneshot_should_use_app_runtime,
+    print_app_oneshot_result,
+};
+#[cfg(test)]
+pub(crate) use hermes_cli::oneshot::{
+    infer_oauth_provider_from_error_message, oneshot_auth_is_refreshable,
     query_is_local_slash_command,
 };
 pub(crate) use hermes_cli::state_paths::{hermes_state_root, log_legacy_home_env_hint};
