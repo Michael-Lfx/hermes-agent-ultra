@@ -96,6 +96,7 @@ fn parse_shallow_command(
         ShallowCommand::Interest { .. } => commands::parse_interest(args),
         ShallowCommand::Contribute { .. } => commands::parse_contribute(args),
         ShallowCommand::Server { .. } => commands::parse_server(args),
+        ShallowCommand::Media { .. } => commands::parse_media(args),
         ShallowCommand::Mcp { .. } => commands::parse_mcp(args),
         ShallowCommand::Sessions { .. } => commands::parse_sessions(args),
         ShallowCommand::Resume { .. } => commands::parse_resume(args),

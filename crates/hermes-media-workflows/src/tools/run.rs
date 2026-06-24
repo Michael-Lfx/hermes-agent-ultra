@@ -1,0 +1,92 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use indexmap::IndexMap;
+use serde_json::{Value, json};
+
+use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
+
+use crate::backends::FlowyMediaServices;
+use crate::workflows::WorkflowExecutor;
+use crate::workflows::WorkflowPlan;
+use crate::workflows::store::WorkflowRunStore;
+use crate::workflows::templates::{builtin_template, default_template_inputs};
+
+pub struct MediaWorkflowRunHandler {
+    executor: Arc<WorkflowExecutor>,
+}
+
+impl MediaWorkflowRunHandler {
+    pub fn new(services: FlowyMediaServices, store: Arc<WorkflowRunStore>) -> Self {
+        Self {
+            executor: Arc::new(WorkflowExecutor::new(services, store)),
+        }
+    }
+}
+
+#[async_trait]
+impl ToolHandler for MediaWorkflowRunHandler {
+    async fn execute(&self, params: Value) -> Result<String, ToolError> {
+        let plan: WorkflowPlan = if let Some(plan_val) = params.get("plan") {
+            serde_json::from_value(plan_val.clone())
+                .map_err(|e| ToolError::InvalidParams(format!("invalid plan: {e}")))?
+        } else {
+            let workflow_id = params
+                .get("workflow_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    ToolError::InvalidParams("provide 'plan' or 'workflow_id' + 'prompt'".into())
+                })?;
+            let prompt = params
+                .get("prompt")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError::InvalidParams("missing prompt".into()))?;
+            let def = builtin_template(workflow_id).ok_or_else(|| {
+                ToolError::InvalidParams(format!("unknown workflow_id: {workflow_id}"))
+            })?;
+            let inputs = default_template_inputs(workflow_id, prompt);
+            WorkflowPlan::from_definition(&def, inputs)
+        };
+
+        let record = self.executor.run_plan(&plan).await?;
+        let media_tags: Vec<String> = record
+            .artifacts
+            .iter()
+            .filter_map(|a| a.get("local_path").and_then(|p| p.as_str()))
+            .map(|p| format!("MEDIA:{p}"))
+            .collect();
+
+        Ok(json!({
+            "success": true,
+            "run_id": record.run_id,
+            "workflow_id": record.workflow_id,
+            "status": record.status,
+            "artifacts": record.artifacts,
+            "step_outputs": record.step_outputs,
+            "media_tags": media_tags,
+            "hint": if media_tags.is_empty() { Value::Null } else { json!(format!("Include {} in your reply for native media delivery", media_tags.join(" "))) },
+        })
+        .to_string())
+    }
+
+    fn schema(&self) -> ToolSchema {
+        let mut props = IndexMap::new();
+        props.insert(
+            "plan".into(),
+            json!({"type":"object","description":"Plan object from media_workflow_plan"}),
+        );
+        props.insert(
+            "workflow_id".into(),
+            json!({"type":"string","description":"Builtin template id when plan is omitted"}),
+        );
+        props.insert(
+            "prompt".into(),
+            json!({"type":"string","description":"Objective when plan is omitted"}),
+        );
+        tool_schema(
+            "media_workflow_run",
+            "Execute a media workflow plan (image/video multi-step pipeline).",
+            JsonSchema::object(props, vec![]),
+        )
+    }
+}

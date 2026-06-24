@@ -13,6 +13,7 @@ pub mod insights;
 pub mod interest;
 pub mod loader;
 pub mod managed_gateway;
+pub mod media;
 pub mod merge;
 pub mod migrate;
 pub mod paths;
@@ -55,6 +56,10 @@ pub use managed_gateway::{
     has_direct_modal_credentials, is_managed_tool_gateway_ready, managed_nous_tools_enabled,
     read_nous_access_token, resolve_managed_tool_gateway, resolve_modal_backend_state,
     resolve_openai_audio_api_key,
+};
+pub use media::{
+    ImageGenSettings, MediaGenConfig, MediaWorkflowSettings, MediaWorkflowTemplateMap,
+    VideoGenSettings, flowy_media_exposed, flowy_media_exposed_from_disk,
 };
 pub use merge::{deep_merge, merge_configs};
 pub use migrate::{

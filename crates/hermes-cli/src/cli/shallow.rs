@@ -159,6 +159,11 @@ pub enum ShallowCommand {
         _rest: Vec<String>,
     },
     #[command(disable_help_flag = true)]
+    Media {
+        #[arg(trailing_var_arg = true, hide = true, allow_hyphen_values = true)]
+        _rest: Vec<String>,
+    },
+    #[command(disable_help_flag = true)]
     Mcp {
         #[arg(trailing_var_arg = true, hide = true, allow_hyphen_values = true)]
         _rest: Vec<String>,

@@ -174,6 +174,10 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub server: crate::server::ServerConfig,
 
+    /// Image/video generation (Flowy server APIs + workflow orchestration).
+    #[serde(default)]
+    pub media: crate::media::MediaGenConfig,
+
     /// Anthropic prompt caching (`cache_ttl`: `"5m"` or `"1h"`).
     #[serde(default)]
     pub prompt_caching: PromptCachingConfig,
@@ -231,6 +235,7 @@ impl Default for GatewayConfig {
             interest: InterestConfig::default(),
             insights: crate::insights::InsightsConfig::default(),
             server: crate::server::ServerConfig::default(),
+            media: crate::media::MediaGenConfig::default(),
             prompt_caching: PromptCachingConfig::default(),
             home_dir: None,
             timezone: None,

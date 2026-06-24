@@ -38,6 +38,11 @@ fn build_live_cron_scheduler(cli: &Cli, data_dir: &Path) -> Result<CronScheduler
         .map_err(|e| AgentError::Config(e.to_string()))?
         .provider;
     hermes_tools::register_builtin_tools(&tool_registry, terminal_backend, skill_provider);
+    hermes_cli::media_wiring::wire_flowy_media_backends(
+        &tool_registry,
+        &config,
+        &hermes_config::hermes_home(),
+    );
 
     let runner = Arc::new(CronRunner::new(
         provider,

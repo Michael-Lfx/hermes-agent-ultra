@@ -98,6 +98,41 @@ fn prepend_clarify_user_request_hint(
     );
 }
 
+fn prepend_media_generation_hint(tool_schemas: &[ToolSchema], history: &mut Vec<Message>) {
+    let has_video = tool_schemas.iter().any(|s| s.name == "video_generate");
+    let has_image = tool_schemas.iter().any(|s| s.name == "image_generate");
+    if !has_video && !has_image {
+        return;
+    }
+    let duplicate = history.iter().any(|m| {
+        m.content
+            .as_deref()
+            .map(|c| c.contains("Flowy cloud media tools"))
+            .unwrap_or(false)
+    });
+    if duplicate {
+        return;
+    }
+    let mut tools = Vec::new();
+    if has_image {
+        tools.push("`image_generate`");
+    }
+    if has_video {
+        tools.push("`video_generate`");
+    }
+    history.insert(
+        0,
+        Message::system(format!(
+            "[SYSTEM] You have Flowy cloud media tools: {}. When the user asks for AI image or \
+             video generation, call the appropriate tool with a detailed prompt (use `clarify` if \
+             the request is vague). Deliver generated files via MEDIA:/local_path from the tool \
+             result. Do NOT tell the user you cannot generate media or redirect them to external \
+             platforms (Kling, Sora, Pika, 海螺, etc.) when these tools are available.",
+            tools.join(" and ")
+        )),
+    );
+}
+
 fn prepend_cross_platform_hint(
     platform: &str,
     tool_schemas: &[ToolSchema],
@@ -285,6 +320,7 @@ pub(crate) async fn gateway_handle_message_non_streaming(
     } = deps;
 
     gateway_consume_pending_clarify_answer(&clarify, &messages, &ctx, false).await;
+    hermes_cli::media_wiring::refresh_flowy_media_backends(&runtime_tools, None);
     let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
     let _effective_model =
         resolve_model_for_gateway(config.model.as_deref().unwrap_or("gpt-4o"), &ctx);
@@ -473,6 +509,7 @@ pub(crate) async fn gateway_handle_message_non_streaming(
             GatewayError::Platform("session has no user message for run_conversation".into())
         })?;
     let mut history = history;
+    prepend_media_generation_hint(&tool_schemas, &mut history);
     prepend_cross_platform_hint(&ctx.platform, &tool_schemas, &mut history);
     prepend_clarify_user_request_hint(&user_message, &tool_schemas, &mut history);
     let task_id = Some(ctx.session_key.clone());
@@ -581,6 +618,7 @@ pub(crate) async fn gateway_handle_message_streaming(
     } = deps;
 
     gateway_consume_pending_clarify_answer(&clarify, &messages, &ctx, true).await;
+    hermes_cli::media_wiring::refresh_flowy_media_backends(&runtime_tools, None);
     let agent_tools = Arc::new(bridge_tool_registry(&runtime_tools));
     let _effective_model =
         resolve_model_for_gateway(config.model.as_deref().unwrap_or("gpt-4o"), &ctx);
@@ -826,6 +864,7 @@ pub(crate) async fn gateway_handle_message_streaming(
             GatewayError::Platform("session has no user message for run_conversation".into())
         })?;
     let mut history = history;
+    prepend_media_generation_hint(&tool_schemas, &mut history);
     prepend_cross_platform_hint(&ctx.platform, &tool_schemas, &mut history);
     prepend_clarify_user_request_hint(&user_message, &tool_schemas, &mut history);
     let task_id = Some(ctx.session_key.clone());
