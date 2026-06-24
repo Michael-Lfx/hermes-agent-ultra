@@ -5,6 +5,12 @@ use serde_json::json;
 
 use hermes_core::{JsonSchema, ToolSchema, tool_schema};
 
+use crate::prompt_guidance::{
+    IMAGE_PROMPT_SCHEMA_DESC, VIDEO_NEGATIVE_SCHEMA_DESC, VIDEO_PROMPT_SCHEMA_DESC,
+    VIDEO_SEED_SCHEMA_DESC,
+};
+use crate::workflows::templates::list_builtin_templates;
+
 /// Schema for Flowy `video_generate` — model is optional Flowy id, not FAL families.
 pub fn flowy_video_generate_schema() -> ToolSchema {
     let mut props = IndexMap::new();
@@ -12,21 +18,21 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
         "prompt".into(),
         json!({
             "type": "string",
-            "description": "Text prompt for text-to-video or image-to-video generation."
+            "description": VIDEO_PROMPT_SCHEMA_DESC
         }),
     );
     props.insert(
         "model".into(),
         json!({
             "type": "string",
-            "description": "Optional Flowy video model id (AIPC-... or flowy/... from `hermes media models`). Omit to use media.video.model from config."
+            "description": "Optional Flowy video model list id (AIPC-... from `hermes media models`). Omit to use config default."
         }),
     );
     props.insert(
         "image_url".into(),
         json!({
             "type": "string",
-            "description": "Optional starting image URL for image-to-video."
+            "description": "Optional starting image URL for image-to-video (first frame)."
         }),
     );
     props.insert(
@@ -34,7 +40,7 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
         json!({
             "type": "array",
             "items": {"type": "string"},
-            "description": "Optional reference image URLs for first-frame / reference-guided video."
+            "description": "Optional reference image URLs for reference-guided video."
         }),
     );
     props.insert(
@@ -43,14 +49,14 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
             "type": "integer",
             "minimum": 1,
             "maximum": 15,
-            "description": "Video length in seconds (config default used when omitted)."
+            "description": "Video length in seconds (config default when omitted)."
         }),
     );
     props.insert(
         "aspect_ratio".into(),
         json!({
             "type": "string",
-            "description": "Aspect ratio such as 16:9 or 9:16.",
+            "description": "Aspect ratio: 16:9 (landscape) or 9:16 (mobile/WeCom).",
             "default": "16:9"
         }),
     );
@@ -58,7 +64,7 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
         "resolution".into(),
         json!({
             "type": "string",
-            "description": "Output resolution when supported (e.g. 720p). Config default used when omitted.",
+            "description": "Output resolution when supported. Seedance fast often requires 720p.",
             "enum": ["360p", "480p", "540p", "720p", "1080p"]
         }),
     );
@@ -66,13 +72,48 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
         "negative_prompt".into(),
         json!({
             "type": "string",
-            "description": "Optional negative prompt."
+            "description": VIDEO_NEGATIVE_SCHEMA_DESC
+        }),
+    );
+    props.insert(
+        "seed".into(),
+        json!({
+            "type": "integer",
+            "description": VIDEO_SEED_SCHEMA_DESC
+        }),
+    );
+    props.insert(
+        "last_frame_url".into(),
+        json!({
+            "type": "string",
+            "description": "Optional last-frame image URL for Seedance (role=last_frame)."
+        }),
+    );
+    props.insert(
+        "reference_video_url".into(),
+        json!({
+            "type": "string",
+            "description": "Optional reference video URL (role=reference_video)."
+        }),
+    );
+    props.insert(
+        "reference_audio_url".into(),
+        json!({
+            "type": "string",
+            "description": "Optional reference audio URL (role=reference_audio)."
+        }),
+    );
+    props.insert(
+        "generate_audio".into(),
+        json!({
+            "type": "boolean",
+            "description": "Request generated audio track when supported by the model."
         }),
     );
 
     tool_schema(
         "video_generate",
-        "Generate a video via the Flowy cloud API (Seedance). Returns a video URL and MEDIA: local path when save_locally is enabled.",
+        "Generate a video via Flowy Seedance. Returns standardized assets with MEDIA: local path when save_locally is enabled.",
         JsonSchema::object(props, vec!["prompt".into()]),
     )
 }
@@ -84,14 +125,14 @@ pub fn flowy_image_generate_schema() -> ToolSchema {
         "prompt".into(),
         json!({
             "type": "string",
-            "description": "Text description of the image to generate."
+            "description": IMAGE_PROMPT_SCHEMA_DESC
         }),
     );
     props.insert(
         "model".into(),
         json!({
             "type": "string",
-            "description": "Optional Flowy image model id (AIPC-... or flowy/...). Omit to use media.image.model from config."
+            "description": "Optional Flowy image model list id (AIPC-... from `hermes media models`). Omit to use config default."
         }),
     );
     props.insert(
@@ -104,8 +145,48 @@ pub fn flowy_image_generate_schema() -> ToolSchema {
 
     tool_schema(
         "image_generate",
-        "Generate an image via the Flowy cloud API. Returns image URL(s) and MEDIA: local path when save_locally is enabled.",
+        "Generate an image via Flowy cloud API. Returns standardized assets with MEDIA: local path when save_locally is enabled.",
         JsonSchema::object(props, vec!["prompt".into()]),
+    )
+}
+
+/// Schema for `media_workflow_plan`.
+pub fn media_workflow_plan_schema() -> ToolSchema {
+    let mut props = IndexMap::new();
+    props.insert(
+        "objective".into(),
+        json!({
+            "type": "string",
+            "description": "User goal in natural language. Include visual specifics (subject, style, mood, setting); workflows will refine into model-ready prompts."
+        }),
+    );
+    props.insert(
+        "workflow_id".into(),
+        json!({
+            "type": "string",
+            "description": "Optional builtin template id",
+            "enum": list_builtin_templates()
+        }),
+    );
+    props.insert(
+        "image_url".into(),
+        json!({
+            "type": "string",
+            "description": "Reference image URL for image-to-video workflows (selects img2video_direct when auto)."
+        }),
+    );
+    props.insert(
+        "duration".into(),
+        json!({"type": "integer", "description": "Video duration in seconds"}),
+    );
+    props.insert(
+        "aspect_ratio".into(),
+        json!({"type": "string", "description": "16:9 or 9:16", "default": "16:9"}),
+    );
+    tool_schema(
+        "media_workflow_plan",
+        "Plan a multi-step image/video workflow with automatic prompt refinement.",
+        JsonSchema::object(props, vec!["objective".into()]),
     )
 }
 

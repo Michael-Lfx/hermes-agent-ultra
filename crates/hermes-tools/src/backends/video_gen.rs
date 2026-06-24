@@ -1292,6 +1292,10 @@ mod tests {
             negative_prompt: None,
             audio: None,
             seed: None,
+            last_frame_url: None,
+            reference_video_url: None,
+            reference_audio_url: None,
+            generate_audio: None,
         }
     }
 

@@ -88,6 +88,30 @@ pub struct MediaWorkflowSettings {
     #[serde(default = "default_workflow_max_retries")]
     pub max_retries: u32,
 
+    /// When true, run `media_workflow_run` in the background; poll with `media_workflow_status`.
+    #[serde(default = "default_true")]
+    pub async_execution: bool,
+
+    /// Use server LLM to refine prompts (falls back to local templates on failure).
+    #[serde(default = "default_true")]
+    pub llm_prompt_refine: bool,
+
+    /// Pre-flight `GET /credits/balance` before generation.
+    #[serde(default = "default_true")]
+    pub check_credits: bool,
+
+    /// Minimum balance required before image generation (server default often 500).
+    #[serde(default = "default_image_min_credits")]
+    pub image_min_credits: u64,
+
+    /// Credits required per video second (`duration × video_credits_per_second`).
+    #[serde(default = "default_video_credits_per_second")]
+    pub video_credits_per_second: u64,
+
+    /// Max shots for `storyboard_multi` workflow.
+    #[serde(default = "default_storyboard_max_shots")]
+    pub storyboard_max_shots: u32,
+
     #[serde(default)]
     pub default_templates: MediaWorkflowTemplateMap,
 }
@@ -97,6 +121,12 @@ impl Default for MediaWorkflowSettings {
         Self {
             enabled: true,
             max_retries: default_workflow_max_retries(),
+            async_execution: true,
+            llm_prompt_refine: true,
+            check_credits: true,
+            image_min_credits: default_image_min_credits(),
+            video_credits_per_second: default_video_credits_per_second(),
+            storyboard_max_shots: default_storyboard_max_shots(),
             default_templates: MediaWorkflowTemplateMap::default(),
         }
     }
@@ -139,6 +169,18 @@ fn default_video_poll_timeout() -> u64 {
 
 fn default_workflow_max_retries() -> u32 {
     1
+}
+
+fn default_image_min_credits() -> u64 {
+    500
+}
+
+fn default_video_credits_per_second() -> u64 {
+    1000
+}
+
+fn default_storyboard_max_shots() -> u32 {
+    3
 }
 
 impl MediaGenConfig {

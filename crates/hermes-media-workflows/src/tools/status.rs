@@ -32,10 +32,11 @@ impl ToolHandler for MediaWorkflowStatusHandler {
             ToolError::ExecutionFailed(format!("workflow run not found: {run_id}"))
         })?;
 
-        Ok(
-            serde_json::to_string(&record)
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?,
-        )
+        Ok(json!({
+            "run": record,
+            "manifest_hint": format!("~/.hermes/media/workflows/{}/manifest.json", record.run_id),
+        })
+        .to_string())
     }
 
     fn schema(&self) -> ToolSchema {

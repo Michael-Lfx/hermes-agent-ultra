@@ -302,7 +302,8 @@ impl ToolCallParser for HermesToolCallParser {
         }
 
         if calls.is_empty() {
-            let func_shorthand_re = Regex::new(r#"(?s)<function=(\w+)>([\s\S]*?)</function>"#).unwrap();
+            let func_shorthand_re =
+                Regex::new(r#"(?s)<function=(\w+)>([\s\S]*?)</function>"#).unwrap();
             let param_shorthand_re =
                 Regex::new(r#"(?s)<parameter=(\w+)>([\s\S]*?)</parameter>"#).unwrap();
             for func_caps in func_shorthand_re.captures_iter(content) {

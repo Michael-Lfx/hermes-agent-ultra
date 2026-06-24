@@ -13,6 +13,7 @@ pub mod schema_sanitizer;
 pub mod time;
 pub mod token_estimator;
 pub mod tool_call_parser;
+pub mod tool_progress;
 pub mod tool_schema;
 pub mod traits;
 pub mod types;
@@ -67,6 +68,8 @@ pub use tool_call_parser::{
 
 // Re-export ParseMode from traits
 pub use traits::ParseMode;
+
+pub use tool_progress::{ToolProgressGuard, current_tool_progress_detail, report_tool_progress};
 
 // Re-export token estimator
 pub use token_estimator::{

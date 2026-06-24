@@ -10,8 +10,11 @@ use hermes_tools::{ImageGenerateHandler, VideoGenerateHandler};
 use crate::backends::FlowyMediaServices;
 use crate::backends::flowy_image::FlowyImageGenBackend;
 use crate::backends::flowy_video::FlowyVideoGenBackend;
-use crate::tool_schemas::{flowy_image_generate_schema, flowy_video_generate_schema};
+use crate::tool_schemas::{
+    flowy_image_generate_schema, flowy_video_generate_schema, media_workflow_plan_schema,
+};
 use crate::tools::{MediaWorkflowPlanHandler, MediaWorkflowRunHandler, MediaWorkflowStatusHandler};
+use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStore;
 
 fn flowy_media_check_fn() -> Arc<dyn Fn() -> bool + Send + Sync> {
@@ -67,16 +70,17 @@ pub fn wire_flowy_media(
     }
 
     let store = Arc::new(WorkflowRunStore::new());
+    let runner = Arc::new(WorkflowRunner::new(services.clone(), Arc::clone(&store)));
     let plan_handler = Arc::new(MediaWorkflowPlanHandler::new(config.media.clone()));
     register_overwrite(
         registry,
         "media_workflow",
         plan_handler.clone(),
-        plan_handler.schema(),
+        media_workflow_plan_schema(),
         "🎬",
         Arc::clone(&check),
     );
-    let run_handler = Arc::new(MediaWorkflowRunHandler::new(services, store.clone()));
+    let run_handler = Arc::new(MediaWorkflowRunHandler::new(runner));
     register_overwrite(
         registry,
         "media_workflow",

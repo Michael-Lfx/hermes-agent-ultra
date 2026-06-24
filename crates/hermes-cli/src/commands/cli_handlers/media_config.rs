@@ -43,6 +43,12 @@ pub fn normalize_media_config_key(key: &str) -> Result<String, AgentError> {
         "storyboard_template" | "template_storyboard" => {
             "media.workflows.default_templates.storyboard".to_string()
         }
+        "async_execution" | "workflow_async" => "media.workflows.async_execution".to_string(),
+        "llm_prompt_refine" | "llm_refine" => "media.workflows.llm_prompt_refine".to_string(),
+        "check_credits" | "credits_check" => "media.workflows.check_credits".to_string(),
+        "image_min_credits" => "media.workflows.image_min_credits".to_string(),
+        "video_credits_per_second" => "media.workflows.video_credits_per_second".to_string(),
+        "storyboard_max_shots" | "max_shots" => "media.workflows.storyboard_max_shots".to_string(),
         other if other.starts_with("media.") => other.to_string(),
         _ => {
             return Err(AgentError::Config(format!(
@@ -107,6 +113,24 @@ pub fn print_media_config(media: &MediaGenConfig, cfg_path: &Path, server_enable
     println!("  video save_locally: {}", media.video.save_locally);
     println!("  workflows enabled: {}", media.workflows.enabled);
     println!("  workflows max_retries: {}", media.workflows.max_retries);
+    println!(
+        "  workflows async_execution: {}",
+        media.workflows.async_execution
+    );
+    println!(
+        "  workflows llm_prompt_refine: {}",
+        media.workflows.llm_prompt_refine
+    );
+    println!(
+        "  workflows check_credits: {} (image min {}, video {} credits/s)",
+        media.workflows.check_credits,
+        media.workflows.image_min_credits,
+        media.workflows.video_credits_per_second
+    );
+    println!(
+        "  workflows storyboard_max_shots: {}",
+        media.workflows.storyboard_max_shots
+    );
     let tpl = &media.workflows.default_templates;
     println!("  workflow templates:");
     println!(
@@ -161,6 +185,10 @@ pub fn print_config_help() {
     println!("  video_save_locally    Save generated videos locally (true/false)");
     println!("  workflows_enabled     Enable workflow tools (true/false)");
     println!("  workflow_retries      Max workflow QA retries");
+    println!("  async_execution       Run workflows in background (true/false)");
+    println!("  llm_prompt_refine     LLM-based prompt/storyboard refine (true/false)");
+    println!("  check_credits         Pre-check Flowy credit balance (true/false)");
+    println!("  storyboard_max_shots  Max shots for multi-storyboard workflow");
     println!("  txt2img_template      Default txt2img workflow id");
     println!("  txt2video_template    Default txt2video workflow id");
     println!();
