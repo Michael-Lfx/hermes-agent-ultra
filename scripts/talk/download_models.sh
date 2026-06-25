@@ -6,6 +6,7 @@
 # Installs into ${MODELS_ROOT}/models/ (default: repo-root .models/models/):
 #   sensevoice/  — SenseVoice int8 ASR
 #   kokoro/      — Kokoro multi-lang TTS v1.0
+#   zipvoice/    — ZipVoice zero-shot voice cloning (optional TTS)
 #   kws-zh-en/   — Zipformer zh+en KWS (canonical encoder/decoder/joiner.onnx names)
 #   vad/         — silero_vad.onnx
 #   denoise/     — dpdfnet_baseline.onnx
@@ -84,6 +85,23 @@ install_kokoro() {
   fetch "${SHERPA_BASE}/tts-models/${archive}" "${TMP}/${archive}"
   rm -rf "${dest}"
   extract_tarball "${TMP}/${archive}" "${dest}"
+  echo "  -> ${dest}"
+}
+
+install_zipvoice() {
+  local name="zipvoice"
+  local dest="${DEST}/${name}"
+  if [[ -f "${dest}/encoder.int8.onnx" && -f "${dest}/decoder.int8.onnx" && -f "${dest}/vocos_24khz.onnx" ]]; then
+    echo "=== ${name}: already present ==="
+    return 0
+  fi
+  echo "=== ${name} (ZipVoice distill int8 zh+en) ==="
+  echo "    doc: https://k2-fsa.github.io/sherpa/onnx/tts/zipvoice.html"
+  local archive="sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
+  fetch "${SHERPA_BASE}/tts-models/${archive}" "${TMP}/${archive}"
+  rm -rf "${dest}"
+  extract_tarball "${TMP}/${archive}" "${dest}"
+  fetch "${SHERPA_BASE}/vocoder-models/vocos_24khz.onnx" "${dest}/vocos_24khz.onnx"
   echo "  -> ${dest}"
 }
 
@@ -176,7 +194,7 @@ install_to_talk_home() {
     return 0
   fi
   echo "=== install to talk home: ${talk_home} ==="
-  for sub in sensevoice kokoro kws-zh-en vad denoise speaker; do
+  for sub in sensevoice kokoro zipvoice kws-zh-en vad denoise speaker; do
     if [[ -d "${DEST}/${sub}" ]]; then
       mkdir -p "${talk_home}/${sub}"
       cp -a "${DEST}/${sub}/." "${talk_home}/${sub}/"
@@ -197,6 +215,7 @@ mkdir -p "${DEST}"
 
 install_sensevoice
 install_kokoro
+install_zipvoice
 install_kws
 install_vad
 install_denoise

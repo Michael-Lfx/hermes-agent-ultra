@@ -60,7 +60,7 @@ $BinDir = Split-Path -Parent $Bin
 Get-ChildItem -Path $BinDir -Filter "*.dll" -ErrorAction SilentlyContinue |
     Copy-Item -Destination $OutBin -Force
 
-foreach ($sub in @("sensevoice", "kokoro", "kws-zh-en", "vad", "denoise", "speaker")) {
+foreach ($sub in @("sensevoice", "kokoro", "zipvoice", "kws-zh-en", "vad", "denoise", "speaker")) {
     Copy-Models $sub
 }
 

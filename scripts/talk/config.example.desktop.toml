@@ -44,6 +44,9 @@ format = "pcm"
 # language_hints = ["zh", "en"]
 
 [tts.sherpa]
+# kind = "kokoro"   # default multi-speaker Kokoro
+# ZipVoice zero-shot cloning: kind = "zipvoice" + reference_audio/text (see config.example.zipvoice.toml)
+kind = "kokoro"
 model = "models/kokoro/model.onnx"
 voices = "models/kokoro/voices.bin"
 tokens = "models/kokoro/tokens.txt"

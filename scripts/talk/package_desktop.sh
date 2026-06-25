@@ -77,7 +77,7 @@ if [[ "${PLATFORM}" != "windows" ]]; then
   chmod +x "${OUT}/bin/$(basename "${BIN}")"
 fi
 
-for sub in sensevoice kokoro kws-zh-en vad denoise speaker; do
+for sub in sensevoice kokoro zipvoice kws-zh-en vad denoise speaker; do
   copy_models "${sub}"
 done
 

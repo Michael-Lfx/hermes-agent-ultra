@@ -154,7 +154,7 @@ pub struct TtsConfig {
     /// Deprecated alias for local config
     #[serde(default)]
     pub rockchip: Option<RockchipTtsConfig>,
-    /// Configuration for sherpa-onnx Kokoro (Windows / x86 CPU)
+    /// Configuration for sherpa-onnx TTS (Kokoro or ZipVoice)
     #[serde(default)]
     pub sherpa: Option<SherpaTtsConfig>,
 }
@@ -242,9 +242,13 @@ impl Default for SherpaAsrConfig {
     }
 }
 
-/// sherpa-onnx Kokoro offline TTS (see https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html)
+/// sherpa-onnx offline TTS: Kokoro or ZipVoice (see sherpa-onnx TTS docs).
 #[derive(Debug, Clone, Deserialize)]
 pub struct SherpaTtsConfig {
+    /// `kokoro` (default) or `zipvoice`
+    #[serde(default = "default_sherpa_tts_kind")]
+    pub kind: String,
+    // --- Kokoro ---
     #[serde(default = "default_kokoro_model")]
     pub model: String,
     #[serde(default = "default_kokoro_voices")]
@@ -266,15 +270,39 @@ pub struct SherpaTtsConfig {
     pub sid: i32,
     #[serde(default = "default_kokoro_speed")]
     pub speed: f32,
+    // --- ZipVoice (zero-shot voice cloning) ---
+    #[serde(default = "default_zipvoice_encoder")]
+    pub encoder: String,
+    #[serde(default = "default_zipvoice_decoder")]
+    pub decoder: String,
+    #[serde(default = "default_zipvoice_vocoder")]
+    pub vocoder: String,
+    #[serde(default = "default_zipvoice_reference_audio")]
+    pub reference_audio: String,
+    #[serde(default = "default_zipvoice_reference_text")]
+    pub reference_text: String,
+    #[serde(default = "default_zipvoice_num_steps")]
+    pub num_steps: i32,
     #[serde(default = "default_sherpa_threads")]
     pub num_threads: i32,
     #[serde(default = "default_sherpa_provider")]
     pub provider: String,
 }
 
+impl SherpaTtsConfig {
+    pub fn is_zipvoice(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("zipvoice")
+    }
+
+    pub fn is_kokoro(&self) -> bool {
+        !self.is_zipvoice()
+    }
+}
+
 impl Default for SherpaTtsConfig {
     fn default() -> Self {
         Self {
+            kind: default_sherpa_tts_kind(),
             model: default_kokoro_model(),
             voices: default_kokoro_voices(),
             tokens: default_kokoro_tokens(),
@@ -285,6 +313,12 @@ impl Default for SherpaTtsConfig {
             lang: None,
             sid: 0,
             speed: default_kokoro_speed(),
+            encoder: default_zipvoice_encoder(),
+            decoder: default_zipvoice_decoder(),
+            vocoder: default_zipvoice_vocoder(),
+            reference_audio: default_zipvoice_reference_audio(),
+            reference_text: default_zipvoice_reference_text(),
+            num_steps: default_zipvoice_num_steps(),
             num_threads: default_sherpa_threads(),
             provider: default_sherpa_provider(),
         }
@@ -701,6 +735,27 @@ fn default_kokoro_length_scale() -> f32 {
 fn default_kokoro_speed() -> f32 {
     1.0
 }
+fn default_sherpa_tts_kind() -> String {
+    "kokoro".to_string()
+}
+fn default_zipvoice_encoder() -> String {
+    "models/zipvoice/encoder.int8.onnx".to_string()
+}
+fn default_zipvoice_decoder() -> String {
+    "models/zipvoice/decoder.int8.onnx".to_string()
+}
+fn default_zipvoice_vocoder() -> String {
+    "models/zipvoice/vocos_24khz.onnx".to_string()
+}
+fn default_zipvoice_reference_audio() -> String {
+    "models/zipvoice/test_wavs/leijun-1.wav".to_string()
+}
+fn default_zipvoice_reference_text() -> String {
+    "那还是三十六年前, 一九八七年. 我呢考上了武汉大学的计算机系.".to_string()
+}
+fn default_zipvoice_num_steps() -> i32 {
+    4
+}
 fn default_sherpa_threads() -> i32 {
     2
 }
@@ -1106,6 +1161,7 @@ impl Config {
         cfg.wake.normalize();
         cfg.wake.validate()?;
         validate_talk_backends(&cfg)?;
+        validate_sherpa_tts(&cfg)?;
         validate_sherpa_providers(&cfg)?;
         Ok(cfg)
     }
@@ -1191,17 +1247,23 @@ impl Config {
             sherpa.tokens = join_if_relative(base, &sherpa.tokens);
         }
         if let Some(ref mut sherpa) = self.tts.sherpa {
-            sherpa.model = join_if_relative(base, &sherpa.model);
-            sherpa.voices = join_if_relative(base, &sherpa.voices);
+            if sherpa.is_kokoro() {
+                sherpa.model = join_if_relative(base, &sherpa.model);
+                sherpa.voices = join_if_relative(base, &sherpa.voices);
+                sherpa.dict_dir = join_if_relative(base, &sherpa.dict_dir);
+            }
             sherpa.tokens = join_if_relative(base, &sherpa.tokens);
             sherpa.data_dir = join_if_relative(base, &sherpa.data_dir);
-            sherpa.dict_dir = join_if_relative(base, &sherpa.dict_dir);
             sherpa.lexicon = sherpa
                 .lexicon
                 .split(',')
                 .map(|p| join_if_relative(base, p.trim()))
                 .collect::<Vec<_>>()
                 .join(",");
+            sherpa.encoder = join_if_relative(base, &sherpa.encoder);
+            sherpa.decoder = join_if_relative(base, &sherpa.decoder);
+            sherpa.vocoder = join_if_relative(base, &sherpa.vocoder);
+            sherpa.reference_audio = join_if_relative(base, &sherpa.reference_audio);
         }
         self.wake.model_dir = join_if_relative(base, &self.wake.model_dir);
         self.wake.encoder = join_if_relative(base, &self.wake.encoder);
@@ -1345,6 +1407,54 @@ fn validate_talk_backends(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+fn validate_sherpa_tts(cfg: &Config) -> Result<()> {
+    use crate::backends::uses_sherpa_tts;
+
+    #[cfg(feature = "sherpa-asr-tts")]
+    {
+        if !uses_sherpa_tts(&cfg.tts.backend) {
+            return Ok(());
+        }
+        let Some(tts) = &cfg.tts.sherpa else {
+            return Ok(());
+        };
+        let kind = tts.kind.trim().to_ascii_lowercase();
+        if kind != "kokoro" && kind != "zipvoice" {
+            return Err(DemoError::Config(format!(
+                "tts.sherpa.kind must be 'kokoro' or 'zipvoice', got '{kind}'"
+            )));
+        }
+        if tts.is_zipvoice() {
+            for (name, path) in [
+                ("encoder", tts.encoder.as_str()),
+                ("decoder", tts.decoder.as_str()),
+                ("vocoder", tts.vocoder.as_str()),
+                ("tokens", tts.tokens.as_str()),
+                ("data_dir", tts.data_dir.as_str()),
+                ("lexicon", tts.lexicon.as_str()),
+                ("reference_audio", tts.reference_audio.as_str()),
+            ] {
+                if path.trim().is_empty() {
+                    return Err(DemoError::Config(format!(
+                        "tts.sherpa.{name} is required when kind = zipvoice"
+                    )));
+                }
+            }
+            if tts.reference_text.trim().is_empty() {
+                return Err(DemoError::Config(
+                    "tts.sherpa.reference_text is required when kind = zipvoice (must match reference_audio transcript)".into(),
+                ));
+            }
+            if tts.num_steps <= 0 {
+                return Err(DemoError::Config(
+                    "tts.sherpa.num_steps must be > 0 for zipvoice".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_sherpa_providers(cfg: &Config) -> Result<()> {
     use crate::backends::{
         TalkBackendKind, classify_talk_backend, uses_sherpa_asr, uses_sherpa_tts,
@@ -1461,6 +1571,7 @@ url = "ws://127.0.0.1:9100"
 mod sherpa_backend_config_tests {
     use super::Config;
     use super::validate_sherpa_providers;
+    use super::validate_sherpa_tts;
     use crate::asr::AsrBackend;
     use crate::backends::TalkBackendKind;
     use crate::backends::classify_talk_backend;
@@ -1523,6 +1634,57 @@ model = "m"
         assert!(asr.model.contains("sensevoice"));
         let tts = cfg.tts.effective_sherpa();
         assert!(tts.model.contains("kokoro"));
+        assert!(tts.is_kokoro());
+    }
+
+    #[test]
+    fn parses_zipvoice_sherpa_tts_config() {
+        let raw = r#"
+[asr]
+backend = "sherpa"
+[asr.sherpa]
+model = "models/sensevoice/model.int8.onnx"
+tokens = "models/sensevoice/tokens.txt"
+[tts]
+backend = "sherpa"
+sample_rate = 24000
+[tts.sherpa]
+kind = "zipvoice"
+encoder = "models/zipvoice/encoder.int8.onnx"
+decoder = "models/zipvoice/decoder.int8.onnx"
+vocoder = "models/zipvoice/vocos_24khz.onnx"
+tokens = "models/zipvoice/tokens.txt"
+data_dir = "models/zipvoice/espeak-ng-data"
+lexicon = "models/zipvoice/lexicon.txt"
+reference_audio = "models/zipvoice/test_wavs/leijun-1.wav"
+reference_text = "那还是三十六年前, 一九八七年. 我呢考上了武汉大学的计算机系."
+num_steps = 4
+[llm]
+base_url = "http://127.0.0.1:1/v1"
+api_key = "k"
+model = "m"
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        let tts = cfg.tts.effective_sherpa();
+        assert!(tts.is_zipvoice());
+        assert_eq!(tts.num_steps, 4);
+        assert!(validate_sherpa_tts(&cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_sherpa_tts_kind() {
+        let raw = r#"
+[tts]
+backend = "sherpa"
+[tts.sherpa]
+kind = "pocket"
+[llm]
+base_url = "http://127.0.0.1/v1"
+api_key = "k"
+model = "m"
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert!(validate_sherpa_tts(&cfg).is_err());
     }
 
     #[test]
