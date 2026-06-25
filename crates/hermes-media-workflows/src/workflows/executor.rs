@@ -13,7 +13,10 @@ use super::definition::{WorkflowDefinition, WorkflowPlan, WorkflowStep};
 use super::store::{WorkflowRunRecord, WorkflowRunStatus, WorkflowRunStore};
 use crate::backends::FlowyMediaServices;
 use crate::llm_refine::{plan_storyboard, refine_with_llm_or_template};
-use crate::progress::{report_media_progress, workflow_step_progress};
+use crate::progress::{
+    prompt_refine_working, report_media_progress, storyboard_planning, storyboard_shot_image,
+    storyboard_shot_video, workflow_started, workflow_step_progress,
+};
 use crate::prompt_refine::RefineInput;
 use crate::qa::{qa_check_image, qa_check_video};
 
@@ -42,7 +45,7 @@ impl WorkflowExecutor {
             image_backend,
             video_backend,
             store,
-            max_retries: max_retries.max(1).min(5),
+            max_retries: max_retries.clamp(1, 5),
         }
     }
 
@@ -78,23 +81,37 @@ impl WorkflowExecutor {
         record.status = WorkflowRunStatus::Running;
         self.store.save(&record);
 
+        record.status = WorkflowRunStatus::Running;
+        self.store.save(&record);
+
         let order = topo_sort(&def.steps)?;
+        let step_total = order.len();
+        report_media_progress(workflow_started(&def.id, step_total));
+
         let mut ctx: HashMap<String, Value> = HashMap::new();
         ctx.insert("inputs".into(), def.inputs.clone());
 
-        for step_id in order {
+        for (step_idx, step_id) in order.iter().enumerate() {
             let step = def
                 .steps
                 .iter()
-                .find(|s| s.id == step_id)
+                .find(|s| s.id == *step_id)
                 .ok_or_else(|| ToolError::ExecutionFailed(format!("missing step {step_id}")))?;
 
             record.current_step = Some(step_id.clone());
             self.store.save(&record);
 
-            report_media_progress(workflow_step_progress(&step.kind, &step_id));
-
             let resolved_input = resolve_value(&step.input, &ctx);
+            let medium = resolved_input.get("medium").and_then(|v| v.as_str());
+            report_media_progress(workflow_step_progress(
+                &def.id,
+                step_idx + 1,
+                step_total,
+                &step.kind,
+                step_id,
+                medium,
+            ));
+
             let output = match self.run_step_with_retry(step, &resolved_input).await {
                 Ok(output) => output,
                 Err(err) => {
@@ -107,7 +124,7 @@ impl WorkflowExecutor {
             };
 
             ctx.insert(format!("steps.{step_id}"), output.clone());
-            record.step_outputs.insert(step_id, output);
+            record.step_outputs.insert(step_id.clone(), output);
             self.store.save(&record);
         }
 
@@ -197,6 +214,8 @@ impl WorkflowExecutor {
             .unwrap_or(Value::Null);
         Ok(json!({
             "raw": parsed,
+            "api_prompt": prompt,
+            "negative_prompt": input.get("negative_prompt").and_then(|v| v.as_str()),
             "best_url": best_url,
             "output": parsed.get("assets").or_else(|| parsed.get("images")).cloned().unwrap_or(Value::Null),
         }))
@@ -245,6 +264,9 @@ impl WorkflowExecutor {
             .map_err(|e| ToolError::ExecutionFailed(format!("video step JSON: {e}")))?;
         Ok(json!({
             "raw": parsed,
+            "api_prompt": prompt,
+            "negative_prompt": input.get("negative_prompt").and_then(|v| v.as_str()),
+            "motion_prompt": input.get("motion_prompt").and_then(|v| v.as_str()),
             "video_url": parsed.get("video"),
             "local_path": parsed.pointer("/assets/0/local_path").or_else(|| parsed.get("local_path")),
             "output": parsed,
@@ -268,16 +290,19 @@ impl WorkflowExecutor {
                     .is_some_and(|s| s == "true")
             });
 
-        let refined = refine_with_llm_or_template(
-            &self.services,
-            &RefineInput {
-                prompt,
-                medium,
-                aspect_ratio,
-                has_reference_image,
-            },
-        )
-        .await;
+        let refined = {
+            report_media_progress(prompt_refine_working(medium));
+            refine_with_llm_or_template(
+                &self.services,
+                &RefineInput {
+                    prompt,
+                    medium,
+                    aspect_ratio,
+                    has_reference_image,
+                },
+            )
+            .await
+        };
 
         Ok(json!({
             "output": refined.output,
@@ -308,17 +333,28 @@ impl WorkflowExecutor {
             .unwrap_or(self.services.media.workflows.storyboard_max_shots)
             .clamp(1, 5);
 
-        let plan = plan_storyboard(&self.services, prompt, max_shots).await;
+        let plan = {
+            report_media_progress(storyboard_planning());
+            plan_storyboard(&self.services, prompt, max_shots).await
+        };
+        let shot_total = plan.shots.len();
         let mut shot_outputs = Vec::new();
         let mut artifacts = Vec::new();
 
         for (idx, shot) in plan.shots.iter().enumerate() {
+            let shot_no = idx + 1;
+            report_media_progress(storyboard_shot_image(shot_no, shot_total));
             let image_out = self
                 .run_image_step(&json!({
                     "prompt": shot.scene_prompt,
                 }))
                 .await?;
             let best_url = image_out.get("best_url").cloned().unwrap_or(Value::Null);
+            report_media_progress(storyboard_shot_video(
+                shot_no,
+                shot_total,
+                shot.duration_secs,
+            ));
             let video_out = self
                 .run_video_step(&json!({
                     "prompt": shot.motion_prompt,

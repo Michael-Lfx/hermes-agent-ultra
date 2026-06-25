@@ -6,6 +6,7 @@ use serde_json::json;
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
+use crate::delivery::workflow_prompt_json;
 use crate::workflows::store::WorkflowRunStore;
 
 pub struct MediaWorkflowStatusHandler {
@@ -32,11 +33,17 @@ impl ToolHandler for MediaWorkflowStatusHandler {
             ToolError::ExecutionFailed(format!("workflow run not found: {run_id}"))
         })?;
 
-        Ok(json!({
+        let mut out = json!({
             "run": record,
             "manifest_hint": format!("~/.hermes/media/workflows/{}/manifest.json", record.run_id),
-        })
-        .to_string())
+        });
+        let prompt_payload = workflow_prompt_json(&record);
+        if let (Some(obj), Some(prompts)) = (out.as_object_mut(), prompt_payload.as_object()) {
+            for (key, value) in prompts {
+                obj.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(out.to_string())
     }
 
     fn schema(&self) -> ToolSchema {
@@ -47,7 +54,7 @@ impl ToolHandler for MediaWorkflowStatusHandler {
         );
         tool_schema(
             "media_workflow_status",
-            "Query status and artifacts for a media workflow run.",
+            "Query status and artifacts for a media workflow run. Succeeded runs include user_prompt_block with final API prompts.",
             JsonSchema::object(props, vec!["run_id".into()]),
         )
     }

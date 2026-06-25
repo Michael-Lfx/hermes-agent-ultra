@@ -13,7 +13,10 @@ use crate::assets::{
     extract_image_urls, persist_data_url, persist_from_url, remote_fallback_artifact,
 };
 use crate::delivery::{MediaProvenance, image_generation_response};
-use crate::progress::report_media_progress;
+use crate::progress::{
+    MediaProgressHeartbeat, image_credits_check, image_persisting, image_resolving_model,
+    image_submitting, image_waiting_upstream, report_media_progress,
+};
 
 pub struct FlowyImageGenBackend {
     services: FlowyMediaServices,
@@ -33,8 +36,10 @@ impl FlowyImageGenBackend {
 impl ImageGenBackend for FlowyImageGenBackend {
     async fn generate(&self, request: ImageGenRequest) -> Result<String, ToolError> {
         self.services.require_token().await?;
+        report_media_progress(image_credits_check());
         self.services.ensure_image_credits().await?;
 
+        report_media_progress(image_resolving_model());
         let model = self
             .services
             .resolve_image_model(request.model.as_deref())
@@ -47,16 +52,18 @@ impl ImageGenBackend for FlowyImageGenBackend {
             extra: request.extra.unwrap_or(Value::Null),
         };
 
-        report_media_progress("正在向云端提交图片生成请求…");
-
+        report_media_progress(image_submitting());
+        let heartbeat = MediaProgressHeartbeat::start(5, image_waiting_upstream);
         let upstream = self
             .services
             .api
             .generate_image(&self.services.session, &flowy_req)
             .await
-            .map_err(map_server_err)?;
+            .map_err(map_server_err);
+        heartbeat.stop();
+        let upstream = upstream?;
 
-        report_media_progress("图片已生成，正在处理并保存…");
+        report_media_progress(image_persisting());
 
         let mut artifacts = Vec::new();
         let urls = extract_image_urls(&upstream);
@@ -100,10 +107,7 @@ impl ImageGenBackend for FlowyImageGenBackend {
             &model,
             &artifacts,
             &upstream,
-            MediaProvenance {
-                prompt: Some(request.prompt),
-                ..Default::default()
-            },
+            MediaProvenance::for_api_call(request.prompt, None, None, None),
         ))
     }
 }

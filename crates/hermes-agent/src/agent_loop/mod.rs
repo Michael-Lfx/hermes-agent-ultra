@@ -625,7 +625,7 @@ fn tool_progress_initial_delay_ms() -> u64 {
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .filter(|v| *v > 0)
-        .unwrap_or(12_000)
+        .unwrap_or(3_000)
 }
 
 fn tool_progress_interval_ms() -> u64 {
@@ -647,20 +647,40 @@ fn is_media_tool(name: &str) -> bool {
     )
 }
 
+fn tool_progress_user_label(name: &str) -> &str {
+    match name {
+        "terminal" => "终端命令",
+        "execute_code" => "代码执行",
+        "image_generate" => "图片生成",
+        "video_generate" => "视频生成",
+        "media_workflow_plan" => "媒体工作流规划",
+        "media_workflow_run" => "媒体工作流",
+        "media_workflow_status" => "工作流进度查询",
+        "web_search" => "网络搜索",
+        "web_extract" => "网页抓取",
+        "browser_navigate" => "浏览器",
+        "read_file" => "读取文件",
+        "write_file" => "写入文件",
+        other => other,
+    }
+}
+
 fn format_media_tool_progress_fallback(name: &str, pulse: u32) -> String {
     match (name, pulse) {
         ("video_generate", 1) => "正在提交视频生成任务到云端…".into(),
         ("video_generate", 2) => "视频任务已排队，等待云端开始渲染…".into(),
         ("video_generate", 3) => "云端正在渲染视频（通常需要 1–5 分钟）…".into(),
         ("video_generate", _) => "视频仍在云端渲染中，请稍候…".into(),
-        ("image_generate", 1) => "正在生成图片…".into(),
-        ("image_generate", 2) => "图片生成中，正在等待云端返回…".into(),
-        ("image_generate", _) => "图片仍在生成中…".into(),
+        ("image_generate", 1) => "正在检查积分并提交图片生成…".into(),
+        ("image_generate", 2) => "正在等待云端绘图…".into(),
+        ("image_generate", _) => "图片仍在云端生成中，请稍候…".into(),
         ("media_workflow_run", 1) => "正在执行媒体工作流（规划/精炼提示词）…".into(),
         ("media_workflow_run", 2) => "工作流进行中：生成图片或视频片段…".into(),
         ("media_workflow_run", _) => "工作流仍在执行，请稍候…".into(),
-        (_, 1) => format!("正在执行 {name}…"),
-        (_, _) => format!("{name} 仍在执行，请稍候…"),
+        ("media_workflow_status", 1) => "正在查询媒体工作流进度…".into(),
+        ("media_workflow_status", _) => "仍在等待媒体工作流完成…".into(),
+        (_, 1) => format!("正在执行{}…", tool_progress_user_label(name)),
+        (_, _) => format!("{}仍在执行，请稍候…", tool_progress_user_label(name)),
     }
 }
 
@@ -669,7 +689,11 @@ fn format_tool_progress_message(turn: u32, tool_names: &[String], pulse: u32) ->
         return detail;
     }
 
-    let joined = tool_names.join(", ");
+    let joined = tool_names
+        .iter()
+        .map(|n| tool_progress_user_label(n.as_str()))
+        .collect::<Vec<_>>()
+        .join("、");
     let webish = tool_names.iter().any(|name| {
         matches!(
             name.as_str(),
@@ -690,7 +714,7 @@ fn format_tool_progress_message(turn: u32, tool_names: &[String], pulse: u32) ->
         if is_media_tool(name) {
             format_media_tool_progress_fallback(name, pulse)
         } else {
-            format!("正在执行 {name}（第 {turn} 步）")
+            format!("正在执行{}（第 {turn} 步）", tool_progress_user_label(name))
         }
     } else {
         format!("处理中，请稍候（第 {turn} 步）")
@@ -755,10 +779,6 @@ impl ToolProgressWatchdog {
         let handle = tokio::spawn(async move {
             let initial = Duration::from_millis(tool_progress_initial_delay_ms());
             let interval = Duration::from_millis(tool_progress_interval_ms());
-            tokio::time::sleep(initial).await;
-            if stop_worker.load(Ordering::Acquire) {
-                return;
-            }
             let mut pulse = 0u32;
             loop {
                 if stop_worker.load(Ordering::Acquire) {
@@ -779,7 +799,8 @@ impl ToolProgressWatchdog {
                     tools = %tool_names.join(","),
                     "agent tool progress notice"
                 );
-                tokio::time::sleep(interval).await;
+                let wait = if pulse == 1 { initial } else { interval };
+                tokio::time::sleep(wait).await;
             }
         });
         Self {

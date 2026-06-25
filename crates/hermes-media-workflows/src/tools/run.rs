@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
+use crate::delivery::workflow_prompt_json;
 use crate::workflows::WorkflowPlan;
 use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStatus;
@@ -55,7 +56,11 @@ impl ToolHandler for MediaWorkflowRunHandler {
             return Ok(serialize_run_result(&record));
         }
 
+        let workflow_id = plan.workflow_id.clone();
         let run_id = self.runner.spawn_plan(plan)?;
+        hermes_core::report_tool_progress(format!(
+            "媒体工作流已在后台运行（workflow={workflow_id}，run_id={run_id}），正在优化提示词并生成…"
+        ));
         Ok(json!({
             "success": true,
             "run_id": run_id,
@@ -89,7 +94,7 @@ impl ToolHandler for MediaWorkflowRunHandler {
         );
         tool_schema(
             "media_workflow_run",
-            "Execute a media workflow plan (refined prompts, image/video pipeline). Async by default — poll media_workflow_status.",
+            "Execute a media workflow plan (refined prompts, image/video pipeline). Async by default — poll media_workflow_status. Completed runs include user_prompt_block with final API prompts to show the user.",
             JsonSchema::object(props, vec![]),
         )
     }
@@ -103,7 +108,26 @@ fn serialize_run_result(record: &crate::workflows::store::WorkflowRunRecord) -> 
         .map(|p| format!("MEDIA:{p}"))
         .collect();
 
-    json!({
+    let prompt_payload = workflow_prompt_json(record);
+    let user_prompt_block = prompt_payload
+        .get("user_prompt_block")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
+    let mut hint_parts = Vec::new();
+    if let Some(block) = &user_prompt_block {
+        hint_parts.push(format!(
+            "Include user_prompt_block in your reply so the user sees the final API prompts:\n{block}"
+        ));
+    }
+    if !media_tags.is_empty() {
+        hint_parts.push(format!(
+            "Include {} for native media delivery",
+            media_tags.join(" ")
+        ));
+    }
+
+    let mut body = json!({
         "success": record.status == WorkflowRunStatus::Succeeded,
         "run_id": record.run_id,
         "workflow_id": record.workflow_id,
@@ -113,7 +137,12 @@ fn serialize_run_result(record: &crate::workflows::store::WorkflowRunRecord) -> 
         "step_outputs": record.step_outputs,
         "media_tags": media_tags,
         "manifest_path": format!("~/.hermes/media/workflows/{}/manifest.json", record.run_id),
-        "hint": if media_tags.is_empty() { Value::Null } else { json!(format!("Include {} in your reply for native media delivery", media_tags.join(" "))) },
-    })
-    .to_string()
+        "hint": if hint_parts.is_empty() { Value::Null } else { json!(hint_parts.join("\n\n")) },
+    });
+    if let (Some(obj), Some(prompts)) = (body.as_object_mut(), prompt_payload.as_object()) {
+        for (key, value) in prompts {
+            obj.insert(key.clone(), value.clone());
+        }
+    }
+    body.to_string()
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use hermes_core::ToolError;
+use hermes_core::{DetachedToolProgressGuard, ToolError};
 
 use super::definition::WorkflowDefinition;
 use super::definition::WorkflowPlan;
@@ -70,7 +70,9 @@ impl WorkflowRunner {
 
         let runner = Arc::clone(self);
         let def = def.clone();
+        let detached = DetachedToolProgressGuard::attach(&run_id);
         tokio::spawn(async move {
+            let _detached = detached;
             if let Err(err) = runner
                 .executor
                 .run_definition_existing(&spawn_id, &def)

@@ -138,8 +138,17 @@ pub fn is_coalescable_media_tool_status(event_type: &str, message: &str) -> bool
         || m.contains("分镜")
         || m.contains("云端")
         || m.contains("渲染")
+        || m.contains("绘图")
+        || m.contains("提示词")
+        || m.contains("优化")
+        || m.contains("积分")
+        || m.contains("媒体")
+        || m.contains("生图")
+        || m.contains("生视频")
+        || m.contains("终端命令")
         || m.contains("video_generate")
         || m.contains("image_generate")
+        || m.contains("media_workflow")
 }
 
 fn is_coalescable_tool_status(event_type: &str, message: &str) -> bool {
@@ -170,11 +179,31 @@ fn format_coalesced_web_tool_status(lines: &[String]) -> String {
 }
 
 const WEB_TOOL_STATUS_DEBOUNCE_MS: u64 = 1_000;
+/// WeCom/Weixin cannot edit status messages — throttle outbound progress spam.
+const NON_EDIT_PROGRESS_MIN_INTERVAL_MS: u64 = 25_000;
+
+fn media_progress_bucket(message: &str) -> &'static str {
+    if message.contains("排队") {
+        "queue"
+    } else if message.contains("渲染") {
+        "render"
+    } else if message.contains("保存") {
+        "persist"
+    } else if message.contains("工作流") || message.contains("分镜") {
+        "workflow"
+    } else if message.contains("绘图") || message.contains("图片") {
+        "image"
+    } else {
+        "other"
+    }
+}
 
 struct WebToolStatusCoalescer {
     lines: Vec<String>,
     anchor_message_id: Option<String>,
     debounce_gen: u64,
+    last_non_edit_sent_at: Option<Instant>,
+    last_non_edit_bucket: Option<&'static str>,
 }
 
 impl WebToolStatusCoalescer {
@@ -227,7 +256,28 @@ async fn deliver_coalesced_web_tool_status(
     let _ = gateway
         .send_message(platform, chat_id, combined, None)
         .await;
-    coalescer.lock().unwrap().clear_after_send(!edit_capable);
+    if !edit_capable {
+        let mut guard = coalescer.lock().unwrap();
+        guard.last_non_edit_sent_at = Some(Instant::now());
+        guard.last_non_edit_bucket = Some(media_progress_bucket(combined));
+        guard.clear_after_send(true);
+    } else {
+        coalescer.lock().unwrap().clear_after_send(false);
+    }
+}
+
+fn should_throttle_non_edit_progress(
+    coalescer: &StdMutex<WebToolStatusCoalescer>,
+    combined: &str,
+) -> bool {
+    let guard = coalescer.lock().unwrap();
+    let bucket = media_progress_bucket(combined);
+    if guard.last_non_edit_bucket == Some(bucket) {
+        if let Some(at) = guard.last_non_edit_sent_at {
+            return at.elapsed() < Duration::from_millis(NON_EDIT_PROGRESS_MIN_INTERVAL_MS);
+        }
+    }
+    false
 }
 
 /// Suppress noisy lifecycle lines that duplicate streamed thinking output.
@@ -278,6 +328,8 @@ pub fn make_gateway_status_callback(
         lines: Vec::new(),
         anchor_message_id: None,
         debounce_gen: 0,
+        last_non_edit_sent_at: None,
+        last_non_edit_bucket: None,
     }));
     let last_tool_progress_text: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
     Arc::new(move |event_type: &str, message: &str| {
@@ -347,6 +399,9 @@ pub fn make_gateway_status_callback(
                     return;
                 }
                 let combined = coalescer.lock().unwrap().combined_text();
+                if should_throttle_non_edit_progress(&coalescer, &combined) {
+                    return;
+                }
                 deliver_coalesced_web_tool_status(
                     &gw,
                     &platform_msg,

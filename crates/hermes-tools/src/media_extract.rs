@@ -44,10 +44,7 @@ pub fn extract_media(content: &str) -> (Vec<(String, bool)>, String) {
         }
         path = path
             .trim_matches(|c: char| {
-                matches!(
-                    c,
-                    '`' | '"' | '\'' | ',' | '.' | ';' | ':' | ')' | '}' | ']'
-                )
+                matches!(c, '`' | '"' | '\'' | ',' | ';' | ':' | ')' | '}' | ']')
             })
             .to_string();
         if path.is_empty() {
@@ -105,5 +102,14 @@ mod tests {
         assert_eq!(media.len(), 1);
         assert!(media[0].0.contains("AGENTS.md"));
         assert!(cleaned.is_empty());
+    }
+
+    #[test]
+    fn preserves_dot_in_windows_hermes_home_path() {
+        let raw = r"MEDIA:C:\Users\alice\.hermes-agent-ultra\media\generated\2026-06-25\clip.mp4";
+        let (media, _) = extract_media(raw);
+        assert_eq!(media.len(), 1);
+        assert!(media[0].0.contains(".hermes-agent-ultra"));
+        assert!(media[0].0.ends_with("clip.mp4"));
     }
 }

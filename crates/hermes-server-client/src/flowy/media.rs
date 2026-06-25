@@ -126,7 +126,7 @@ impl FlowyApiClient {
             let record = self.get_video_task(session, local_id).await?;
             let elapsed = started.elapsed().as_secs();
             let status_changed = last_status != Some(record.status);
-            let report_due = last_report.elapsed() >= Duration::from_secs(8);
+            let report_due = last_report.elapsed() >= Duration::from_secs(30);
             if let Some(ref mut cb) = on_progress
                 && (status_changed || report_due)
             {

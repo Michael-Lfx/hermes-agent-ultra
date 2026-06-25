@@ -53,6 +53,11 @@ fn platform_wants_processing_ack(platform: &str) -> bool {
     )
 }
 
+/// Minute-level "still processing" pings — disabled on WeCom/Weixin where tool_progress is used.
+fn platform_wants_minute_processing_heartbeat(platform: &str) -> bool {
+    matches!(platform.trim().to_ascii_lowercase().as_str(), "feishu")
+}
+
 fn streaming_feedback_delay_ms() -> u64 {
     std::env::var("HERMES_GATEWAY_STREAMING_FEEDBACK_DELAY_MS")
         .ok()
@@ -1493,17 +1498,20 @@ impl Gateway {
             let done_progress = feedback_done.clone();
             let progress_start = Instant::now();
             let progress_interval_ms = non_streaming_progress_interval_ms();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(progress_interval_ms)).await;
-                while !done_progress.load(Ordering::Acquire) {
-                    if let Some(adapter) = adapter_progress.clone() {
-                        let elapsed_min = progress_start.elapsed().as_secs().div_euclid(60).max(1);
-                        let msg = format!("仍在处理中（已运行约 {elapsed_min} 分钟）...");
-                        let _ = adapter.send_message(&chat_id_progress, &msg, None).await;
-                    }
+            if platform_wants_minute_processing_heartbeat(&incoming.platform) {
+                tokio::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(progress_interval_ms)).await;
-                }
-            });
+                    while !done_progress.load(Ordering::Acquire) {
+                        if let Some(adapter) = adapter_progress.clone() {
+                            let elapsed_min =
+                                progress_start.elapsed().as_secs().div_euclid(60).max(1);
+                            let msg = format!("仍在处理中（已运行约 {elapsed_min} 分钟）...");
+                            let _ = adapter.send_message(&chat_id_progress, &msg, None).await;
+                        }
+                        tokio::time::sleep(Duration::from_millis(progress_interval_ms)).await;
+                    }
+                });
+            }
         }
         let agent_start = Instant::now();
         info!(
