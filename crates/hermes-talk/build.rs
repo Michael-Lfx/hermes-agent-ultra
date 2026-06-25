@@ -1,6 +1,6 @@
 fn main() {
-    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
     let feature_enabled = std::env::var("CARGO_FEATURE_ROCKCHIP").is_ok();
+    let target_arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
 
     if feature_enabled && target_arch == "aarch64" {
         link_tts_sdk();
@@ -57,12 +57,10 @@ fn link_asr_sdk() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
     let project_dir = std::path::Path::new(&manifest);
 
-    // Search in-project copy first, then SDK path
     let mut lib_dirs: Vec<std::path::PathBuf> = Vec::new();
     lib_dirs.push(project_dir.join("rkaudio/lib"));
     if let Some(ref s) = asr_sdk {
         lib_dirs.push(std::path::PathBuf::from(s).join("lib/Linux/aarch64"));
-        // Also include ROCKX2 libs
         lib_dirs.push(
             std::path::PathBuf::from(s).join("RK3588_ROCKX2_SDK_V1.1.2_20260311/lib/Linux/aarch64"),
         );
@@ -101,9 +99,6 @@ fn link_asr_sdk() {
         println!("cargo:rustc-link-lib={}", lib);
     }
 
-    // Small C wrapper that references GetRockXModuleASR and RockXFeatureInit,
-    // forcing the linker to keep librockasr.so and librockx_modules.so in NEEDED
-    // so their ELF constructors register the LLMASR module.
     let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
     let project_dir = std::path::Path::new(&manifest);
     cc::Build::new()

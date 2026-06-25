@@ -57,5 +57,19 @@ if (-not (Test-Path $Bin)) {
     throw "missing binary: $Bin"
 }
 
+$BinDir = Split-Path -Parent $Bin
+$env:PATH = "$BinDir;" + (($env:PATH -split ';' | Where-Object { $_ -and ($_ -ne $BinDir) }) -join ';')
+
 Write-Host "HERMES_HOME=$($env:HERMES_HOME)"
-& $Bin talk run @args
+Write-Host "Starting voice dialog (hermes talk run)..."
+Push-Location $BinDir
+try {
+    & $Bin talk run @args
+    $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
+    if ($code -ne 0) {
+        Write-Error "hermes talk exited with code $code (check microphone/speakers with: .\bin\hermes-agent-ultra.exe talk list-devices)"
+        exit $code
+    }
+} finally {
+    Pop-Location
+}

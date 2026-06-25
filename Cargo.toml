@@ -68,7 +68,7 @@ hermes-parity-tests = { path = "crates/hermes-parity-tests" }
 hermes-strategies = { path = "crates/hermes-strategies" }
 hermes-market-watch = { path = "crates/hermes-market-watch" }
 hermes-copilot-lite = { path = "crates/hermes-copilot-lite" }
-hermes-talk = { path = "crates/hermes-talk" }
+hermes-talk = { path = "crates/hermes-talk", default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -130,7 +130,7 @@ indicatif = "0.18"
 
 # hermes-talk (voice dialog)
 cpal = "0.15"
-sherpa-onnx = "1.13"
+sherpa-onnx = { path = "crates/sherpa-onnx", default-features = false, features = ["static"] }
 aec-rs = "1.0"
 webrtc-vad = "0.4"
 pinyin = "0.11"

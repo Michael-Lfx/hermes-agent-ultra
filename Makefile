@@ -12,7 +12,7 @@
 # Voice dialog (hermes talk — requires --features talk on hermes-cli):
 #   make build-talk           # debug build with talk feature
 #   make release-talk         # ensure talk models, then release build with talk feature
-#   make release-talk-rockchip # native aarch64 + Rockchip local ASR/TTS
+#   make release-talk-rockchip # native aarch64 + Rockchip ASR/TTS (no sherpa SenseVoice/Kokoro)
 #   make talk-init            # init $HERMES_HOME/hermes-talk
 #   make talk-run             # start voice dialog loop (cargo run)
 #   make start-talk           # start talk (release bin if built; auto-detect OS)
@@ -45,6 +45,12 @@ TALK_FEATURES     := talk
 TALK_FEATURES_RK  := talk-rockchip
 TALK_PKG          := -p $(BIN_CRATE) --features $(TALK_FEATURES) --bin $(BIN)
 TALK_PKG_RK       := -p $(BIN_CRATE) --features $(TALK_FEATURES_RK) --bin $(BIN)
+# Platform sherpa runtime pack for release/package (see SHERPA_ONNX_PACK in sherpa-onnx-sys/build.rs)
+SHERPA_ONNX_VERSION := 1.13.3
+TALK_SHERPA_PACK_windows := cpu
+TALK_SHERPA_PACK_linux   := cpu
+TALK_SHERPA_PACK_macos   := cpu
+TALK_SHERPA_PACK         := $(TALK_SHERPA_PACK_$(HOST_OS))
 TALK_CRATE        := crates/hermes-talk
 TALK_RKAUDIO      := $(TALK_CRATE)/rkaudio
 TALK_RUN          = $(CARGO) run $(TALK_PKG) -- talk
@@ -122,9 +128,10 @@ PACKAGE_TALK_ENV  := ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) BI
 
 .PHONY: help build release release-arm release-arm64 release-arm64-musl \
         test check clippy clean \
-        build-talk release-talk release-talk-rockchip release-talk-rockchip-arm64 \
+        build-talk build-talk-windows release-talk release-talk-rockchip release-talk-rockchip-arm64 \
         package-talk package-talk-windows package-talk-linux package-talk-macos \
         package-talk-rockchip prefetch-talk-aarch64 ensure-talk-models \
+        fetch-talk-sherpa-runtime fetch-talk-sherpa-runtime-windows \
         download-talk-models download-talk-models-windows download-talk-models-unix \
         check-talk-models check-talk-models-windows check-talk-models-unix \
         test-talk check-talk clippy-talk \
@@ -148,8 +155,11 @@ help:
 	@echo ""
 	@echo "hermes talk (voice dialog, --features talk):"
 	@echo "  build-talk                 Debug build hermes-cli + hermes-talk"
+	@echo "  build-talk-windows         Debug build with sherpa CPU (Windows only)"
 	@echo "  release-talk               Ensure talk models, then release build with talk feature"
-	@echo "  release-talk-rockchip      Native aarch64 + Rockchip local ASR/TTS"
+	@echo "  release-talk-windows       Windows: download sherpa CPU runtime + release talk"
+	@echo "  fetch-talk-sherpa-runtime-windows  Download sherpa CPU runtime (.cross-cache)"
+	@echo "  release-talk-rockchip      Native aarch64 + Rockchip ASR/TTS (no sherpa ASR/TTS)"
 	@echo "  release-talk-rockchip-arm64 Cross-compile aarch64 + Rockchip"
 	@echo "  package-talk                 Bundle talk release (auto-detect OS; needs .models/)"
 	@echo "  package-talk-windows         Bundle for Windows (.zip)"
@@ -182,7 +192,7 @@ help:
 	@echo "  RK_TTS_SDK_DIR=    Rockchip TTS SDK root (fallback if not in .models/)"
 	@echo "  RK_ASR_SDK_DIR=    Rockchip ASR SDK root (fallback if not in .models/)"
 	@echo "  MODELS_ROOT=       Packaging model tree (default: ./.models, incl. auth/)"
-	@echo "  HTTPS_PROXY=       Proxy for download-talk-models (e.g. http://127.0.0.1:7890)"
+	@echo "  HTTPS_PROXY=       Optional proxy for talk model/sherpa downloads (set in shell)"
 	@echo "  TALK_VENDOR_SCRIPTS= Path to aarch64 prefetch scripts (default: ../tts-stream/scripts)"
 
 build:
@@ -224,9 +234,54 @@ clean:
 build-talk:
 	$(CARGO) build $(TALK_PKG)
 
-release-talk: ensure-talk-models
-	$(CARGO) build --release $(TALK_PKG)
-	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES))"
+build-talk-windows:
+ifeq ($(HOST_OS),windows)
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
+else
+	@echo "build-talk-windows requires Windows (detected: $(HOST_OS))" >&2
+	@exit 1
+endif
+
+# Dev build: CPU static sherpa on all platforms.
+release-talk: release-talk-$(HOST_OS)
+
+release-talk-unknown:
+	@echo "Cannot detect host OS; use release-talk-windows, release-talk-linux, or release-talk-macos" >&2
+	@exit 1
+
+release-talk-windows: ensure-talk-models fetch-talk-sherpa-runtime
+ifeq ($(HOST_OS),windows)
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
+	@echo Built $(RELEASE_BIN) (talk + SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_windows))
+else
+	@echo "release-talk-windows requires Windows (detected: $(HOST_OS))" >&2
+	@exit 1
+endif
+
+release-talk-linux: ensure-talk-models fetch-talk-sherpa-runtime
+	SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_linux) $(CARGO) build --release $(TALK_PKG)
+	@echo "Built $(RELEASE_BIN) (talk + SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_linux))"
+
+release-talk-macos: ensure-talk-models fetch-talk-sherpa-runtime
+	SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_macos) $(CARGO) build --release $(TALK_PKG)
+	@echo "Built $(RELEASE_BIN) (talk + SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_macos))"
+
+fetch-talk-sherpa-runtime: fetch-talk-sherpa-runtime-$(HOST_OS)
+
+fetch-talk-sherpa-runtime-unknown:
+	@echo "Cannot detect host OS; use fetch-talk-sherpa-runtime-windows or fetch-talk-sherpa-runtime-unix" >&2
+	@exit 1
+
+fetch-talk-sherpa-runtime-windows:
+ifeq ($(HOST_OS),windows)
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/fetch_sherpa_runtime.ps1 auto
+else
+	@echo "fetch-talk-sherpa-runtime-windows requires Windows" >&2
+	@exit 1
+endif
+
+fetch-talk-sherpa-runtime-linux fetch-talk-sherpa-runtime-macos fetch-talk-sherpa-runtime-unix:
+	bash $(TALK_SCRIPTS)/fetch_sherpa_runtime.sh auto
 
 ensure-talk-models: ensure-talk-models-$(HOST_OS)
 
@@ -263,6 +318,7 @@ check-talk-models-linux check-talk-models-macos check-talk-models-unix:
 	CHECK_ONLY=1 HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) bash $(TALK_SCRIPTS)/ensure_models.sh
 
 release-talk-rockchip:
+	SHERPA_ONNX_PACK=cpu \
 	RUSTFLAGS="$(RK_LINK_FLAGS)" \
 	RK_TTS_SDK_DIR=$(RK_TTS_SDK_DIR) \
 	RK_ASR_SDK_DIR=$(RK_ASR_SDK_DIR) \
@@ -270,6 +326,7 @@ release-talk-rockchip:
 	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES_RK))"
 
 release-talk-rockchip-arm64: $(GCC_AARCH64) $(TALK_RKAUDIO)/librktts_c_api.a $(TALK_RKAUDIO)/lib
+	SHERPA_ONNX_PACK=cpu \
 	$(CROSS_AARCH64_ENV) \
 	RUSTFLAGS="$(RK_LINK_FLAGS) -C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
 	$(CROSS) build --release --target $(ARM64_TARGET) $(TALK_PKG_RK)

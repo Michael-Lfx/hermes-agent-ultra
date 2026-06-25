@@ -4,7 +4,7 @@
 # Usage:
 #   powershell -File scripts/talk/download_models.ps1
 #   $env:MODELS_ROOT = "C:\path\.models"; powershell -File scripts/talk/download_models.ps1
-#   $env:HTTPS_PROXY = "http://127.0.0.1:7890"; powershell -File scripts/talk/download_models.ps1
+#   (optional) set HTTPS_PROXY in the shell before running if downloads need a proxy
 $ErrorActionPreference = "Stop"
 
 function Get-DownloadProxy {
@@ -97,6 +97,19 @@ if ((Test-Path (Join-Path $kokoroDest "model.onnx")) -and (Test-Path (Join-Path 
     Write-Host "  -> $kokoroDest"
 }
 
+# ZipVoice (optional TTS; https://k2-fsa.github.io/sherpa/onnx/tts/zipvoice.html)
+$zipvoiceDest = Join-Path $Dest "zipvoice"
+if ((Test-Path (Join-Path $zipvoiceDest "encoder.int8.onnx")) -and (Test-Path (Join-Path $zipvoiceDest "vocos_24khz.onnx"))) {
+    Write-Host "=== zipvoice: already present ==="
+} else {
+    Write-Host "=== zipvoice (ZipVoice distill int8 zh+en) ==="
+    $zvArchive = Join-Path $Tmp "sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2"
+    Fetch "$SherpaBase/tts-models/sherpa-onnx-zipvoice-distill-int8-zh-en-emilia.tar.bz2" $zvArchive
+    Extract-TarBz2 $zvArchive $zipvoiceDest
+    Fetch "$SherpaBase/vocoder-models/vocos_24khz.onnx" (Join-Path $zipvoiceDest "vocos_24khz.onnx")
+    Write-Host "  -> $zipvoiceDest"
+}
+
 # KWS
 $kwsDest = Join-Path $Dest "kws-zh-en"
 if ((Test-Path (Join-Path $kwsDest "encoder.onnx")) -and (Test-Path (Join-Path $kwsDest "decoder.onnx"))) {
@@ -167,7 +180,7 @@ function Install-ToTalkHome {
     } else { $null }
     if (-not $talkHome) { return }
     Write-Host "=== install to talk home: $talkHome ==="
-    foreach ($sub in @("sensevoice", "kokoro", "kws-zh-en", "vad", "denoise", "speaker")) {
+    foreach ($sub in @("sensevoice", "kokoro", "zipvoice", "kws-zh-en", "vad", "denoise", "speaker")) {
         $src = Join-Path $Dest $sub
         if (-not (Test-Path $src)) { continue }
         $dst = Join-Path $talkHome $sub
