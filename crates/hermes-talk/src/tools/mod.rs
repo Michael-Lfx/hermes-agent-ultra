@@ -12,6 +12,9 @@ use crate::tools::hermes_queue::{HermesPriority, HermesQueueSender, ListResult};
 /// Tool result prefix when `call_hermes` successfully enqueues (round-1 TTS skip signal).
 pub const CALL_HERMES_ENQUEUED_PREFIX: &str = "call_hermes 请求已入队";
 
+/// Fallback tail when LLM omits `spoken` but `text` is present.
+pub const HERMES_SPOKEN_WAIT_TAIL: &str = "已经交给 hermes 处理了，请稍候。";
+
 const SHUTUP_TOOL: &str = r#"{
   "type": "object",
   "properties": {},
@@ -51,7 +54,7 @@ const HERMES_TOOL: &str = r#"{
     },
     "spoken": {
       "type": "string",
-      "description": "用准确精炼的口语，向用户复述这一次他要你做的具体任务（复述用户诉求本身，不是说你正在帮他查或已提交）。禁止敷衍套话，如「帮你查一下」「我看看」「已提交处理」「稍等我来办」等。"
+      "description": "给用户听的完整口语，分两段：①准确精炼地复述用户这一次的具体诉求；②接着用自然亲切的语气说明已交给 hermes 后台处理、请用户稍候（提供情绪价值，如「我这就帮你安排」「好了已经交给后台了，你稍等一下」）。禁止空洞敷衍、不说清诉求的套话（如单独一句「帮你查一下」「我看看」）；禁止在未出结果前声称「已经完成了」。"
     }
   },
   "required": ["text", "spoken"]
@@ -93,7 +96,7 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
             r#type: "function".to_string(),
             function: FunctionDef {
                 name: "call_hermes".to_string(),
-                description: "将复杂问题交给 hermes 异步处理（联网搜索、复杂推理、多步操作、定时任务等）。调用后仅收到入队确认，不代表任务完成——hermes 处理完后会主动推送真实结果，你届时再向用户播报。调用时 spoken 须用准确精炼的口语复述用户本次具体诉求（这是调用前唯一需要对用户说的话），禁止「帮你查一下」「已提交处理」等敷衍套话；入队成功后无需再对用户说确认语。仅当execute无法满足需求时使用。".to_string(),
+                description: "将复杂问题交给 hermes 异步处理（联网搜索、复杂推理、多步操作、定时任务等）。调用后仅收到入队确认，不代表任务完成——hermes 处理完后会主动推送真实结果，你届时再向用户播报。调用时 spoken 须分两段：先复述用户本次具体诉求，再亲切说明已交给 hermes、请稍候；这是入队前唯一需要对用户说的话，入队成功后无需再说确认语。仅当execute无法满足需求时使用。".to_string(),
                 parameters: serde_json::from_str(HERMES_TOOL).unwrap(),
             },
         },
@@ -230,11 +233,12 @@ pub fn generate_hermes_spoken(arguments: &str) -> Option<String> {
     if text.is_empty() {
         return None;
     }
-    if text.len() > 60 {
-        Some(format!("{}...", text.chars().take(60).collect::<String>()))
+    let summary = if text.chars().count() > 60 {
+        format!("{}...", text.chars().take(60).collect::<String>())
     } else {
-        Some(text)
-    }
+        text
+    };
+    Some(format!("{summary}，{HERMES_SPOKEN_WAIT_TAIL}"))
 }
 
 fn format_list_result(r: &ListResult) -> String {
@@ -311,6 +315,14 @@ mod skip_confirmation_tests {
             ["call_hermes"],
             &["error: hermes queue full".to_string()],
         ));
+    }
+
+    #[test]
+    fn generate_hermes_spoken_appends_wait_tail() {
+        let args = r#"{"text":"查明天北京天气"}"#;
+        let spoken = generate_hermes_spoken(args).unwrap();
+        assert!(spoken.contains("查明天北京天气"));
+        assert!(spoken.contains(HERMES_SPOKEN_WAIT_TAIL));
     }
 
     #[test]
