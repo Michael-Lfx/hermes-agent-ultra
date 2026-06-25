@@ -5,9 +5,9 @@
 //! start of each turn, then compares against the previous turn to explain
 //! cache misses.
 
-use hermes_core::{ToolSchema, UsageStats};
+use hermes_core::{MessageRole, ToolSchema, UsageStats};
 use sha2::{Digest, Sha256};
-use tracing::debug;
+use tracing::{debug, info};
 
 // ---------------------------------------------------------------------------
 // PrefixShape
@@ -116,8 +116,11 @@ pub fn compare_shape(
     }
 
     let prefix_changed = !reasons.is_empty();
+    // For DeepSeek (no cache-write phase), miss tokens live in `input_tokens`.
+    // For Anthropic, miss = `cache_write_tokens` (cache creation) + `input_tokens`
+    // (truly uncached).  Summing both correctly covers every provider.
     let (cache_hit_tokens, cache_miss_tokens) = usage
-        .map(|u| (u.cache_read_tokens, u.cache_write_tokens))
+        .map(|u| (u.cache_read_tokens, u.cache_write_tokens + u.input_tokens))
         .unwrap_or((0, 0));
 
     if prefix_changed {
@@ -142,6 +145,141 @@ pub fn compare_shape(
         session_hit: 0,  // filled by caller from AgentSharedState
         session_miss: 0, // filled by caller from AgentSharedState
     }
+}
+
+// ---------------------------------------------------------------------------
+// trace_turn — convenience function for production wiring
+// ---------------------------------------------------------------------------
+
+/// Capture the current prefix shape from context messages + tool schemas,
+/// compare against the previous turn's shape (stored in `prev_shape`),
+/// log a structured diagnostic line, and return the new shape + cumulative
+/// session counters.
+///
+/// Call this right after receiving an LLM response, passing the usage stats
+/// from the response. The `log_rewrite_version` should come from the
+/// compression module (increments on each compaction).
+pub fn trace_turn(
+    messages: &[hermes_core::types::Message],
+    tool_schemas: &[ToolSchema],
+    log_rewrite_version: u32,
+    usage: Option<&UsageStats>,
+    prev_shape: Option<&PrefixShape>,
+    session_hit: u64,
+    session_miss: u64,
+) -> (PrefixShape, CacheDiagnostics) {
+    // Extract system prompt from messages (first system message).
+    let system_prompt: String = messages
+        .iter()
+        .find(|m| m.role == MessageRole::System)
+        .and_then(|m| m.content.as_deref())
+        .unwrap_or("")
+        .to_string();
+
+    let cur_shape = capture_shape(&system_prompt, tool_schemas, log_rewrite_version);
+    let mut diag = if let Some(prev) = prev_shape {
+        compare_shape(prev, &cur_shape, usage)
+    } else {
+        // First turn — no previous shape to compare.
+        let (hit, miss) = usage
+            .map(|u| (u.cache_read_tokens, u.cache_write_tokens + u.input_tokens))
+            .unwrap_or((0, 0));
+        CacheDiagnostics {
+            prefix_hash: cur_shape.prefix_hash.clone(),
+            prefix_changed: false,
+            prefix_change_reasons: vec![],
+            system_hash: cur_shape.system_hash.clone(),
+            tools_hash: cur_shape.tools_hash.clone(),
+            log_rewrite_version: cur_shape.log_rewrite_version,
+            tool_schema_tokens: cur_shape.tool_schema_tokens,
+            cache_miss_tokens: miss,
+            cache_hit_tokens: hit,
+            session_hit,
+            session_miss,
+        }
+    };
+
+    // Update cumulative session counters.
+    diag.session_hit = session_hit + diag.cache_hit_tokens;
+    diag.session_miss = session_miss + diag.cache_miss_tokens;
+
+    // Structured log line for diagnostics.
+    let total = diag.session_hit + diag.session_miss;
+    let session_rate = if total > 0 {
+        diag.session_hit * 100 / total
+    } else {
+        0
+    };
+    let turn_total = diag.cache_hit_tokens + diag.cache_miss_tokens;
+    let turn_rate = if turn_total > 0 {
+        diag.cache_hit_tokens * 100 / turn_total
+    } else {
+        0
+    };
+
+    // Full token breakdown from provider usage.
+    let u = usage.cloned().unwrap_or_default();
+    let short_hash = &diag.prefix_hash[..8.min(diag.prefix_hash.len())];
+
+    // Human-readable explanation for cache miss.
+    let miss_explanation = if diag.prefix_changed {
+        let reasons: Vec<&str> = diag
+            .prefix_change_reasons
+            .iter()
+            .map(|s| match s.as_str() {
+                "system" => "system prompt changed",
+                "tools" => "tool set changed (added/removed/modified)",
+                "log_rewrite" => "context compaction rewrote message history",
+                _ => s.as_str(),
+            })
+            .collect();
+        format!("prefix changed: {}", reasons.join("; "))
+    } else if turn_total == 0 {
+        "no usage data".to_string()
+    } else if diag.cache_miss_tokens > 0 {
+        "prefix stable — miss is from incremental content (new user msg / tool result)".to_string()
+    } else {
+        "full hit".to_string()
+    };
+
+    info!(
+        target: "cache_diag",
+        // Per-turn token composition
+        turn_hit = diag.cache_hit_tokens,
+        turn_miss = diag.cache_miss_tokens,
+        turn_rate = %format!("{}%", turn_rate),
+        input_tokens = u.input_tokens,
+        output_tokens = u.output_tokens,
+        cache_read = u.cache_read_tokens,
+        cache_write = u.cache_write_tokens,
+        reasoning = u.reasoning_tokens,
+        completion = u.completion_tokens,
+        prompt_tokens = u.prompt_tokens,
+        total_tokens = u.total_tokens,
+        // Session cumulative
+        session_hit = diag.session_hit,
+        session_miss = diag.session_miss,
+        session_rate = %format!("{}%", session_rate),
+        // Prefix diagnostics
+        prefix_changed = diag.prefix_changed,
+        reasons = ?diag.prefix_change_reasons,
+        miss_explanation = %miss_explanation,
+        tool_schema_tokens = diag.tool_schema_tokens,
+        prefix_hash = %short_hash,
+        "cache_diag: hit={} miss={} rate={}% | input={} output={} cache_read={} cache_write={} reasoning={} | session rate={}% | {}",
+        diag.cache_hit_tokens,
+        diag.cache_miss_tokens,
+        turn_rate,
+        u.input_tokens,
+        u.output_tokens,
+        u.cache_read_tokens,
+        u.cache_write_tokens,
+        u.reasoning_tokens,
+        session_rate,
+        miss_explanation,
+    );
+
+    (cur_shape, diag)
 }
 
 // ---------------------------------------------------------------------------
@@ -256,5 +394,23 @@ mod tests {
         assert!(!diag.prefix_changed);
         assert_eq!(diag.cache_hit_tokens, 100);
         assert_eq!(diag.cache_miss_tokens, 50);
+    }
+
+    #[test]
+    fn deepseek_miss_tokens_mapped_from_input_tokens() {
+        // DeepSeek has no cache_write phase: cache_write_tokens = 0,
+        // and miss tokens are in input_tokens.  The diagnostics must
+        // report the correct miss count, not 0.
+        let schemas = vec![sample_schema("t", "T")];
+        let shape = capture_shape("system", &schemas, 0);
+        let usage = UsageStats {
+            cache_read_tokens: 3500,   // prompt_cache_hit_tokens
+            cache_write_tokens: 0,     // DeepSeek: no write phase
+            input_tokens: 1500,        // prompt_cache_miss_tokens
+            ..Default::default()
+        };
+        let diag = compare_shape(&shape, &shape, Some(&usage));
+        assert_eq!(diag.cache_hit_tokens, 3500);
+        assert_eq!(diag.cache_miss_tokens, 1500); // NOT 0
     }
 }

@@ -3213,6 +3213,7 @@ dependencies = [
  "hermes-core",
  "hermes-server-client",
  "hermes-tools",
+ "image",
  "indexmap",
  "reqwest 0.13.4",
  "serde",

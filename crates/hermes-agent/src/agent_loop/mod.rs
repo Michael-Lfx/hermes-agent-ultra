@@ -636,7 +636,39 @@ fn tool_progress_interval_ms() -> u64 {
         .unwrap_or(20_000)
 }
 
+fn is_media_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "video_generate"
+            | "image_generate"
+            | "media_workflow_plan"
+            | "media_workflow_run"
+            | "media_workflow_status"
+    )
+}
+
+fn format_media_tool_progress_fallback(name: &str, pulse: u32) -> String {
+    match (name, pulse) {
+        ("video_generate", 1) => "正在提交视频生成任务到云端…".into(),
+        ("video_generate", 2) => "视频任务已排队，等待云端开始渲染…".into(),
+        ("video_generate", 3) => "云端正在渲染视频（通常需要 1–5 分钟）…".into(),
+        ("video_generate", _) => "视频仍在云端渲染中，请稍候…".into(),
+        ("image_generate", 1) => "正在生成图片…".into(),
+        ("image_generate", 2) => "图片生成中，正在等待云端返回…".into(),
+        ("image_generate", _) => "图片仍在生成中…".into(),
+        ("media_workflow_run", 1) => "正在执行媒体工作流（规划/精炼提示词）…".into(),
+        ("media_workflow_run", 2) => "工作流进行中：生成图片或视频片段…".into(),
+        ("media_workflow_run", _) => "工作流仍在执行，请稍候…".into(),
+        (_, 1) => format!("正在执行 {name}…"),
+        (_, _) => format!("{name} 仍在执行，请稍候…"),
+    }
+}
+
 fn format_tool_progress_message(turn: u32, tool_names: &[String], pulse: u32) -> String {
+    if let Some(detail) = hermes_core::current_tool_progress_detail() {
+        return detail;
+    }
+
     let joined = tool_names.join(", ");
     let webish = tool_names.iter().any(|name| {
         matches!(
@@ -644,20 +676,29 @@ fn format_tool_progress_message(turn: u32, tool_names: &[String], pulse: u32) ->
             "web_search" | "web_extract" | "browser_navigate"
         )
     });
+    let media_only = !tool_names.is_empty() && tool_names.iter().all(|n| is_media_tool(n));
     let base = if webish {
         format!("正在检索网络数据（第 {turn} 步，工具 {joined}）")
+    } else if media_only && tool_names.len() == 1 {
+        format_media_tool_progress_fallback(tool_names[0].as_str(), pulse)
     } else if tool_names.len() > 1 {
         format!(
             "正在执行工具（第 {turn} 步，{} 个调用：{joined}）",
             tool_names.len()
         )
     } else if let Some(name) = tool_names.first() {
-        format!("正在执行 {name}（第 {turn} 步）")
+        if is_media_tool(name) {
+            format_media_tool_progress_fallback(name, pulse)
+        } else {
+            format!("正在执行 {name}（第 {turn} 步）")
+        }
     } else {
         format!("处理中，请稍候（第 {turn} 步）")
     };
-    if pulse > 1 {
+    if pulse > 1 && !media_only {
         format!("{base}…（仍在进行）")
+    } else if pulse > 1 {
+        base
     } else {
         format!("{base}…")
     }
@@ -722,6 +763,12 @@ impl ToolProgressWatchdog {
             loop {
                 if stop_worker.load(Ordering::Acquire) {
                     break;
+                }
+                if tool_names.iter().all(|n| is_media_tool(n))
+                    && hermes_core::current_tool_progress_detail().is_some()
+                {
+                    tokio::time::sleep(interval).await;
+                    continue;
                 }
                 pulse = pulse.saturating_add(1);
                 let msg = format_tool_progress_message(turn, &tool_names, pulse);

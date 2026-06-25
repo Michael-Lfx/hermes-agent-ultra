@@ -1,15 +1,21 @@
 //! Flowy Seedance video generation backend.
 
 use async_trait::async_trait;
-use serde_json::json;
 
 use hermes_core::ToolError;
+use hermes_server_client::FlowyApiClient;
 use hermes_server_client::flowy::video_task_failure_message;
+use hermes_server_client::flowy::{
+    VideoContentImage, VideoCreateParams, video_task_status_user_message_zh,
+};
 use hermes_tools::VideoGenerateBackend;
 use hermes_tools::tools::video::VideoGenerateRequest;
 
 use super::{FlowyMediaServices, map_server_err};
 use crate::assets::persist_from_url;
+use crate::delivery::{MediaProvenance, VideoTaskMeta, video_generation_response};
+use crate::flowy_params::{normalize_video_duration, normalize_video_resolution};
+use crate::progress::{report_media_progress, video_generate_started};
 
 pub struct FlowyVideoGenBackend {
     services: FlowyMediaServices,
@@ -30,53 +36,107 @@ impl VideoGenerateBackend for FlowyVideoGenBackend {
     async fn generate_video(&self, request: VideoGenerateRequest) -> Result<String, ToolError> {
         self.services.require_token().await?;
 
-        let model = if request.model_explicit {
-            request.model.clone().unwrap_or_default()
-        } else {
-            match request.model.as_deref() {
-                Some(m) if !m.trim().is_empty() => m.trim().to_string(),
-                _ => self.services.default_video_model().await?,
-            }
-        };
+        let model = self
+            .services
+            .resolve_video_model(request.model.as_deref())
+            .await?;
 
-        if model.trim().is_empty() {
-            return Err(ToolError::InvalidParams("missing video model".into()));
-        }
-
-        let image_url = request
-            .image_url
-            .or_else(|| request.reference_image_urls.first().cloned());
-
-        let duration = request
+        let raw_duration = request
             .duration
             .or(Some(self.services.media.video.default_duration));
+        let duration = raw_duration.map(|d| normalize_video_duration(&model, d));
+        let duration_for_credits = duration.unwrap_or(self.services.media.video.default_duration);
+        self.services
+            .ensure_video_credits(duration_for_credits)
+            .await?;
 
-        let body = hermes_server_client::FlowyApiClient::build_video_create_body(
-            &model,
-            &request.prompt,
-            image_url.as_deref(),
+        let aspect_ratio = if request.aspect_ratio.trim().is_empty() {
+            self.services.media.video.default_aspect_ratio.clone()
+        } else {
+            request.aspect_ratio.clone()
+        };
+
+        let resolution_input = if request.resolution.trim().is_empty() {
+            self.services.media.video.default_resolution.as_str()
+        } else {
+            request.resolution.as_str()
+        };
+        let resolution = normalize_video_resolution(&model, resolution_input);
+
+        let mut images = Vec::new();
+        if let Some(url) = request
+            .image_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+        {
+            images.push(VideoContentImage {
+                url: url.to_string(),
+                role: "first_frame".into(),
+            });
+        }
+        if let Some(url) = request
+            .last_frame_url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+        {
+            images.push(VideoContentImage {
+                url: url.to_string(),
+                role: "last_frame".into(),
+            });
+        }
+        for url in &request.reference_image_urls {
+            if url.trim().is_empty() {
+                continue;
+            }
+            images.push(VideoContentImage {
+                url: url.clone(),
+                role: "reference_image".into(),
+            });
+        }
+
+        let params = VideoCreateParams {
+            model: model.clone(),
+            prompt: request.prompt.clone(),
             duration,
-            if request.aspect_ratio.trim().is_empty() {
-                self.services.media.video.default_aspect_ratio.as_str()
-            } else {
-                request.aspect_ratio.as_str()
-            },
-            Some(if request.resolution.trim().is_empty() {
-                self.services.media.video.default_resolution.as_str()
-            } else {
-                request.resolution.as_str()
-            }),
-            request.negative_prompt.as_deref(),
-            request.seed,
-            false,
-        );
+            aspect_ratio,
+            resolution: resolution.map(|s| s.to_string()),
+            negative_prompt: request.negative_prompt.clone(),
+            seed: request.seed,
+            watermark: false,
+            generate_audio: request.generate_audio.or(request.audio),
+            images,
+            reference_video_url: request.reference_video_url.clone(),
+            reference_audio_url: request.reference_audio_url.clone(),
+        };
 
+        let body = FlowyApiClient::build_video_create_params(params);
+
+        let has_image = request.image_url.is_some();
+        report_media_progress(video_generate_started(has_image, duration_for_credits));
+
+        let poll_timeout = self.services.media.video.poll_timeout_seconds.max(30);
         let record = self
             .services
             .api
-            .generate_video(&self.services.session, body)
+            .generate_video_with_timeout_and_progress(
+                &self.services.session,
+                body,
+                poll_timeout,
+                Some(Box::new(
+                    |task: &hermes_server_client::flowy::VideoTaskRecord, elapsed| {
+                        report_media_progress(video_task_status_user_message_zh(
+                            task.status,
+                            elapsed,
+                        ));
+                    },
+                )),
+            )
             .await
             .map_err(map_server_err)?;
+
+        if record.is_success() {
+            report_media_progress("视频已生成，正在保存到本地…");
+        }
 
         if !record.is_success() {
             return Err(ToolError::ExecutionFailed(video_task_failure_message(
@@ -88,23 +148,39 @@ impl VideoGenerateBackend for FlowyVideoGenBackend {
             ToolError::ExecutionFailed("video task succeeded but no video_url in result".into())
         })?;
 
-        let mut local_path = String::new();
+        let mut local_artifact = None;
+        let mut persist_warning = None;
         if self.services.media.video.save_locally {
-            let artifact = persist_from_url(&video_url, "flowy", &model).await?;
-            local_path = artifact.local_path.to_string_lossy().to_string();
+            match persist_from_url(&video_url, "flowy", &model).await {
+                Ok(artifact) => local_artifact = Some(artifact),
+                Err(err) => {
+                    persist_warning = Some(err.to_string());
+                    tracing::warn!(
+                        error = %err,
+                        video_url = %video_url,
+                        "video generated but local persist failed; returning remote URL"
+                    );
+                }
+            }
         }
 
-        Ok(json!({
-            "success": true,
-            "video": video_url,
-            "local_path": if local_path.is_empty() { serde_json::Value::Null } else { json!(local_path) },
-            "provider": "flowy",
-            "model": model,
-            "task_id": record.id,
-            "upstream_task_id": record.task_id,
-            "status": record.status,
-            "media_hint": if local_path.is_empty() { serde_json::Value::Null } else { json!(format!("MEDIA:{local_path}")) },
-        })
-        .to_string())
+        let task = VideoTaskMeta {
+            local_id: record.id.to_string(),
+            task_id: record.task_id.clone().unwrap_or_default(),
+            status: record.status,
+        };
+
+        Ok(video_generation_response(
+            &model,
+            &video_url,
+            local_artifact.as_ref(),
+            &task,
+            MediaProvenance {
+                prompt: Some(request.prompt),
+                negative_prompt: request.negative_prompt,
+                ..Default::default()
+            },
+            persist_warning.as_deref(),
+        ))
     }
 }

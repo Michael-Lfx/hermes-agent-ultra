@@ -1,7 +1,7 @@
 //! Flowy server image generation backend.
 
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use hermes_core::ToolError;
 use hermes_server_client::flowy::ImageGenerationRequest;
@@ -9,7 +9,11 @@ use hermes_tools::ImageGenBackend;
 use hermes_tools::tools::image_gen::ImageGenRequest;
 
 use super::{FlowyMediaServices, map_server_err};
-use crate::assets::{extract_image_urls, persist_data_url, persist_from_url};
+use crate::assets::{
+    extract_image_urls, persist_data_url, persist_from_url, remote_fallback_artifact,
+};
+use crate::delivery::{MediaProvenance, image_generation_response};
+use crate::progress::report_media_progress;
 
 pub struct FlowyImageGenBackend {
     services: FlowyMediaServices,
@@ -29,11 +33,12 @@ impl FlowyImageGenBackend {
 impl ImageGenBackend for FlowyImageGenBackend {
     async fn generate(&self, request: ImageGenRequest) -> Result<String, ToolError> {
         self.services.require_token().await?;
+        self.services.ensure_image_credits().await?;
 
-        let model = match request.model.as_deref() {
-            Some(m) if !m.trim().is_empty() => m.trim().to_string(),
-            _ => self.services.default_image_model().await?,
-        };
+        let model = self
+            .services
+            .resolve_image_model(request.model.as_deref())
+            .await?;
 
         let flowy_req = ImageGenerationRequest {
             model: model.clone(),
@@ -42,12 +47,16 @@ impl ImageGenBackend for FlowyImageGenBackend {
             extra: request.extra.unwrap_or(Value::Null),
         };
 
+        report_media_progress("正在向云端提交图片生成请求…");
+
         let upstream = self
             .services
             .api
             .generate_image(&self.services.session, &flowy_req)
             .await
             .map_err(map_server_err)?;
+
+        report_media_progress("图片已生成，正在处理并保存…");
 
         let mut artifacts = Vec::new();
         let urls = extract_image_urls(&upstream);
@@ -59,20 +68,24 @@ impl ImageGenBackend for FlowyImageGenBackend {
         } else {
             for url in urls {
                 if self.services.media.image.save_locally {
-                    let artifact = persist_from_url(&url, "flowy", &model).await?;
-                    artifacts.push(artifact);
+                    match persist_from_url(&url, "flowy", &model).await {
+                        Ok(artifact) => artifacts.push(artifact),
+                        Err(err) => {
+                            tracing::warn!(
+                                error = %err,
+                                url = %url,
+                                "image generated but local persist failed; keeping remote URL"
+                            );
+                            artifacts.push(remote_fallback_artifact(
+                                url,
+                                "image/png",
+                                "flowy",
+                                &model,
+                            ));
+                        }
+                    }
                 } else {
-                    artifacts.push(crate::assets::MediaArtifact {
-                        local_path: std::path::PathBuf::new(),
-                        remote_url: Some(url),
-                        mime: "image/png".into(),
-                        width: None,
-                        height: None,
-                        duration_secs: None,
-                        provider: "flowy".into(),
-                        model: model.clone(),
-                        job_id: uuid::Uuid::new_v4().to_string(),
-                    });
+                    artifacts.push(remote_fallback_artifact(url, "image/png", "flowy", &model));
                 }
             }
         }
@@ -83,31 +96,15 @@ impl ImageGenBackend for FlowyImageGenBackend {
             ));
         }
 
-        let images: Vec<Value> = artifacts
-            .iter()
-            .map(|a| {
-                let mut obj = json!({
-                    "url": a.remote_url,
-                    "provider": a.provider,
-                    "model": a.model,
-                    "job_id": a.job_id,
-                });
-                if !a.local_path.as_os_str().is_empty() {
-                    obj["local_path"] = json!(a.local_path.to_string_lossy());
-                }
-                obj
-            })
-            .collect();
-
-        Ok(json!({
-            "success": true,
-            "images": images,
-            "transport": "flowy",
-            "model": model,
-            "upstream": upstream,
-            "media_hint": artifacts.first().map(|a| a.media_tag()),
-        })
-        .to_string())
+        Ok(image_generation_response(
+            &model,
+            &artifacts,
+            &upstream,
+            MediaProvenance {
+                prompt: Some(request.prompt),
+                ..Default::default()
+            },
+        ))
     }
 }
 

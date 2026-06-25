@@ -545,6 +545,7 @@ const BUNDLED_SKILL_NAMES_FALLBACK: &[&str] = &[
     "evaluating-llms-harness",
     "excalidraw",
     "findmy",
+    "flowy-media-generation",
     "gif-search",
     "github-auth",
     "github-code-review",

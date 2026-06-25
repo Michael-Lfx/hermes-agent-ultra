@@ -3,14 +3,18 @@
 use std::sync::Arc;
 
 use hermes_config::{GatewayConfig, flowy_media_exposed};
-use hermes_core::ToolHandler;
+use hermes_core::{ToolHandler, ToolSchema};
 use hermes_tools::ToolRegistry;
 use hermes_tools::{ImageGenerateHandler, VideoGenerateHandler};
 
 use crate::backends::FlowyMediaServices;
 use crate::backends::flowy_image::FlowyImageGenBackend;
 use crate::backends::flowy_video::FlowyVideoGenBackend;
+use crate::tool_schemas::{
+    flowy_image_generate_schema, flowy_video_generate_schema, media_workflow_plan_schema,
+};
 use crate::tools::{MediaWorkflowPlanHandler, MediaWorkflowRunHandler, MediaWorkflowStatusHandler};
+use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStore;
 
 fn flowy_media_check_fn() -> Arc<dyn Fn() -> bool + Send + Sync> {
@@ -44,6 +48,7 @@ pub fn wire_flowy_media(
         Arc::new(ImageGenerateHandler::new(Arc::new(
             FlowyImageGenBackend::new(services.clone()),
         ))),
+        flowy_image_generate_schema(),
         "🎨",
         Arc::clone(&check),
     );
@@ -54,6 +59,7 @@ pub fn wire_flowy_media(
         Arc::new(VideoGenerateHandler::new(Arc::new(
             FlowyVideoGenBackend::new(services.clone()),
         ))),
+        flowy_video_generate_schema(),
         "🎞️",
         Arc::clone(&check),
     );
@@ -64,24 +70,31 @@ pub fn wire_flowy_media(
     }
 
     let store = Arc::new(WorkflowRunStore::new());
+    let runner = Arc::new(WorkflowRunner::new(services.clone(), Arc::clone(&store)));
+    let plan_handler = Arc::new(MediaWorkflowPlanHandler::new(config.media.clone()));
     register_overwrite(
         registry,
         "media_workflow",
-        Arc::new(MediaWorkflowPlanHandler::new(config.media.clone())),
+        plan_handler.clone(),
+        media_workflow_plan_schema(),
         "🎬",
         Arc::clone(&check),
     );
+    let run_handler = Arc::new(MediaWorkflowRunHandler::new(runner));
     register_overwrite(
         registry,
         "media_workflow",
-        Arc::new(MediaWorkflowRunHandler::new(services, store.clone())),
+        run_handler.clone(),
+        run_handler.schema(),
         "🎬",
         Arc::clone(&check),
     );
+    let status_handler = Arc::new(MediaWorkflowStatusHandler::new(store));
     register_overwrite(
         registry,
         "media_workflow",
-        Arc::new(MediaWorkflowStatusHandler::new(store)),
+        status_handler.clone(),
+        status_handler.schema(),
         "🎬",
         Arc::clone(&check),
     );
@@ -93,10 +106,10 @@ fn register_overwrite(
     registry: &ToolRegistry,
     toolset: &str,
     handler: Arc<dyn ToolHandler>,
+    schema: ToolSchema,
     emoji: &str,
     check_fn: Arc<dyn Fn() -> bool + Send + Sync>,
 ) {
-    let schema = handler.schema();
     let name = schema.name.clone();
     let desc = schema.description.clone();
     registry.register(

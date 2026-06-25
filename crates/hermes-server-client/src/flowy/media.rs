@@ -8,7 +8,8 @@ use tracing::debug;
 use crate::error::ServerClientError;
 use crate::flowy::media_types::{
     CreateVideoTaskResponse, ImageGenerationRequest, VIDEO_TASK_STATUS_CANCELLED,
-    VIDEO_TASK_STATUS_EXPIRED, VIDEO_TASK_STATUS_FAILED, VideoTaskRecord,
+    VIDEO_TASK_STATUS_EXPIRED, VIDEO_TASK_STATUS_FAILED, VideoContentImage, VideoCreateParams,
+    VideoTaskRecord,
 };
 use crate::flowy::response::FlowyEnvelope;
 use crate::session::ServerSession;
@@ -18,6 +19,8 @@ use super::FlowyApiClient;
 
 const DEFAULT_VIDEO_POLL_INTERVAL_SECS: u64 = 5;
 const DEFAULT_VIDEO_POLL_TIMEOUT_SECS: u64 = 600;
+
+pub type VideoTaskProgressFn = Box<dyn FnMut(&VideoTaskRecord, u64) + Send>;
 
 impl FlowyApiClient {
     /// `POST {LLM根}/images/generations` — upstream JSON passthrough on success.
@@ -94,12 +97,43 @@ impl FlowyApiClient {
         poll_interval_secs: u64,
         timeout_secs: u64,
     ) -> Result<VideoTaskRecord, ServerClientError> {
+        self.poll_video_task_with_progress(
+            session,
+            local_id,
+            poll_interval_secs,
+            timeout_secs,
+            None,
+        )
+        .await
+    }
+
+    /// Poll with optional user-visible progress (e.g. gateway status).
+    pub async fn poll_video_task_with_progress(
+        &self,
+        session: &ServerSession,
+        local_id: i64,
+        poll_interval_secs: u64,
+        timeout_secs: u64,
+        mut on_progress: Option<VideoTaskProgressFn>,
+    ) -> Result<VideoTaskRecord, ServerClientError> {
         let interval = Duration::from_secs(poll_interval_secs.max(1));
         let timeout = Duration::from_secs(timeout_secs.max(30));
         let started = std::time::Instant::now();
+        let mut last_status: Option<i32> = None;
+        let mut last_report = std::time::Instant::now() - Duration::from_secs(60);
 
         loop {
             let record = self.get_video_task(session, local_id).await?;
+            let elapsed = started.elapsed().as_secs();
+            let status_changed = last_status != Some(record.status);
+            let report_due = last_report.elapsed() >= Duration::from_secs(8);
+            if let Some(ref mut cb) = on_progress
+                && (status_changed || report_due)
+            {
+                cb(&record, elapsed);
+                last_status = Some(record.status);
+                last_report = std::time::Instant::now();
+            }
             if record.is_terminal() {
                 return Ok(record);
             }
@@ -121,12 +155,36 @@ impl FlowyApiClient {
         session: &ServerSession,
         body: Value,
     ) -> Result<VideoTaskRecord, ServerClientError> {
+        self.generate_video_with_timeout(session, body, DEFAULT_VIDEO_POLL_TIMEOUT_SECS)
+            .await
+    }
+
+    /// Create a Seedance video task and poll until completion with a custom timeout.
+    pub async fn generate_video_with_timeout(
+        &self,
+        session: &ServerSession,
+        body: Value,
+        timeout_secs: u64,
+    ) -> Result<VideoTaskRecord, ServerClientError> {
+        self.generate_video_with_timeout_and_progress(session, body, timeout_secs, None)
+            .await
+    }
+
+    /// Create a Seedance video task and poll with optional progress callbacks.
+    pub async fn generate_video_with_timeout_and_progress(
+        &self,
+        session: &ServerSession,
+        body: Value,
+        timeout_secs: u64,
+        on_progress: Option<VideoTaskProgressFn>,
+    ) -> Result<VideoTaskRecord, ServerClientError> {
         let created: CreateVideoTaskResponse = self.create_video_task(session, body).await?;
-        self.poll_video_task(
+        self.poll_video_task_with_progress(
             session,
             created.id,
             DEFAULT_VIDEO_POLL_INTERVAL_SECS,
-            DEFAULT_VIDEO_POLL_TIMEOUT_SECS,
+            timeout_secs.max(30),
+            on_progress,
         )
         .await
     }
@@ -143,33 +201,32 @@ impl FlowyApiClient {
         seed: Option<i64>,
         watermark: bool,
     ) -> Value {
-        let mut content = vec![json!({"type": "text", "text": prompt})];
-        if let Some(url) = image_url.filter(|u| !u.trim().is_empty()) {
-            content.push(json!({
-                "type": "image_url",
-                "image_url": {"url": url},
-                "role": "first_frame"
-            }));
-        }
+        Self::build_video_create_params(VideoCreateParams {
+            model: model.to_string(),
+            prompt: prompt.to_string(),
+            duration,
+            aspect_ratio: aspect_ratio.to_string(),
+            resolution: resolution.map(str::to_string),
+            negative_prompt: negative_prompt.map(str::to_string),
+            seed,
+            watermark,
+            generate_audio: None,
+            images: image_url
+                .filter(|u| !u.trim().is_empty())
+                .map(|url| VideoContentImage {
+                    url: url.to_string(),
+                    role: "first_frame".into(),
+                })
+                .into_iter()
+                .collect(),
+            reference_video_url: None,
+            reference_audio_url: None,
+        })
+    }
 
-        let mut body = Map::new();
-        body.insert("model".into(), json!(model));
-        body.insert("content".into(), Value::Array(content));
-        body.insert("ratio".into(), json!(aspect_ratio));
-        body.insert("watermark".into(), json!(watermark));
-        if let Some(d) = duration {
-            body.insert("duration".into(), json!(d));
-        }
-        if let Some(r) = resolution.filter(|s| !s.is_empty()) {
-            body.insert("resolution".into(), json!(r));
-        }
-        if let Some(neg) = negative_prompt.filter(|s| !s.is_empty()) {
-            body.insert("negative_prompt".into(), json!(neg));
-        }
-        if let Some(s) = seed {
-            body.insert("seed".into(), json!(s));
-        }
-        Value::Object(body)
+    /// Build video task JSON from a full [`VideoCreateParams`] (multimodal).
+    pub fn build_video_create_params(params: VideoCreateParams) -> Value {
+        params.to_json()
     }
 
     async fn post_upstream_json(
@@ -216,14 +273,34 @@ pub fn video_task_status_label(status: i32) -> &'static str {
     }
 }
 
+/// User-facing Chinese status for gateway progress messages.
+pub fn video_task_status_user_message_zh(status: i32, elapsed_secs: u64) -> String {
+    match status {
+        1 => format!("视频任务已提交，正在排队（已等待 {elapsed_secs} 秒）"),
+        2 => format!("云端正在渲染视频（已等待 {elapsed_secs} 秒，通常还需 1–5 分钟）"),
+        4 => "视频生成完成，正在获取下载链接…".into(),
+        5 => "视频生成失败，正在整理错误信息…".into(),
+        6 => "视频任务已超时，正在结束…".into(),
+        3 => "视频任务已取消".into(),
+        _ => format!(
+            "正在处理视频任务（状态 {}，已等待 {elapsed_secs} 秒）",
+            video_task_status_label(status)
+        ),
+    }
+}
+
 /// Error message for terminal non-success video statuses.
 pub fn video_task_failure_message(record: &VideoTaskRecord) -> String {
+    let detail = record
+        .failure_detail()
+        .map(|d| format!(": {d}"))
+        .unwrap_or_default();
     match record.status {
-        VIDEO_TASK_STATUS_FAILED => "video generation failed".to_string(),
-        VIDEO_TASK_STATUS_EXPIRED => "video task expired".to_string(),
-        VIDEO_TASK_STATUS_CANCELLED => "video task cancelled".to_string(),
+        VIDEO_TASK_STATUS_FAILED => format!("video generation failed{detail}"),
+        VIDEO_TASK_STATUS_EXPIRED => format!("video task expired{detail}"),
+        VIDEO_TASK_STATUS_CANCELLED => format!("video task cancelled{detail}"),
         _ => format!(
-            "video task ended with status {} ({})",
+            "video task ended with status {} ({}){detail}",
             record.status,
             video_task_status_label(record.status)
         ),
@@ -243,6 +320,42 @@ mod tests {
             base_url: base_url.to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn video_task_status_user_message_zh_covers_queue_and_running() {
+        assert!(video_task_status_user_message_zh(1, 5).contains("排队"));
+        assert!(video_task_status_user_message_zh(2, 30).contains("渲染"));
+    }
+
+    #[test]
+    fn build_video_create_body_multimodal() {
+        let body = FlowyApiClient::build_video_create_params(VideoCreateParams {
+            model: "AIPC-doubao-seedance".into(),
+            prompt: "test".into(),
+            duration: Some(5),
+            aspect_ratio: "16:9".into(),
+            resolution: Some("720p".into()),
+            negative_prompt: None,
+            seed: None,
+            watermark: false,
+            generate_audio: Some(true),
+            images: vec![
+                VideoContentImage {
+                    url: "https://example.com/a.png".into(),
+                    role: "first_frame".into(),
+                },
+                VideoContentImage {
+                    url: "https://example.com/b.png".into(),
+                    role: "last_frame".into(),
+                },
+            ],
+            reference_video_url: Some("https://example.com/ref.mp4".into()),
+            reference_audio_url: None,
+        });
+        let content = body["content"].as_array().expect("content");
+        assert!(content.len() >= 4);
+        assert_eq!(body["generate_audio"], true);
     }
 
     #[test]

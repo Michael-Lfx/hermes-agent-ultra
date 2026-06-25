@@ -568,7 +568,7 @@ fn normalize_provider_secrets(config: &mut GatewayConfig) {
     });
 }
 
-const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider, server.enabled|base_url|wechat_base_url|channel|app|invite_code|auth.preferred_method|auth.poll_interval_ms|auth.otp_ttl_seconds|auth.heartbeat_interval_secs, media.provider, media.image.model|save_locally, media.video.model|default_duration|default_aspect_ratio|default_resolution|poll_timeout_seconds|save_locally, media.workflows.enabled|max_retries|default_templates.txt2img|txt2video|img2video|storyboard";
+const CONFIG_PATCH_HELP: &str = "model, personality, max_turns, system_prompt, prefill_messages_file, budget.max_result_size_chars, budget.max_aggregate_chars, proxy.http, proxy.socks, security.allow_private_urls, web.backend|search_backend|extract_backend|crawl_backend, sessions.auto_prune|retention_days|vacuum_after_prune|min_interval_hours, interest.enabled|extract_mode|max_topics|llm_on_session_end|per_turn_buffer|per_turn_persist|promote_min_evidence|promote_min_confidence|min_turn_chars, kanban.dispatch_in_gateway, agent.api_max_retries, delegation.model|provider|base_url|api_key|max_spawn_depth, llm.<provider>.api_key|api_key_env|base_url|model|api_mode|command|args|request_timeout_seconds|oauth_token_url|oauth_client_id, auxiliary.<task>.provider|model|base_url|api_key|timeout|download_timeout, insights.contribution.enabled|endpoint|upload_interests|upload_skills|on_session_end|skill_min_age_hours|min_evidence_tier|exclude_verdicts|require_skill_binding|min_work_turns|upload_skills_refresh|redacted_body|installation_token|auth_token, smart_model_routing.enabled|max_simple_chars|max_simple_words|cheap_model.model|cheap_model.provider, server.enabled|base_url|wechat_base_url|channel|app|invite_code|auth.preferred_method|auth.poll_interval_ms|auth.otp_ttl_seconds|auth.heartbeat_interval_secs, media.provider, media.image.model|save_locally, media.video.model|default_duration|default_aspect_ratio|default_resolution|poll_timeout_seconds|save_locally, media.workflows.enabled|max_retries|async_execution|llm_prompt_refine|check_credits|image_min_credits|video_credits_per_second|storyboard_max_shots|default_templates.txt2img|txt2video|img2video|storyboard";
 
 fn parse_bool_config_value(value: &str, field: &str) -> Result<bool, ConfigError> {
     let normalized = value.trim().to_ascii_lowercase();
@@ -1176,6 +1176,39 @@ fn apply_user_config_patch_dotted(
                 ))
             })?;
         }
+        ["media", "workflows", "async_execution"] => {
+            config.media.workflows.async_execution =
+                parse_bool_config_value(value, "media.workflows.async_execution")?;
+        }
+        ["media", "workflows", "llm_prompt_refine"] => {
+            config.media.workflows.llm_prompt_refine =
+                parse_bool_config_value(value, "media.workflows.llm_prompt_refine")?;
+        }
+        ["media", "workflows", "check_credits"] => {
+            config.media.workflows.check_credits =
+                parse_bool_config_value(value, "media.workflows.check_credits")?;
+        }
+        ["media", "workflows", "image_min_credits"] => {
+            config.media.workflows.image_min_credits = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.workflows.image_min_credits must be a non-negative integer: {value}"
+                ))
+            })?;
+        }
+        ["media", "workflows", "video_credits_per_second"] => {
+            config.media.workflows.video_credits_per_second = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.workflows.video_credits_per_second must be a positive integer: {value}"
+                ))
+            })?;
+        }
+        ["media", "workflows", "storyboard_max_shots"] => {
+            config.media.workflows.storyboard_max_shots = value.parse().map_err(|_| {
+                ConfigError::ValidationError(format!(
+                    "media.workflows.storyboard_max_shots must be a positive integer: {value}"
+                ))
+            })?;
+        }
         ["media", "workflows", "default_templates", tpl] => match *tpl {
             "txt2img" => {
                 config.media.workflows.default_templates.txt2img = value.trim().to_string()
@@ -1592,6 +1625,24 @@ pub fn user_config_field_display(config: &GatewayConfig, key: &str) -> Result<St
         ["media", "video", "save_locally"] => Ok(config.media.video.save_locally.to_string()),
         ["media", "workflows", "enabled"] => Ok(config.media.workflows.enabled.to_string()),
         ["media", "workflows", "max_retries"] => Ok(config.media.workflows.max_retries.to_string()),
+        ["media", "workflows", "async_execution"] => {
+            Ok(config.media.workflows.async_execution.to_string())
+        }
+        ["media", "workflows", "llm_prompt_refine"] => {
+            Ok(config.media.workflows.llm_prompt_refine.to_string())
+        }
+        ["media", "workflows", "check_credits"] => {
+            Ok(config.media.workflows.check_credits.to_string())
+        }
+        ["media", "workflows", "image_min_credits"] => {
+            Ok(config.media.workflows.image_min_credits.to_string())
+        }
+        ["media", "workflows", "video_credits_per_second"] => {
+            Ok(config.media.workflows.video_credits_per_second.to_string())
+        }
+        ["media", "workflows", "storyboard_max_shots"] => {
+            Ok(config.media.workflows.storyboard_max_shots.to_string())
+        }
         ["media", "workflows", "default_templates", tpl] => {
             let tpls = &config.media.workflows.default_templates;
             Ok(match *tpl {
@@ -3403,6 +3454,10 @@ custom_providers:
             "simple_txt2img",
         )
         .unwrap();
+        apply_user_config_patch(&mut c, "media.workflows.async_execution", "false").unwrap();
+        apply_user_config_patch(&mut c, "media.workflows.llm_prompt_refine", "true").unwrap();
+        apply_user_config_patch(&mut c, "media.workflows.check_credits", "false").unwrap();
+        apply_user_config_patch(&mut c, "media.workflows.storyboard_max_shots", "5").unwrap();
         assert_eq!(c.media.provider, "flowy");
         assert_eq!(c.media.image.model, "AIPC-z-image-turbo");
         assert_eq!(c.media.video.default_duration, 8);
@@ -3410,9 +3465,13 @@ custom_providers:
             c.media.workflows.default_templates.txt2img,
             "simple_txt2img"
         );
+        assert!(!c.media.workflows.async_execution);
+        assert!(c.media.workflows.llm_prompt_refine);
+        assert!(!c.media.workflows.check_credits);
+        assert_eq!(c.media.workflows.storyboard_max_shots, 5);
         assert_eq!(
-            user_config_field_display(&c, "media.image.model").unwrap(),
-            "AIPC-z-image-turbo"
+            user_config_field_display(&c, "media.workflows.llm_prompt_refine").unwrap(),
+            "true"
         );
         assert_eq!(
             user_config_field_display(&c, "media.video.model").unwrap(),

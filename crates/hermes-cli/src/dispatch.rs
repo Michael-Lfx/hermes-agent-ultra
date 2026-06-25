@@ -56,7 +56,7 @@ pub(crate) async fn run(cli: Cli) {
             CliCommand::Hermes | CliCommand::Resume { .. }
         ),
         matches!(effective_command, CliCommand::Gateway { .. }),
-        matches!(effective_command, CliCommand::Talk { .. }),
+        talk_tracing_enabled(&effective_command),
     );
     if let Err(err) = hydrate_provider_env_from_vault_for_cli(&cli).await {
         tracing::warn!("Secret-vault hydration skipped: {}", err);
@@ -662,6 +662,16 @@ pub(crate) async fn run(cli: Cli) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+}
+
+#[cfg(feature = "talk")]
+fn talk_tracing_enabled(command: &CliCommand) -> bool {
+    matches!(command, CliCommand::Talk { .. })
+}
+
+#[cfg(not(feature = "talk"))]
+fn talk_tracing_enabled(_command: &CliCommand) -> bool {
+    false
 }
 
 async fn run_chat_command(

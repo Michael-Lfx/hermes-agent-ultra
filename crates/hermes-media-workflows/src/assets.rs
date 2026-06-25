@@ -92,7 +92,7 @@ pub async fn persist_bytes(
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("write media file: {e}")))?;
 
-    Ok(MediaArtifact {
+    let mut artifact = MediaArtifact {
         local_path: path,
         remote_url: None,
         mime: mime.to_string(),
@@ -102,7 +102,43 @@ pub async fn persist_bytes(
         provider: provider.to_string(),
         model: model.to_string(),
         job_id,
-    })
+    };
+    fill_image_dimensions(&mut artifact, bytes);
+    Ok(artifact)
+}
+
+/// Remote-only artifact when local persist failed.
+pub fn remote_fallback_artifact(
+    url: String,
+    mime: &str,
+    provider: &str,
+    model: &str,
+) -> MediaArtifact {
+    MediaArtifact {
+        local_path: PathBuf::new(),
+        remote_url: Some(url),
+        mime: mime.to_string(),
+        width: None,
+        height: None,
+        duration_secs: None,
+        provider: provider.to_string(),
+        model: model.to_string(),
+        job_id: Uuid::new_v4().to_string(),
+    }
+}
+
+fn fill_image_dimensions(artifact: &mut MediaArtifact, bytes: &[u8]) {
+    if !artifact.mime.starts_with("image/") {
+        return;
+    }
+    use std::io::Cursor;
+    let reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format();
+    if let Ok(reader) = reader
+        && let Ok(img) = reader.decode()
+    {
+        artifact.width = Some(img.width());
+        artifact.height = Some(img.height());
+    }
 }
 
 /// Download a remote URL and persist locally.

@@ -39,7 +39,10 @@ pub struct WorkflowRunStore {
 
 impl WorkflowRunStore {
     pub fn new() -> Self {
-        let root = hermes_config::hermes_home().join("media").join("workflows");
+        Self::with_root(hermes_config::hermes_home().join("media").join("workflows"))
+    }
+
+    pub fn with_root(root: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&root);
         Self {
             root,
@@ -83,6 +86,15 @@ impl WorkflowRunStore {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_string_pretty(record) {
+            let _ = std::fs::write(path, json);
+        }
+        self.write_manifest(record);
+    }
+
+    fn write_manifest(&self, record: &WorkflowRunRecord) {
+        let manifest = super::manifest::WorkflowManifest::from_record(record);
+        let path = self.root.join(&record.run_id).join("manifest.json");
+        if let Ok(json) = serde_json::to_string_pretty(&manifest) {
             let _ = std::fs::write(path, json);
         }
     }

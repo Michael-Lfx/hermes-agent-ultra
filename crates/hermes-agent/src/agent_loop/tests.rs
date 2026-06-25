@@ -3855,6 +3855,10 @@ fn test_format_tool_progress_message_web_and_repeat() {
 
     let local = vec!["todo".to_string()];
     assert!(format_tool_progress_message(1, &local, 1).contains("todo"));
+
+    let video = vec!["video_generate".to_string()];
+    assert!(format_tool_progress_message(2, &video, 1).contains("视频"));
+    assert!(!format_tool_progress_message(2, &video, 2).contains("仍在进行"));
 }
 
 #[test]
