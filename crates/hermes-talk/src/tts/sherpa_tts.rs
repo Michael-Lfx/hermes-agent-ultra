@@ -131,6 +131,7 @@ fn run_kokoro_driver(
     audio_tx: mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
     let kokoro_cfg = cfg.kokoro.clone();
+    let sid = kokoro_cfg.effective_sid()?;
     let kokoro = OfflineTtsKokoroModelConfig {
         model: Some(kokoro_cfg.model.clone()),
         voices: Some(kokoro_cfg.voices.clone()),
@@ -166,12 +167,13 @@ fn run_kokoro_driver(
         provider = %cfg.provider,
         sample_rate = tts.sample_rate(),
         speakers = tts.num_speakers(),
-        sid = kokoro_cfg.sid,
+        voice = kokoro_cfg.voice.as_deref().unwrap_or(""),
+        sid,
         "sherpa Kokoro TTS ready"
     );
 
     run_driver_loop(cmd_rx, audio_tx, &tts, move |tts, text, audio_tx| {
-        synthesize_kokoro_turn(tts, &kokoro_cfg, text, audio_tx)
+        synthesize_kokoro_turn(tts, sid, &kokoro_cfg, text, audio_tx)
     })
 }
 
@@ -240,12 +242,13 @@ fn run_zipvoice_driver(
 
 fn synthesize_kokoro_turn(
     tts: &OfflineTts,
+    sid: i32,
     cfg: &SherpaKokoroTtsConfig,
     text: &str,
     audio_tx: &mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
     let gen_config = GenerationConfig {
-        sid: cfg.sid,
+        sid,
         speed: cfg.speed,
         ..Default::default()
     };

@@ -267,10 +267,21 @@ pub struct SherpaKokoroTtsConfig {
     pub length_scale: f32,
     #[serde(default)]
     pub lang: Option<String>,
+    /// Speaker voice name for kokoro-multi-lang-v1_0 (e.g. `zf_xiaoyi`). Overrides `sid` when set.
+    #[serde(default, alias = "speaker")]
+    pub voice: Option<String>,
+    /// Speaker ID (0–52 for bundled kokoro-multi-lang-v1_0). Used when `voice` is unset.
     #[serde(default)]
     pub sid: i32,
     #[serde(default = "default_kokoro_speed")]
     pub speed: f32,
+}
+
+impl SherpaKokoroTtsConfig {
+    /// Resolved speaker ID: `voice` (name or numeric) overrides `sid`.
+    pub fn effective_sid(&self) -> Result<i32> {
+        crate::kokoro_voices::resolve_kokoro_sid(self.voice.as_deref(), self.sid)
+    }
 }
 
 /// ZipVoice zero-shot TTS profile (https://k2-fsa.github.io/sherpa/onnx/tts/zipvoice.html)
@@ -298,6 +309,22 @@ pub struct SherpaZipvoiceTtsConfig {
     pub speed: f32,
 }
 
+/// Legacy Kokoro fields at `[tts.sherpa]` top level (pre-nested config).
+#[derive(Debug, Clone, Deserialize, Default)]
+struct LegacyFlatKokoroFields {
+    model: Option<String>,
+    voices: Option<String>,
+    tokens: Option<String>,
+    data_dir: Option<String>,
+    dict_dir: Option<String>,
+    lexicon: Option<String>,
+    length_scale: Option<f32>,
+    lang: Option<String>,
+    voice: Option<String>,
+    sid: Option<i32>,
+    speed: Option<f32>,
+}
+
 /// Legacy ZipVoice fields at `[tts.sherpa]` top level (pre-nested config).
 #[derive(Debug, Clone, Deserialize, Default)]
 struct LegacyFlatZipvoiceFields {
@@ -315,11 +342,13 @@ pub struct SherpaTtsSection {
     /// Active engine: `kokoro` (default) or `zipvoice`. Alias: `kind`.
     #[serde(default = "default_sherpa_tts_engine", alias = "kind")]
     pub engine: String,
-    /// Kokoro paths; also accepts legacy flat keys under `[tts.sherpa]`.
-    #[serde(flatten)]
+    /// Kokoro profile under `[tts.sherpa.kokoro]`; legacy flat keys under `[tts.sherpa]`.
+    #[serde(default)]
     pub kokoro: SherpaKokoroTtsConfig,
     #[serde(default)]
     pub zipvoice: SherpaZipvoiceTtsConfig,
+    #[serde(flatten, default)]
+    legacy_kokoro: LegacyFlatKokoroFields,
     #[serde(flatten, default)]
     legacy_zip: LegacyFlatZipvoiceFields,
     #[serde(default = "default_sherpa_threads")]
@@ -334,6 +363,7 @@ impl Default for SherpaTtsSection {
             engine: default_sherpa_tts_engine(),
             kokoro: SherpaKokoroTtsConfig::default(),
             zipvoice: SherpaZipvoiceTtsConfig::default(),
+            legacy_kokoro: LegacyFlatKokoroFields::default(),
             legacy_zip: LegacyFlatZipvoiceFields::default(),
             num_threads: default_sherpa_threads(),
             provider: default_sherpa_provider(),
@@ -344,6 +374,61 @@ impl Default for SherpaTtsSection {
 impl SherpaTtsSection {
     /// Merge legacy flat ZipVoice keys and fill empty nested defaults.
     pub fn normalize(&mut self) {
+        if self.kokoro.model.is_empty() {
+            if let Some(v) = self.legacy_kokoro.model.take() {
+                self.kokoro.model = v;
+            }
+        }
+        if self.kokoro.voices.is_empty() {
+            if let Some(v) = self.legacy_kokoro.voices.take() {
+                self.kokoro.voices = v;
+            }
+        }
+        if self.kokoro.tokens.is_empty() {
+            if let Some(v) = self.legacy_kokoro.tokens.take() {
+                self.kokoro.tokens = v;
+            }
+        }
+        if self.kokoro.data_dir.is_empty() {
+            if let Some(v) = self.legacy_kokoro.data_dir.take() {
+                self.kokoro.data_dir = v;
+            }
+        }
+        if self.kokoro.dict_dir.is_empty() {
+            if let Some(v) = self.legacy_kokoro.dict_dir.take() {
+                self.kokoro.dict_dir = v;
+            }
+        }
+        if self.kokoro.lexicon.is_empty() {
+            if let Some(v) = self.legacy_kokoro.lexicon.take() {
+                self.kokoro.lexicon = v;
+            }
+        }
+        if self.kokoro.length_scale == default_kokoro_length_scale() {
+            if let Some(v) = self.legacy_kokoro.length_scale {
+                self.kokoro.length_scale = v;
+            }
+        }
+        if self.kokoro.lang.is_none() {
+            if let Some(v) = self.legacy_kokoro.lang.take() {
+                self.kokoro.lang = Some(v);
+            }
+        }
+        if self.kokoro.voice.is_none() {
+            if let Some(v) = self.legacy_kokoro.voice.take() {
+                self.kokoro.voice = Some(v);
+            }
+        }
+        if self.kokoro.sid == 0 {
+            if let Some(v) = self.legacy_kokoro.sid {
+                self.kokoro.sid = v;
+            }
+        }
+        if self.kokoro.speed == default_kokoro_speed() {
+            if let Some(v) = self.legacy_kokoro.speed {
+                self.kokoro.speed = v;
+            }
+        }
         if self.zipvoice.encoder.is_empty() {
             if let Some(v) = self.legacy_zip.encoder.take() {
                 self.zipvoice.encoder = v;
@@ -1562,6 +1647,9 @@ fn validate_sherpa_tts(cfg: &Config) -> Result<()> {
             )));
         }
         let runtime = cfg.tts.effective_sherpa();
+        if runtime.is_kokoro() {
+            runtime.kokoro.effective_sid()?;
+        }
         if runtime.is_zipvoice() {
             let z = &runtime.zipvoice;
             for (name, path) in [
@@ -1871,6 +1959,33 @@ model = "m"
         assert!(cfg.wake.enabled);
         assert_eq!(cfg.orchestrator.endpoint_silence_ms, 800);
         assert!(cfg.orchestrator.barge_in_requires_wake);
+    }
+
+    #[test]
+    fn kokoro_voice_name_resolves_to_sid() {
+        let raw = r#"
+[tts]
+backend = "sherpa"
+[tts.sherpa.kokoro]
+voice = "zf_xiaoyi"
+model = "models/kokoro/model.onnx"
+[llm]
+base_url = "http://127.0.0.1/v1"
+api_key = "k"
+model = "m"
+"#;
+        let cfg: Config = toml::from_str(raw).unwrap();
+        assert_eq!(
+            cfg.tts
+                .sherpa
+                .as_ref()
+                .unwrap()
+                .kokoro
+                .effective_sid()
+                .unwrap(),
+            48
+        );
+        assert!(validate_sherpa_tts(&cfg).is_ok());
     }
 
     #[test]

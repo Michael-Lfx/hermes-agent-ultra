@@ -28,6 +28,7 @@ pub mod embed;
 pub mod enroll;
 pub mod error;
 pub mod init;
+pub mod kokoro_voices;
 pub mod kws;
 pub mod llm;
 pub mod orchestrator;

@@ -508,7 +508,13 @@ impl Session {
                                     }
                                 }
                                 info!("wake-word barge-in (kws)");
-                                do_barge_in(
+                                let (ack_reply, ack_playing_flag, ack_done_tx) = barge_in_ack_args(
+                                    wake_enabled,
+                                    &wake_cfg,
+                                    &wake_ack_playing,
+                                    &wake_ack_done_tx,
+                                );
+                                input_gated = do_barge_in(
                                     &turn_epoch,
                                     &playback,
                                     &play_gen,
@@ -527,9 +533,11 @@ impl Session {
                                     &mut speaker_gate,
                                     &mut speaker_verify_buffer,
                                     speaker_verify_gate,
+                                    ack_reply,
+                                    ack_playing_flag,
+                                    ack_done_tx,
                                 )
                                 .await;
-                                input_gated = false;
                             } else {
                                 match &mut wake_phase {
                                     WakePhase::AwakeGrace { deadline } => {
@@ -652,7 +660,13 @@ impl Session {
                             && is_output_busy(state, &playback, &active_turn)
                         {
                             if !wake_enabled || !orch.barge_in_requires_wake {
-                                if try_barge_in(
+                                let (ack_reply, ack_playing_flag, ack_done_tx) = barge_in_ack_args(
+                                    wake_enabled,
+                                    &wake_cfg,
+                                    &wake_ack_playing,
+                                    &wake_ack_done_tx,
+                                );
+                                if let Some(ack_playing) = try_barge_in(
                                     "vad",
                                     &orch,
                                     &mut state,
@@ -676,10 +690,13 @@ impl Session {
                                     asr.clone(),
                                     &mut wake_phase,
                                     wake_enabled,
+                                    ack_reply,
+                                    ack_playing_flag,
+                                    ack_done_tx,
                                 )
                                 .await
                                 {
-                                    input_gated = false;
+                                    input_gated = ack_playing;
                                     continue;
                                 }
                             } else {
@@ -881,7 +898,14 @@ impl Session {
                                         && is_output_busy(state, &playback, &active_turn)
                                     {
                                         if !wake_enabled || !orch.barge_in_requires_wake {
-                                            if try_barge_in(
+                                            let (ack_reply, ack_playing_flag, ack_done_tx) =
+                                                barge_in_ack_args(
+                                                    wake_enabled,
+                                                    &wake_cfg,
+                                                    &wake_ack_playing,
+                                                    &wake_ack_done_tx,
+                                                );
+                                            if let Some(ack_playing) = try_barge_in(
                                                 "asr-partial",
                                                 &orch,
                                                 &mut state,
@@ -905,10 +929,13 @@ impl Session {
                                                 asr.clone(),
                                                 &mut wake_phase,
                                                 wake_enabled,
+                                                ack_reply,
+                                                ack_playing_flag,
+                                                ack_done_tx,
                                             )
                                             .await
                                             {
-                                                input_gated = false;
+                                                input_gated = ack_playing;
                                                 last_partial = text;
                                                 continue;
                                             }
@@ -1094,7 +1121,14 @@ impl Session {
                                         && is_output_busy(state, &playback, &active_turn)
                                     {
                                         if !wake_enabled || !orch.barge_in_requires_wake {
-                                            if try_barge_in(
+                                            let (ack_reply, ack_playing_flag, ack_done_tx) =
+                                                barge_in_ack_args(
+                                                    wake_enabled,
+                                                    &wake_cfg,
+                                                    &wake_ack_playing,
+                                                    &wake_ack_done_tx,
+                                                );
+                                            if let Some(ack_playing) = try_barge_in(
                                                 "asr-final",
                                                 &orch,
                                                 &mut state,
@@ -1118,10 +1152,13 @@ impl Session {
                                                 asr.clone(),
                                                 &mut wake_phase,
                                                 wake_enabled,
+                                                ack_reply,
+                                                ack_playing_flag,
+                                                ack_done_tx,
                                             )
                                             .await
                                             {
-                                                input_gated = false;
+                                                input_gated = ack_playing;
                                                 // Accumulate rather than replace — user may still be speaking
                                                 let sep = if last_final.as_deref().is_some_and(|s| !s.ends_with(['\n', ' '])) { " " } else { "" };
                                                 last_final = Some(match last_final.take() {
@@ -1771,6 +1808,26 @@ async fn play_wake_ack(
     playback.wait_drain(Duration::from_secs(15)).await;
 }
 
+fn barge_in_ack_args<'a>(
+    wake_enabled: bool,
+    wake_cfg: &'a crate::config::WakeConfig,
+    wake_ack_playing: &'a Arc<AtomicBool>,
+    wake_ack_done_tx: &mpsc::Sender<()>,
+) -> (
+    Option<&'a str>,
+    Option<&'a Arc<AtomicBool>>,
+    Option<mpsc::Sender<()>>,
+) {
+    if !wake_enabled || wake_cfg.ack_reply.trim().is_empty() {
+        return (None, None, None);
+    }
+    (
+        Some(wake_cfg.ack_reply.as_str()),
+        Some(wake_ack_playing),
+        Some(wake_ack_done_tx.clone()),
+    )
+}
+
 fn is_output_busy(
     state: SessionState,
     playback: &AudioPlayback,
@@ -1800,7 +1857,10 @@ async fn do_barge_in(
     speaker_gate: &mut SpeakerGate,
     speaker_verify_buffer: &mut Vec<f32>,
     speaker_verify_gate: bool,
-) {
+    ack_reply: Option<&str>,
+    wake_ack_playing: Option<&Arc<AtomicBool>>,
+    wake_ack_done_tx: Option<mpsc::Sender<()>>,
+) -> bool {
     *last_barge_in_at = Some(Instant::now());
     turn_epoch.fetch_add(1, Ordering::SeqCst);
     playback.stop_clear();
@@ -1808,12 +1868,6 @@ async fn do_barge_in(
     if let Some(c) = llm_cancel.take() {
         c.cancel();
     }
-    let tts_int = tts.clone();
-    tokio::spawn(async move {
-        if let Err(e) = tts_int.interrupt_turn().await {
-            warn!(error = %e, "tts interrupt on barge-in failed");
-        }
-    });
     vad.reset_barge_in_state();
     *wake_phase = WakePhase::Active;
     *state = SessionState::Listening;
@@ -1826,7 +1880,36 @@ async fn do_barge_in(
         *speaker_gate = SpeakerGate::Passed;
     }
     speaker_verify_buffer.clear();
+
+    let has_ack = ack_reply.is_some_and(|s| !s.trim().is_empty());
+    if has_ack {
+        if let (Some(flag), Some(done_tx)) = (wake_ack_playing, wake_ack_done_tx) {
+            flag.store(true, Ordering::SeqCst);
+            let _ = asr.set_gate(true).await;
+            let ack = ack_reply.unwrap().trim().to_string();
+            info!(reply = %ack, "barge-in ack");
+            let tts_ack = tts.clone();
+            let playback_ack = playback.clone();
+            let play_gen_ack = play_gen.clone();
+            tokio::spawn(async move {
+                if let Err(e) = tts_ack.interrupt_turn().await {
+                    warn!(error = %e, "tts interrupt on barge-in failed");
+                }
+                play_wake_ack(&ack, tts_ack, &playback_ack, &play_gen_ack).await;
+                let _ = done_tx.send(()).await;
+            });
+            return true;
+        }
+    }
+
+    let tts_int = tts.clone();
+    tokio::spawn(async move {
+        if let Err(e) = tts_int.interrupt_turn().await {
+            warn!(error = %e, "tts interrupt on barge-in failed");
+        }
+    });
     let _ = open_asr_for_user_speech(asr, wake_enabled).await;
+    false
 }
 
 fn asr_indicates_barge_in(text: &str, active_turn: &Option<ActiveTurn>, min_chars: usize) -> bool {
@@ -1865,9 +1948,12 @@ async fn try_barge_in(
     asr: Arc<dyn AsrEngine>,
     wake_phase: &mut WakePhase,
     wake_enabled: bool,
-) -> bool {
+    ack_reply: Option<&str>,
+    wake_ack_playing: Option<&Arc<AtomicBool>>,
+    wake_ack_done_tx: Option<mpsc::Sender<()>>,
+) -> Option<bool> {
     if !orch.barge_in_enabled || !is_output_busy(*state, playback, active_turn) {
-        return false;
+        return None;
     }
 
     let vad_hit = vad.speech_start()
@@ -1878,16 +1964,16 @@ async fn try_barge_in(
         .unwrap_or(false);
 
     if !vad_hit && !asr_hit {
-        return false;
+        return None;
     }
 
     if orch.min_rms_barge_in > 0.0 && vad.last_rms() < orch.min_rms_barge_in {
-        return false;
+        return None;
     }
 
     if let Some(last) = *last_barge_in_at {
         if last.elapsed().as_millis() < orch.barge_in_cooldown_ms as u128 {
-            return false;
+            return None;
         }
     }
 
@@ -1896,13 +1982,13 @@ async fn try_barge_in(
             let sample_rate = 16000u32;
             let audio: Vec<f32> = recent_audio.iter().copied().collect();
             if !audio.is_empty() && !sv.verify(&audio, sample_rate) {
-                return false;
+                return None;
             }
         }
     }
 
     info!(reason, vad_hit, asr_hit, "barge-in");
-    do_barge_in(
+    let ack_playing = do_barge_in(
         turn_epoch,
         playback,
         play_gen,
@@ -1921,9 +2007,12 @@ async fn try_barge_in(
         speaker_gate,
         speaker_verify_buffer,
         speaker_verify_gate,
+        ack_reply,
+        wake_ack_playing,
+        wake_ack_done_tx,
     )
     .await;
-    true
+    Some(ack_playing)
 }
 
 async fn maybe_trigger(
