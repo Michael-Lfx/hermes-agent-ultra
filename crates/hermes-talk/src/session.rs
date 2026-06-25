@@ -315,6 +315,7 @@ impl Session {
         let mut last_barge_in_at: Option<Instant> = None;
         let mut _last_wake_at: Option<Instant> = None;
         let asr_settle_ms: u64 = 300;
+        let asr_flush_wait_ms: u64 = 5000;
 
         // Speculative partial tracking
         let mut last_partial = String::new();
@@ -725,9 +726,11 @@ impl Session {
                                 warn!(error = %e, "finish_utterance failed");
                             }
                             utterance_active = false;
-                            while let Ok(ev) = asr_rx.try_recv() {
-                                match ev {
-                                    AsrEvent::Final { text } => {
+                            let flush_deadline =
+                                Instant::now() + Duration::from_millis(asr_flush_wait_ms);
+                            while Instant::now() < flush_deadline {
+                                match asr_rx.try_recv() {
+                                    Ok(AsrEvent::Final { text }) => {
                                         info!(
                                             final_text = %text,
                                             last_final = ?last_final,
@@ -744,12 +747,16 @@ impl Session {
                                         asr_final_at = Some(Instant::now());
                                         partial_stable_since = None;
                                         last_partial.clear();
+                                        break;
                                     }
-                                    AsrEvent::Partial { text } => {
+                                    Ok(AsrEvent::Partial { text }) => {
                                         debug!(partial = %text, "asr partial (post-flush)");
                                         last_asr_event_at = Some(Instant::now());
                                     }
-                                    _ => {}
+                                    Ok(_) => {}
+                                    Err(_) => {
+                                        tokio::task::yield_now().await;
+                                    }
                                 }
                             }
                             maybe_trigger(
