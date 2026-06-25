@@ -244,7 +244,15 @@ pub fn suggest_template_id(
     if has_image_input || lower.contains("图生视频") || lower.contains("image to video") {
         return resolve_template_default("img2video", defaults, "img2video_direct");
     }
-    if lower.contains("分镜") || lower.contains("storyboard") || lower.contains("叙事") {
+    if lower.contains("分镜")
+        || lower.contains("storyboard")
+        || lower.contains("叙事")
+        || lower.contains("多个场景")
+        || lower.contains("很多场景")
+        || lower.contains("多场景")
+        || lower.contains("多镜头")
+        || (lower.contains("场景") && lower.contains("丰富"))
+    {
         return resolve_template_default("storyboard", defaults, "storyboard_multi");
     }
     if lower.contains("视频") || lower.contains("video") {
@@ -330,6 +338,10 @@ mod tests {
         let defaults = MediaWorkflowTemplateMap::default();
         assert_eq!(
             suggest_template_id("做一个分镜叙事短片", false, &defaults),
+            "storyboard_multi"
+        );
+        assert_eq!(
+            suggest_template_id("老北京橘猫日常，很多场景和分镜", false, &defaults),
             "storyboard_multi"
         );
     }

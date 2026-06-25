@@ -69,7 +69,10 @@ pub use tool_call_parser::{
 // Re-export ParseMode from traits
 pub use traits::ParseMode;
 
-pub use tool_progress::{ToolProgressGuard, current_tool_progress_detail, report_tool_progress};
+pub use tool_progress::{
+    DetachedToolProgressGuard, ToolProgressGuard, capture_tool_progress_reporter,
+    current_tool_progress_detail, report_tool_progress,
+};
 
 // Re-export token estimator
 pub use token_estimator::{

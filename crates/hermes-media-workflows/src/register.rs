@@ -18,7 +18,7 @@ use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStore;
 
 fn flowy_media_check_fn() -> Arc<dyn Fn() -> bool + Send + Sync> {
-    Arc::new(|| hermes_config::flowy_media_exposed_from_disk())
+    Arc::new(hermes_config::flowy_media_exposed_from_disk)
 }
 
 /// Wire Flowy image/video backends and workflow tools when server login is available.

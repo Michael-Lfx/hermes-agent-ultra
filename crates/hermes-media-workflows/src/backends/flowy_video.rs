@@ -175,11 +175,7 @@ impl VideoGenerateBackend for FlowyVideoGenBackend {
             &video_url,
             local_artifact.as_ref(),
             &task,
-            MediaProvenance {
-                prompt: Some(request.prompt),
-                negative_prompt: request.negative_prompt,
-                ..Default::default()
-            },
+            MediaProvenance::for_api_call(request.prompt, request.negative_prompt, None, None),
             persist_warning.as_deref(),
         ))
     }

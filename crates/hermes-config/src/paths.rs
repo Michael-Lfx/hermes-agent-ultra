@@ -1,5 +1,6 @@
 //! Path management for the hermes home directory and its files.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
@@ -286,6 +287,7 @@ pub fn session_temp_dir() -> PathBuf {
 ///
 /// - Expands `~` / `~/` via [`expand_tilde`].
 /// - On Windows, rewrites `/tmp/...` and `\tmp\...` to [`session_temp_dir`].
+/// - Repairs mangled profile paths like `C:\Users\alice.hermes-agent-ultra\...`.
 /// - Leaves explicit `C:\...` and other native Windows paths unchanged.
 pub fn resolve_agent_path(input: &str) -> PathBuf {
     let trimmed = input.trim();
@@ -293,8 +295,10 @@ pub fn resolve_agent_path(input: &str) -> PathBuf {
         return PathBuf::new();
     }
 
+    let trimmed = repair_mangled_hermes_home_path(input.trim());
+
     if trimmed.starts_with('~') {
-        return expand_tilde(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed));
+        return expand_tilde(&trimmed).unwrap_or_else(|_| PathBuf::from(trimmed.as_ref()));
     }
 
     #[cfg(windows)]
@@ -313,7 +317,38 @@ pub fn resolve_agent_path(input: &str) -> PathBuf {
         }
     }
 
-    PathBuf::from(trimmed)
+    PathBuf::from(trimmed.as_ref())
+}
+
+/// Fix `C:\Users\name.hermes-agent-ultra\...` → `C:\Users\name\.hermes-agent-ultra\...`.
+///
+/// Happens when `MEDIA:` paths lose the backslash before a dotted Hermes home segment.
+pub fn repair_mangled_hermes_home_path(input: &str) -> Cow<'_, str> {
+    let lower = input.to_ascii_lowercase();
+    for marker in [r"users\", "users/"] {
+        let Some(users_idx) = lower.find(marker) else {
+            continue;
+        };
+        let tail_start = users_idx + marker.len();
+        let tail = &input[tail_start..];
+        let tail_lower = &lower[tail_start..];
+        for dir in [".hermes-agent-ultra", ".hermes-ultra-agent", ".hermes"] {
+            let Some(dir_idx) = tail_lower.find(dir) else {
+                continue;
+            };
+            let username = &tail[..dir_idx];
+            if username.is_empty() || username.contains('\\') || username.contains('/') {
+                continue;
+            }
+            let insert_at = tail_start + dir_idx;
+            let mut repaired = String::with_capacity(input.len() + 1);
+            repaired.push_str(&input[..insert_at]);
+            repaired.push('\\');
+            repaired.push_str(&input[insert_at..]);
+            return Cow::Owned(repaired);
+        }
+    }
+    Cow::Borrowed(input)
 }
 
 /// Expand `~` and `~/suffix` to the user home directory.
@@ -429,6 +464,13 @@ mod tests {
     fn resolve_agent_path_expands_tilde() {
         let home = user_home_dir();
         assert_eq!(resolve_agent_path("~/notes.txt"), home.join("notes.txt"));
+    }
+
+    #[test]
+    fn repair_mangled_hermes_home_path_inserts_missing_backslash() {
+        let raw = r"C:\Users\alice.hermes-agent-ultra\media\generated\clip.mp4";
+        let repaired = repair_mangled_hermes_home_path(raw);
+        assert!(repaired.contains(r"alice\.hermes-agent-ultra"));
     }
 
     #[cfg(windows)]

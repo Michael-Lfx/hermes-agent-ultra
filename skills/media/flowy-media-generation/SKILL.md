@@ -25,7 +25,7 @@ Use Hermes Flowy-backed tools (`image_generate`, `video_generate`, `media_workfl
 | Single image, quick | `image_generate` |
 | Video or best quality | `media_workflow_plan` → `media_workflow_run` |
 | User provided an image URL | `media_workflow_plan` with `image_url` (`img2video_direct`) |
-| Storyboard / multi-shot narrative | `media_workflow_plan` → `storyboard_multi` template |
+| Storyboard / multi-shot narrative / 很多场景 / 分镜 | `media_workflow_plan` → `storyboard_multi` (**not** `video_generate`) |
 | Seedance multimodal (first/last frame, ref video/audio) | `video_generate` or workflow with `last_frame_url`, `reference_*` |
 
 ## Async workflows (default)
@@ -83,9 +83,10 @@ Model ids must come from `hermes media models` (catalog `id`), not guessed upstr
 
 ## Storyboard (`storyboard_multi`)
 
-For 分镜 / storyboard / 叙事 requests:
+For 分镜 / storyboard / 叙事 / **很多场景** / 多镜头 requests:
 
 - Template: `storyboard_multi` (default when intent matches)
+- **Do NOT** call `video_generate` once and paste a fake multi-scene script — actually run `storyboard_multi`
 - LLM plans up to `storyboard_max_shots` shots (default 3)
 - Each shot: `scene_prompt` → keyframe image → `motion_prompt` → video clip
 
@@ -101,7 +102,9 @@ If insufficient, tools fail fast with a clear balance message.
 ## Delivery
 
 - Always use `MEDIA:/local_path` from tool `media_hint` or `assets[].local_path` when present
-- Unified workflow responses include `assets[]` and `provenance` (template, steps, model ids)
+- **Always quote `user_prompt_block`** from tool results so the user sees the final prompt sent to the image/video API (works across WeCom, CLI, Telegram, etc.)
+- Structured fields: `prompts.api_prompt`, `api_prompt_trail` (workflows), `provenance`
+- Unified workflow responses include `assets[]` and provenance metadata
 - If only a remote URL, share the link and note download may be needed
 - Never redirect users to Kling, Sora, Pika, 海螺 when Flowy tools are available
 

@@ -5,6 +5,7 @@ use hermes_server_client::ServerLlmProvider;
 use serde::Deserialize;
 
 use crate::backends::FlowyMediaServices;
+use crate::progress::{report_media_progress, storyboard_planning};
 use crate::prompt_refine::{RefineInput, RefineResult, refine_prompt};
 
 const REFINE_SYSTEM: &str = r#"You are an expert prompt engineer for AI image and video models.
@@ -101,6 +102,7 @@ async fn try_llm_refine(
     services: &FlowyMediaServices,
     input: &RefineInput<'_>,
 ) -> Option<RefineResult> {
+    report_media_progress("正在连接 AI 服务优化提示词…");
     let user = format!(
         "Medium: {}\nAspect ratio: {}\nHas reference image: {}\nUser objective:\n{}",
         input.medium,
@@ -118,6 +120,7 @@ async fn try_llm_storyboard(
     objective: &str,
     max_shots: u32,
 ) -> Option<StoryboardPlan> {
+    report_media_progress(storyboard_planning());
     let user = format!(
         "Plan up to {max_shots} shots for:\n{objective}\nEach shot needs rich visual scene_prompt and motion_prompt."
     );

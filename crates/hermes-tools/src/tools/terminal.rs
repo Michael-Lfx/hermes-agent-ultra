@@ -8,7 +8,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use hermes_core::{
-    CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema, tool_schema,
+    CommandOutput, JsonSchema, TerminalBackend, ToolError, ToolHandler, ToolSchema,
+    report_tool_progress, tool_schema,
 };
 
 use crate::approval::{ApprovalDecision, ApprovalManager};
@@ -224,6 +225,18 @@ impl ToolHandler for TerminalHandler {
         let stdin_data = params.get("stdin_data").and_then(|v| v.as_str());
 
         let transformed_command = transform_sudo_command(command);
+
+        let cmd_preview: String = transformed_command.chars().take(96).collect();
+        let cmd_suffix = if transformed_command.chars().count() > 96 {
+            "…"
+        } else {
+            ""
+        };
+        if background {
+            report_tool_progress(format!("正在后台运行终端命令：{cmd_preview}{cmd_suffix}"));
+        } else {
+            report_tool_progress(format!("正在执行终端命令：{cmd_preview}{cmd_suffix}"));
+        }
 
         match self
             .backend
