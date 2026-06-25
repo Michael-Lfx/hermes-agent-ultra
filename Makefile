@@ -98,9 +98,6 @@ TALK_SCRIPTS        := $(ROOT)/scripts/talk
 TALK_VENDOR_SCRIPTS ?= $(abspath $(ROOT)/../tts-stream/scripts)
 TTS_STREAM_CACHE    := $(abspath $(ROOT)/../tts-stream/.cross-cache)
 MODELS_ROOT         ?= $(ROOT)/.models
-# Windows talk fetch/build (git clone, cmake NuGet). Override or unset for no proxy.
-TALK_HTTPS_PROXY    ?= http://127.0.0.1:7890
-TALK_PROXY_ENV_windows = set "HTTPS_PROXY=$(TALK_HTTPS_PROXY)"& set "HTTP_PROXY=$(TALK_HTTPS_PROXY)"&
 
 CROSS_AARCH64_ENV := \
 	SHERPA_ONNX_ARCHIVE_DIR=$(CROSS_CACHE)/sherpa-onnx \
@@ -195,7 +192,7 @@ help:
 	@echo "  RK_TTS_SDK_DIR=    Rockchip TTS SDK root (fallback if not in .models/)"
 	@echo "  RK_ASR_SDK_DIR=    Rockchip ASR SDK root (fallback if not in .models/)"
 	@echo "  MODELS_ROOT=       Packaging model tree (default: ./.models, incl. auth/)"
-	@echo "  HTTPS_PROXY=       Proxy for talk models + sherpa fetch (default: http://127.0.0.1:7890 on Windows)"
+	@echo "  HTTPS_PROXY=       Optional proxy for talk model/sherpa downloads (set in shell)"
 	@echo "  TALK_VENDOR_SCRIPTS= Path to aarch64 prefetch scripts (default: ../tts-stream/scripts)"
 
 build:
@@ -239,7 +236,7 @@ build-talk:
 
 build-talk-windows:
 ifeq ($(HOST_OS),windows)
-	$(TALK_PROXY_ENV_windows) powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
 else
 	@echo "build-talk-windows requires Windows (detected: $(HOST_OS))" >&2
 	@exit 1
@@ -254,7 +251,7 @@ release-talk-unknown:
 
 release-talk-windows: ensure-talk-models fetch-talk-sherpa-runtime
 ifeq ($(HOST_OS),windows)
-	$(TALK_PROXY_ENV_windows) powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/build_talk_release.ps1 -Pack $(TALK_SHERPA_PACK_windows) -Root "$(ROOT)"
 	@echo Built $(RELEASE_BIN) (talk + SHERPA_ONNX_PACK=$(TALK_SHERPA_PACK_windows))
 else
 	@echo "release-talk-windows requires Windows (detected: $(HOST_OS))" >&2
@@ -277,7 +274,7 @@ fetch-talk-sherpa-runtime-unknown:
 
 fetch-talk-sherpa-runtime-windows:
 ifeq ($(HOST_OS),windows)
-	$(TALK_PROXY_ENV_windows) powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/fetch_sherpa_runtime.ps1 auto
+	powershell -NoProfile -ExecutionPolicy Bypass -File $(TALK_SCRIPTS)/fetch_sherpa_runtime.ps1 auto
 else
 	@echo "fetch-talk-sherpa-runtime-windows requires Windows" >&2
 	@exit 1

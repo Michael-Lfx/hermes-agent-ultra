@@ -4,7 +4,7 @@
 # Usage:
 #   powershell -File scripts/talk/download_models.ps1
 #   $env:MODELS_ROOT = "C:\path\.models"; powershell -File scripts/talk/download_models.ps1
-#   $env:HTTPS_PROXY = "http://127.0.0.1:7890"; powershell -File scripts/talk/download_models.ps1
+#   (optional) set HTTPS_PROXY in the shell before running if downloads need a proxy
 $ErrorActionPreference = "Stop"
 
 function Get-DownloadProxy {

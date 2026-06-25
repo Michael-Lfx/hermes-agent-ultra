@@ -14,7 +14,7 @@
 # Usage:
 #   bash scripts/talk/download_models.sh
 #   MODELS_ROOT=/path/to/.models bash scripts/talk/download_models.sh
-#   HTTPS_PROXY=http://127.0.0.1:7890 bash scripts/talk/download_models.sh
+#   (optional) export HTTPS_PROXY in the shell before running if downloads need a proxy
 set -euo pipefail
 
 ROOT="${HERMES_ULTRA_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
