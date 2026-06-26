@@ -114,6 +114,10 @@ impl AsrConfig {
                 cfg.provider = global.provider.clone();
             }
         }
+        #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+        if cfg.provider == "cpu" && cfg.model.ends_with(".rknn") {
+            cfg.provider = "rknn".to_string();
+        }
         cfg
     }
 }
@@ -1107,14 +1111,7 @@ fn default_sherpa_threads() -> i32 {
     2
 }
 fn default_sherpa_provider() -> String {
-    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-    {
-        "rknn".to_string()
-    }
-    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
-    {
-        "cpu".to_string()
-    }
+    "cpu".to_string()
 }
 fn default_16k() -> u32 {
     16000
@@ -1523,13 +1520,18 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Downgrade legacy directml/coreml settings to cpu.
+    /// Downgrade legacy/unsupported providers (e.g. directml) to cpu; keep platform-supported values (rknn on Rockchip).
     pub fn normalize_sherpa_providers_to_cpu(&mut self) {
+        use crate::sherpa::platform_supports;
         let fix = |p: &mut String| {
-            if p != "cpu" {
-                tracing::warn!(old = %p, "sherpa provider not supported; using cpu");
-                *p = "cpu".to_string();
+            if platform_supports(p) {
+                return;
             }
+            tracing::warn!(
+                old = %p,
+                "sherpa provider not supported on this platform; using cpu"
+            );
+            *p = "cpu".to_string();
         };
         fix(&mut self.sherpa.provider);
         if let Some(asr) = &mut self.asr.sherpa {
@@ -1542,18 +1544,29 @@ impl Config {
         fix(&mut self.speaker.provider);
         fix(&mut self.vad.provider);
         fix(&mut self.denoise.provider);
+
+        #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+        if let Some(asr) = &mut self.asr.sherpa {
+            if asr.provider == "cpu" && asr.model.ends_with(".rknn") {
+                asr.provider = "rknn".to_string();
+            }
+        }
     }
 
     /// Propagate `[sherpa].provider` to per-module defaults still at `cpu`.
+    /// When global is `rknn`, only ASR inherits it; TTS/wake/vad stay on CPU ONNX.
     fn apply_sherpa_runtime(&mut self) {
         let global = self.sherpa.provider.trim();
-        if global.is_empty() || global != "cpu" {
+        if global.is_empty() {
             return;
         }
         if let Some(asr) = &mut self.asr.sherpa {
             if asr.provider == "cpu" {
                 asr.provider = global.to_string();
             }
+        }
+        if global != "cpu" {
+            return;
         }
         if let Some(tts) = &mut self.tts.sherpa {
             if tts.provider == "cpu" {
@@ -2119,6 +2132,19 @@ model = "m"
 "#;
         let cfg: Config = toml::from_str(raw).unwrap();
         assert!(validate_sherpa_tts(&cfg).is_err());
+    }
+
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    #[test]
+    fn rockchip_config_keeps_rknn_asr_provider() {
+        let raw = include_str!("../../../scripts/talk/config.example.rockchip.toml");
+        let mut cfg: Config = toml::from_str(raw).unwrap();
+        cfg.apply_sherpa_runtime();
+        cfg.normalize_sherpa_providers_to_cpu();
+        assert_eq!(cfg.sherpa.provider, "rknn");
+        assert_eq!(cfg.asr.sherpa.as_ref().unwrap().provider, "rknn");
+        assert_eq!(cfg.tts.sherpa.as_ref().unwrap().provider, "cpu");
+        assert!(validate_sherpa_providers(&cfg).is_ok());
     }
 
     #[test]
