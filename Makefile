@@ -137,7 +137,7 @@ PACKAGE_TALK_ENV  := ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) BI
         debug-talk-rockchip-arm64 \
         package-talk package-talk-windows package-talk-linux package-talk-macos \
         package-talk-rockchip package-talk-rockchip-dev prefetch-talk-aarch64 \
-        ensure-talk-models ensure-talk-models-rockchip ensure-kokoro-rockchip \
+        ensure-talk-models ensure-talk-models-rockchip \
         fetch-talk-sherpa-runtime fetch-talk-sherpa-runtime-windows \
         download-talk-models download-talk-models-windows download-talk-models-unix \
         check-talk-models check-talk-models-windows check-talk-models-unix \
@@ -172,10 +172,9 @@ help:
 	@echo "  package-talk-windows         Bundle for Windows (.zip)"
 	@echo "  package-talk-linux           Bundle for Linux (.tar.gz)"
 	@echo "  package-talk-macos           Bundle for macOS (.tar.gz)"
-	@echo "  package-talk-rockchip        Bundle binary + in-process Kokoro RKNN/sherpa TTS + models"
+	@echo "  package-talk-rockchip        Bundle binary + sherpa kokoro-multi-lang-v1_1 + models"
 	@echo "  package-talk-rockchip-dev    Same bundle using debug cross-build (faster; hermes-talk-rk3588-dev)"
-	@echo "  ensure-talk-models-rockchip  Verify/download SenseVoice RKNN + sherpa kokoro fallback models"
-	@echo "  ensure-kokoro-rockchip       Optional: build RKNN split models via kokoro-server build.py"
+	@echo "  ensure-talk-models-rockchip  Verify/download SenseVoice RKNN + kokoro-multi-lang-v1_1"
 	@echo "  ensure-talk-models         Verify talk models; download missing (auto OS)"
 	@echo "  check-talk-models          Verify talk models only; fail if missing (auto OS)"
 	@echo "  download-talk-models       Download sherpa-onnx models into .models/ (auto OS)"
@@ -314,10 +313,6 @@ ensure-talk-models-linux ensure-talk-models-macos ensure-talk-models-unix:
 ensure-talk-models-rockchip:
 	HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) bash $(TALK_SCRIPTS)/ensure_models_rockchip.sh
 
-ensure-kokoro-rockchip:
-	HERMES_ULTRA_ROOT=$(ROOT) KOKORO_SERVER_DIR=$(KOKORO_SERVER_DIR) KOKORO_BOARD=$(KOKORO_BOARD) \
-		RK_TTS_SDK_DIR=$(RK_TTS_SDK_DIR) bash $(TALK_SCRIPTS)/ensure_kokoro_rockchip.sh
-
 check-talk-models: check-talk-models-$(HOST_OS)
 
 check-talk-models-unknown:
@@ -416,14 +411,12 @@ endif
 download-talk-models-linux download-talk-models-macos download-talk-models-unix:
 	HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) bash $(TALK_SCRIPTS)/download_models.sh
 
-package-talk-rockchip: release-talk-rockchip-arm64 ensure-talk-models-rockchip ensure-kokoro-rockchip
+package-talk-rockchip: release-talk-rockchip-arm64 ensure-talk-models-rockchip
 	ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) \
-		KOKORO_SERVER_DIR=$(KOKORO_SERVER_DIR) \
 		$(TALK_SCRIPTS)/package_aarch64_rockchip.sh
 
-package-talk-rockchip-dev: debug-talk-rockchip-arm64 ensure-talk-models-rockchip ensure-kokoro-rockchip
+package-talk-rockchip-dev: debug-talk-rockchip-arm64 ensure-talk-models-rockchip
 	ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) \
-		KOKORO_SERVER_DIR=$(KOKORO_SERVER_DIR) \
 		OUT_NAME=hermes-talk-rk3588-dev \
 		BIN_PATH=$(ARM64_DEBUG) \
 		$(TALK_SCRIPTS)/package_aarch64_rockchip.sh

@@ -5,7 +5,7 @@
 #
 # Installs into ${MODELS_ROOT}/models/ (default: repo-root .models/models/):
 #   sensevoice/  — SenseVoice int8 ASR
-#   kokoro/      — Kokoro multi-lang TTS v1.0
+#   kokoro/      — Kokoro multi-lang TTS v1.1
 #   zipvoice/    — ZipVoice zero-shot voice cloning (optional TTS)
 #   kws-zh-en/   — Zipformer zh+en KWS (canonical encoder/decoder/joiner.onnx names)
 #   vad/         — silero_vad.onnx
@@ -55,7 +55,7 @@ extract_tarball() {
   local archive="$1"
   local dest="$2"
   mkdir -p "${dest}"
-  tar xf "${archive}" -C "${TMP}"
+  tar xf "${archive}" -C "${TMP}" --no-same-owner
   local inner
   inner="$(find "${TMP}" -mindepth 1 -maxdepth 1 -type d | head -1)"
   if [[ -z "${inner}" ]]; then
@@ -82,11 +82,18 @@ install_sensevoice_rk3588() {
   fetch_hf "${repo}" "chn_jpn_yue_eng_ko_spectok.bpe.model" "${dest}/chn_jpn_yue_eng_ko_spectok.bpe.model"
   local tokens_archive="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
   if [[ ! -f "${dest}/tokens.txt" ]]; then
-    fetch_hf "${repo}" "${tokens_archive}" "${TMP}/${tokens_archive}"
+    local archive=""
+    if [[ -f "${dest}/${tokens_archive}" ]]; then
+      archive="${dest}/${tokens_archive}"
+      echo "  use local: ${tokens_archive}"
+    else
+      archive="${TMP}/${tokens_archive}"
+      fetch_hf "${repo}" "${tokens_archive}" "${archive}"
+    fi
     local extract="${TMP}/sensevoice-rk3588-tokens"
     rm -rf "${extract}"
     mkdir -p "${extract}"
-    tar xf "${TMP}/${tokens_archive}" -C "${extract}"
+    tar xf "${archive}" -C "${extract}" --no-same-owner
     local inner
     inner="$(find "${extract}" -name tokens.txt | head -1)"
     if [[ -n "${inner}" ]]; then
@@ -97,7 +104,7 @@ install_sensevoice_rk3588() {
         "${TMP}/sherpa-sensevoice-int8.tar.bz2"
       rm -rf "${extract}"
       mkdir -p "${extract}"
-      tar xf "${TMP}/sherpa-sensevoice-int8.tar.bz2" -C "${extract}"
+      tar xf "${TMP}/sherpa-sensevoice-int8.tar.bz2" -C "${extract}" --no-same-owner
       inner="$(find "${extract}" -name tokens.txt | head -1)"
       [[ -n "${inner}" ]] && cp -f "${inner}" "${dest}/tokens.txt"
     fi
@@ -128,16 +135,23 @@ install_sensevoice() {
 install_kokoro() {
   local name="kokoro"
   local dest="${DEST}/${name}"
+  local archive="kokoro-multi-lang-v1_1.tar.bz2"
   if [[ -f "${dest}/model.onnx" && -f "${dest}/voices.bin" && -f "${dest}/tokens.txt" ]]; then
     echo "=== ${name}: already present ==="
     return 0
   fi
-  echo "=== ${name} (Kokoro multi-lang v1.0, zh+en) ==="
-  echo "    doc: https://k2-fsa.github.io/sherpa/onnx/tts/pretrained_models/kokoro.html"
-  local archive="kokoro-multi-lang-v1_0.tar.bz2"
-  fetch "${SHERPA_BASE}/tts-models/${archive}" "${TMP}/${archive}"
+  echo "=== ${name} (Kokoro multi-lang v1_1, zh+en, 103 speakers) ==="
+  echo "    doc: https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html"
+  local archive_path=""
+  if [[ -f "${dest}/${archive}" ]]; then
+    archive_path="${dest}/${archive}"
+    echo "  use local: ${archive}"
+  else
+    archive_path="${TMP}/${archive}"
+    fetch "${SHERPA_BASE}/tts-models/${archive}" "${archive_path}"
+  fi
   rm -rf "${dest}"
-  extract_tarball "${TMP}/${archive}" "${dest}"
+  extract_tarball "${archive_path}" "${dest}"
   echo "  -> ${dest}"
 }
 

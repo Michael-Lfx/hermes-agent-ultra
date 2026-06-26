@@ -90,9 +90,16 @@ $kokoroDest = Join-Path $Dest "kokoro"
 if ((Test-Path (Join-Path $kokoroDest "model.onnx")) -and (Test-Path (Join-Path $kokoroDest "voices.bin"))) {
     Write-Host "=== kokoro: already present ==="
 } else {
-    Write-Host "=== kokoro (Kokoro multi-lang v1.0) ==="
-    $archive = Join-Path $Tmp "kokoro-multi-lang-v1_0.tar.bz2"
-    Fetch "$SherpaBase/tts-models/kokoro-multi-lang-v1_0.tar.bz2" $archive
+    Write-Host "=== kokoro (Kokoro multi-lang v1_1, 103 speakers) ==="
+    $archiveName = "kokoro-multi-lang-v1_1.tar.bz2"
+    $localArchive = Join-Path $kokoroDest $archiveName
+    if (Test-Path $localArchive) {
+        Write-Host "  use local: $archiveName"
+        $archive = $localArchive
+    } else {
+        $archive = Join-Path $Tmp $archiveName
+        Fetch "$SherpaBase/tts-models/$archiveName" $archive
+    }
     Extract-TarBz2 $archive $kokoroDest
     Write-Host "  -> $kokoroDest"
 }

@@ -345,10 +345,10 @@ pub struct SherpaKokoroTtsConfig {
     pub length_scale: f32,
     #[serde(default)]
     pub lang: Option<String>,
-    /// Speaker voice name for kokoro-multi-lang-v1_0 (e.g. `zf_xiaoyi`). Overrides `sid` when set.
+    /// Speaker voice name for kokoro-multi-lang-v1_1 (e.g. `zf_048`). Overrides `sid` when set.
     #[serde(default, alias = "speaker")]
     pub voice: Option<String>,
-    /// Speaker ID (0–52 for bundled kokoro-multi-lang-v1_0). Used when `voice` is unset.
+    /// Speaker ID (0–102 for bundled kokoro-multi-lang-v1_1). Used when `voice` is unset.
     #[serde(default)]
     pub sid: i32,
     #[serde(default = "default_kokoro_speed")]
@@ -2144,7 +2144,7 @@ model = "m"
 [tts]
 backend = "sherpa"
 [tts.sherpa.kokoro]
-voice = "zf_xiaoyi"
+voice = "zf_048"
 model = "models/kokoro/model.onnx"
 [llm]
 base_url = "http://127.0.0.1/v1"
@@ -2160,7 +2160,7 @@ model = "m"
                 .kokoro
                 .effective_sid()
                 .unwrap(),
-            48
+            31
         );
         assert!(validate_sherpa_tts(&cfg).is_ok());
     }

@@ -71,7 +71,7 @@ impl TtsBackend {
 
 #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
 fn resolve_local_sherpa_tts() -> TtsBackend {
-    TtsBackend::KokoroRknn
+    TtsBackend::Sherpa
 }
 
 #[cfg(all(

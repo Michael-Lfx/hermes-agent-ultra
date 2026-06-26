@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rockchip board launcher: in-process hermes-talk (SenseVoice RKNN ASR + Kokoro TTS).
+# Rockchip board launcher: in-process hermes-talk (SenseVoice RKNN ASR + sherpa Kokoro v1_1 TTS).
 set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +24,7 @@ init_hermes_home() {
 }
 
 init_talk_assets() {
-    for item in models misaki-data espeak-ng-data; do
+    for item in models; do
         if [ ! -e "${DIR}/${item}" ]; then
             continue
         fi
@@ -80,15 +80,18 @@ preflight() {
         "${DIR}/models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn" \
         "${DIR}/models/kokoro/model.onnx" \
         "${DIR}/models/kokoro/voices.bin" \
-        "${DIR}/models/kokoro/tokens.txt"
+        "${DIR}/models/kokoro/tokens.txt" \
+        "${DIR}/models/kokoro/lexicon-us-en.txt" \
+        "${DIR}/models/kokoro/lexicon-zh.txt"
     do
         if [ ! -f "${f}" ]; then
             echo "warn: missing ${f}" >&2
             missing=1
         fi
     done
-    if [ ! -f "${DIR}/models/kokoro/kokoro_decoder.rknn" ]; then
-        echo "warn: missing RKNN TTS decoder; will use sherpa CPU kokoro fallback" >&2
+    if [ ! -d "${DIR}/models/kokoro/espeak-ng-data" ]; then
+        echo "warn: missing ${DIR}/models/kokoro/espeak-ng-data" >&2
+        missing=1
     fi
     if [ "${missing}" -eq 1 ]; then
         echo "warn: bundle incomplete; run make ensure-talk-models-rockchip" >&2

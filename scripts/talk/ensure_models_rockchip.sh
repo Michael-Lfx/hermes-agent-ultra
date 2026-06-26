@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Verify RK3588 talk bundle models under ${MODELS_ROOT}/models/; download if missing.
 #
+# TTS: sherpa-onnx kokoro-multi-lang-v1_1 (prebuilt tarball, no local build.py)
+#   https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html
+#
 # Usage:
 #   bash scripts/talk/ensure_models_rockchip.sh
 #   CHECK_ONLY=1 bash scripts/talk/ensure_models_rockchip.sh
@@ -17,6 +20,8 @@ REQUIRED=(
   "kokoro/model.onnx"
   "kokoro/voices.bin"
   "kokoro/tokens.txt"
+  "kokoro/lexicon-us-en.txt"
+  "kokoro/lexicon-zh.txt"
   "kws-zh-en/encoder.onnx"
   "kws-zh-en/decoder.onnx"
   "kws-zh-en/joiner.onnx"
@@ -26,10 +31,19 @@ REQUIRED=(
   "speaker/3dspeaker.onnx"
 )
 
+REQUIRED_DIRS=(
+  "kokoro/espeak-ng-data"
+)
+
 missing=()
 for rel in "${REQUIRED[@]}"; do
   if [[ ! -f "${DEST}/${rel}" ]]; then
     missing+=("${rel}")
+  fi
+done
+for rel in "${REQUIRED_DIRS[@]}"; do
+  if [[ ! -d "${DEST}/${rel}" ]]; then
+    missing+=("${rel}/")
   fi
 done
 
@@ -45,6 +59,6 @@ if [[ "${CHECK_ONLY:-0}" == "1" ]]; then
   exit 1
 fi
 
-echo "=== downloading (HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-unset}}}}) ==="
+echo "=== downloading kokoro-multi-lang-v1_1 + aux (HTTPS_PROXY=${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-unset}}}}) ==="
 ROCKCHIP_ONLY=1 HERMES_ULTRA_ROOT="${ROOT}" MODELS_ROOT="${MODELS_ROOT}" \
   bash "${SCRIPT_DIR}/download_models.sh"

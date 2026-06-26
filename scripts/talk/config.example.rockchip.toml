@@ -1,6 +1,7 @@
 # ============================================================
-# hermes-talk Rockchip 板端配置（SenseVoice RKNN ASR + Kokoro TTS 进程内）
-# RKNN 主路径 + sherpa CPU kokoro fallback（models/kokoro/model.onnx）
+# hermes-talk Rockchip 板端配置（SenseVoice RKNN ASR + sherpa Kokoro v1_1 TTS）
+# TTS 模型: kokoro-multi-lang-v1_1（官方预发布包，无需本机构建）
+#   https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html
 # ============================================================
 
 # ============================================================
@@ -25,28 +26,14 @@ num_threads = 2
 provider = "rknn"
 
 # ============================================================
-# 语音合成 (TTS) — Kokoro RKNN in-process; fallback: sherpa CPU kokoro
-# backend: kokoro | local | rockchip | sherpa | bailian | cloud
+# 语音合成 (TTS) — sherpa-onnx kokoro-multi-lang-v1_1 (CPU, 103 speakers)
+# backend: sherpa | kokoro | local | rockchip | bailian | cloud
 # ============================================================
 [tts]
-backend = "kokoro"
+backend = "sherpa"
 sample_rate = 24000
 format = "pcm"
-voice = "zf_xiaoyi"
-
-[tts.kokoro_rknn]
-encoder = "models/kokoro/kokoro_encoder.onnx"
-har_gen = "models/kokoro/har_generator.onnx"
-decoder = "models/kokoro/kokoro_decoder.rknn"
-vocab = "models/kokoro/config.json"
-voices_dir = "models/kokoro/voices_npy"
-espeak_data = "espeak-ng-data"
-lexicon_dir = "misaki-data"
-voice = "af_heart"
-speed = 1.0
-british = false
-enabled = true
-t_fix = 50
+voice = "zf_048"
 
 [tts.sherpa]
 engine = "kokoro"
@@ -60,7 +47,7 @@ tokens = "models/kokoro/tokens.txt"
 data_dir = "models/kokoro/espeak-ng-data"
 dict_dir = "models/kokoro/dict"
 lexicon = "models/kokoro/lexicon-us-en.txt,models/kokoro/lexicon-zh.txt"
-voice = "zf_xiaoyi"
+voice = "zf_048"
 speed = 1.0
 
 # 云端 ASR/TTS（板端也可使用，设置 backend = "bailian" 并配置 dashscope）:
