@@ -64,38 +64,57 @@ impl TtsBackend {
     pub fn from_config(tts_cfg: &TtsConfig) -> Self {
         match classify_talk_backend(&tts_cfg.backend) {
             TalkBackendKind::Cloud => TtsBackend::Bailian,
-            TalkBackendKind::Sherpa | TalkBackendKind::LocalHardware => resolve_local_sherpa_tts(),
+            TalkBackendKind::Sherpa => resolve_sherpa_kind_tts(tts_cfg),
+            TalkBackendKind::LocalHardware => resolve_local_hardware_tts(),
         }
     }
 }
 
 #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-fn resolve_local_sherpa_tts() -> TtsBackend {
-    TtsBackend::Sherpa
+fn resolve_sherpa_kind_tts(tts_cfg: &TtsConfig) -> TtsBackend {
+    if tts_cfg.backend.trim().eq_ignore_ascii_case("sherpa") {
+        TtsBackend::Sherpa
+    } else {
+        TtsBackend::KokoroRknn
+    }
 }
 
 #[cfg(all(
     feature = "sherpa-asr-tts",
     not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
 ))]
-fn resolve_local_sherpa_tts() -> TtsBackend {
+fn resolve_sherpa_kind_tts(_tts_cfg: &TtsConfig) -> TtsBackend {
     TtsBackend::Sherpa
+}
+
+#[cfg(not(feature = "sherpa-asr-tts"))]
+fn resolve_sherpa_kind_tts(_tts_cfg: &TtsConfig) -> TtsBackend {
+    TtsBackend::Bailian
+}
+
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+fn resolve_local_hardware_tts() -> TtsBackend {
+    TtsBackend::KokoroRknn
 }
 
 #[cfg(all(
     feature = "rockchip",
     target_arch = "aarch64",
-    not(feature = "sherpa-asr-tts")
+    not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
 ))]
-fn resolve_local_sherpa_tts() -> TtsBackend {
+fn resolve_local_hardware_tts() -> TtsBackend {
     TtsBackend::Rockchip
 }
 
 #[cfg(not(any(
-    feature = "sherpa-asr-tts",
-    all(feature = "rockchip", target_arch = "aarch64")
+    all(feature = "rockchip", feature = "sherpa-asr-tts"),
+    all(
+        feature = "rockchip",
+        target_arch = "aarch64",
+        not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
+    )
 )))]
-fn resolve_local_sherpa_tts() -> TtsBackend {
+fn resolve_local_hardware_tts() -> TtsBackend {
     TtsBackend::Bailian
 }
 
@@ -143,6 +162,12 @@ async fn create_kokoro_rknn_or_fallback(
     tts_cfg: &TtsConfig,
 ) -> Result<(Arc<dyn TtsEngine>, mpsc::Receiver<TtsAudio>)> {
     let rk_cfg = tts_cfg.effective_kokoro_rknn();
+    if !rk_cfg.enabled {
+        warn!("kokoro RKNN disabled in config; using sherpa CPU kokoro");
+        let sherpa_cfg = tts_cfg.effective_sherpa_fallback();
+        let (client, rx) = SherpaTts::connect(&sherpa_cfg).await?;
+        return Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx));
+    }
     match KokoroRknnTts::connect(&rk_cfg).await {
         Ok((client, rx)) => Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx)),
         Err(e) => {

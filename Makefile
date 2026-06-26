@@ -137,7 +137,7 @@ PACKAGE_TALK_ENV  := ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) BI
         debug-talk-rockchip-arm64 \
         package-talk package-talk-windows package-talk-linux package-talk-macos \
         package-talk-rockchip package-talk-rockchip-dev prefetch-talk-aarch64 \
-        ensure-talk-models ensure-talk-models-rockchip \
+        ensure-talk-models ensure-talk-models-rockchip ensure-kokoro-rockchip \
         fetch-talk-sherpa-runtime fetch-talk-sherpa-runtime-windows \
         download-talk-models download-talk-models-windows download-talk-models-unix \
         check-talk-models check-talk-models-windows check-talk-models-unix \
@@ -172,9 +172,10 @@ help:
 	@echo "  package-talk-windows         Bundle for Windows (.zip)"
 	@echo "  package-talk-linux           Bundle for Linux (.tar.gz)"
 	@echo "  package-talk-macos           Bundle for macOS (.tar.gz)"
-	@echo "  package-talk-rockchip        Bundle binary + sherpa kokoro-multi-lang-v1_1 + models"
-	@echo "  package-talk-rockchip-dev    Same bundle using debug cross-build (faster; hermes-talk-rk3588-dev)"
-	@echo "  ensure-talk-models-rockchip  Verify/download SenseVoice RKNN + kokoro-multi-lang-v1_1"
+	@echo "  package-talk-rockchip        Bundle ASR + Kokoro RKNN/sherpa TTS + models"
+	@echo "  package-talk-rockchip-dev    Same bundle using debug cross-build (faster)"
+	@echo "  ensure-talk-models-rockchip  SenseVoice RKNN + sherpa kokoro v1_1 CPU fallback"
+	@echo "  ensure-kokoro-rockchip       Verify/copy Kokoro RKNN split models (optional NPU TTS)"
 	@echo "  ensure-talk-models         Verify talk models; download missing (auto OS)"
 	@echo "  check-talk-models          Verify talk models only; fail if missing (auto OS)"
 	@echo "  download-talk-models       Download sherpa-onnx models into .models/ (auto OS)"
@@ -312,6 +313,10 @@ ensure-talk-models-linux ensure-talk-models-macos ensure-talk-models-unix:
 
 ensure-talk-models-rockchip:
 	HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) bash $(TALK_SCRIPTS)/ensure_models_rockchip.sh
+
+ensure-kokoro-rockchip:
+	HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) KOKORO_SERVER_DIR=$(KOKORO_SERVER_DIR) \
+		bash $(TALK_SCRIPTS)/ensure_kokoro_rockchip.sh
 
 check-talk-models: check-talk-models-$(HOST_OS)
 

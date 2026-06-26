@@ -1,7 +1,7 @@
 # ============================================================
-# hermes-talk Rockchip 板端配置（SenseVoice RKNN ASR + sherpa Kokoro v1_1 TTS）
-# TTS 模型: kokoro-multi-lang-v1_1（官方预发布包，无需本机构建）
-#   https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html
+# hermes-talk Rockchip 板端配置
+# ASR: SenseVoice RKNN (NPU)
+# TTS: Kokoro RKNN in-process (NPU decoder) + sherpa kokoro-multi-lang-v1_1 CPU fallback
 # ============================================================
 
 # ============================================================
@@ -26,15 +26,30 @@ num_threads = 2
 provider = "rknn"
 
 # ============================================================
-# 语音合成 (TTS) — sherpa-onnx kokoro-multi-lang-v1_1 (CPU, 103 speakers)
-# backend: sherpa | kokoro | local | rockchip | bailian | cloud
+# 语音合成 (TTS)
+# backend: kokoro (NPU + CPU fallback) | sherpa (CPU only) | bailian | cloud
 # ============================================================
 [tts]
-backend = "sherpa"
+backend = "kokoro"
 sample_rate = 24000
 format = "pcm"
 voice = "zf_048"
 
+[tts.kokoro_rknn]
+encoder = "models/kokoro/kokoro_encoder.onnx"
+har_gen = "models/kokoro/har_generator.onnx"
+decoder = "models/kokoro/kokoro_decoder.rknn"
+vocab = "models/kokoro/config.json"
+voices_dir = "models/kokoro/voices_npy"
+espeak_data = "espeak-ng-data"
+lexicon_dir = "misaki-data"
+voice = "af_heart"
+speed = 1.0
+british = false
+enabled = true
+t_fix = 50
+
+# sherpa CPU fallback (required when RKNN/libkokoro unavailable)
 [tts.sherpa]
 engine = "kokoro"
 provider = "cpu"
