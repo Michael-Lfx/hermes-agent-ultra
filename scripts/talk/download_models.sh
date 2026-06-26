@@ -29,6 +29,22 @@ HF_BASE="${HF_ENDPOINT:-https://hf-mirror.com}"
 HF_BASE="${HF_BASE%/}"
 DOWNLOAD_PROXY="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
 
+# harvestsu/sensevoice-rknn LFS blob (2024-07); truncated downloads break rknn_init.
+SENSEVOICE_RK3588_ENCODER_MIN_BYTES=400000000
+
+file_size_bytes() {
+  wc -c <"$1" | tr -d ' '
+}
+
+verify_min_bytes() {
+  local path="$1"
+  local min="$2"
+  [[ -f "${path}" ]] || return 1
+  local size
+  size="$(file_size_bytes "${path}")"
+  [[ "${size}" -ge "${min}" ]]
+}
+
 fetch() {
   local url="$1"
   local out="$2"
@@ -41,6 +57,30 @@ fetch() {
     curl -fsSL --retry 3 --retry-delay 2 --proxy "${DOWNLOAD_PROXY}" -o "${out}" "${url}"
   else
     curl -fsSL --retry 3 --retry-delay 2 -o "${out}" "${url}"
+  fi
+}
+
+fetch_min_bytes() {
+  local url="$1"
+  local out="$2"
+  local min="$3"
+  if verify_min_bytes "${out}" "${min}"; then
+    echo "  skip (cached, $(file_size_bytes "${out}") bytes): $(basename "${out}")"
+    return 0
+  fi
+  if [[ -f "${out}" ]]; then
+    local size
+    size="$(file_size_bytes "${out}")"
+    echo "  warn: ${out} is truncated (${size} bytes, need >= ${min}); re-downloading" >&2
+    rm -f "${out}"
+  fi
+  fetch "${url}" "${out}"
+  if ! verify_min_bytes "${out}" "${min}"; then
+    local size
+    size="$(file_size_bytes "${out}" 2>/dev/null || echo 0)"
+    echo "error: ${out} download incomplete (${size} bytes, need >= ${min})" >&2
+    echo "hint: retry with HTTPS_PROXY set, or: HF_ENDPOINT=https://huggingface.co bash scripts/talk/download_models.sh" >&2
+    exit 1
   fi
 }
 
@@ -69,14 +109,18 @@ install_sensevoice_rk3588() {
   local name="sensevoice-rk3588"
   local dest="${DEST}/${name}"
   local encoder="encoder.rk3588.fp16-scaled.rknn"
-  if [[ -f "${dest}/${encoder}" && -f "${dest}/tokens.txt" ]]; then
+  if verify_min_bytes "${dest}/${encoder}" "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}" \
+    && [[ -f "${dest}/tokens.txt" ]]; then
     echo "=== ${name}: already present ==="
     return 0
   fi
   echo "=== ${name} (SenseVoice RKNN for RK3588, via ${HF_BASE}) ==="
   mkdir -p "${dest}"
   local repo="harvestsu/sensevoice-rknn"
-  fetch_hf "${repo}" "sense-voice-encoder.rk3588.fp16-scaled.rknn" "${dest}/${encoder}"
+  fetch_min_bytes \
+    "${HF_BASE}/${repo}/resolve/main/sense-voice-encoder.rk3588.fp16-scaled.rknn" \
+    "${dest}/${encoder}" \
+    "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}"
   fetch_hf "${repo}" "am.mvn" "${dest}/am.mvn"
   fetch_hf "${repo}" "embedding.npy" "${dest}/embedding.npy"
   fetch_hf "${repo}" "chn_jpn_yue_eng_ko_spectok.bpe.model" "${dest}/chn_jpn_yue_eng_ko_spectok.bpe.model"

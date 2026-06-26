@@ -76,8 +76,17 @@ write_talk_config() {
 
 preflight() {
     missing=0
+    encoder="${DIR}/models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+    if [ -f "${encoder}" ]; then
+        size="$(wc -c <"${encoder}")"
+        if [ "${size}" -lt 400000000 ]; then
+            echo "error: ${encoder} is truncated (${size} bytes, need ~490MB)" >&2
+            echo "hint: on dev machine run: rm ${encoder} && make ensure-talk-models-rockchip && make package-talk-rockchip-dev" >&2
+            missing=1
+        fi
+    fi
     for f in \
-        "${DIR}/models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn" \
+        "${encoder}" \
         "${DIR}/models/kokoro/model.onnx" \
         "${DIR}/models/kokoro/voices.bin" \
         "${DIR}/models/kokoro/tokens.txt" \

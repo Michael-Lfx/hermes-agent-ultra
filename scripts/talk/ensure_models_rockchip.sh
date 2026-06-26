@@ -14,6 +14,9 @@ MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 DEST="${MODELS_ROOT}/models"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Must match download_models.sh (truncated HF LFS downloads fail rknn_init on board).
+SENSEVOICE_RK3588_ENCODER_MIN_BYTES=400000000
+
 REQUIRED=(
   "sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
   "sensevoice-rk3588/tokens.txt"
@@ -41,6 +44,15 @@ for rel in "${REQUIRED[@]}"; do
     missing+=("${rel}")
   fi
 done
+encoder="${DEST}/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+if [[ -f "${encoder}" ]]; then
+  size="$(wc -c <"${encoder}" | tr -d ' ')"
+  if [[ "${size}" -lt "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}" ]]; then
+    echo "warn: ${encoder} looks truncated (${size} bytes, need >= ${SENSEVOICE_RK3588_ENCODER_MIN_BYTES})" >&2
+    missing+=("sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn (re-download)")
+    rm -f "${encoder}"
+  fi
+fi
 for rel in "${REQUIRED_DIRS[@]}"; do
   if [[ ! -d "${DEST}/${rel}" ]]; then
     missing+=("${rel}/")
