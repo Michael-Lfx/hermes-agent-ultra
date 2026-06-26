@@ -58,12 +58,13 @@ impl SherpaAsr {
             use_itn: cfg.use_itn,
         };
         recognizer_config.model_config.tokens = Some(cfg.tokens.clone());
-        recognizer_config.model_config.provider = Some(cfg.provider.clone());
+        let provider = crate::sherpa::infer_asr_provider(&cfg.provider, &cfg.model);
+        recognizer_config.model_config.provider = Some(provider.clone());
         recognizer_config.model_config.num_threads = cfg.num_threads;
 
         let recognizer = OfflineRecognizer::create(&recognizer_config).ok_or_else(|| {
             DemoError::Config(format!(
-                "failed to create SenseVoice recognizer (check asr.sherpa model paths): model={}",
+                "failed to create SenseVoice recognizer (provider={provider}, model={})",
                 cfg.model
             ))
         })?;
@@ -93,6 +94,7 @@ impl SherpaAsr {
 
         info!(
             model = %cfg.model,
+            provider = %provider,
             language = %cfg.language,
             sample_rate,
             "sherpa SenseVoice ASR ready"

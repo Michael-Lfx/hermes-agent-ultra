@@ -26,6 +26,24 @@ pub fn validate_provider(provider: &str) -> Result<()> {
     }
 }
 
+/// SenseVoice RKNN models require provider `rknn` on Rockchip builds.
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+pub fn infer_asr_provider(provider: &str, model: &str) -> String {
+    let p = provider.trim();
+    if p != "cpu" && !p.is_empty() {
+        return p.to_string();
+    }
+    if model.to_ascii_lowercase().ends_with(".rknn") {
+        return "rknn".to_string();
+    }
+    p.to_string()
+}
+
+#[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+pub fn infer_asr_provider(provider: &str, _model: &str) -> String {
+    provider.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -46,5 +64,25 @@ mod tests {
     #[test]
     fn rknn_supported_on_rockchip() {
         validate_provider("rknn").unwrap();
+    }
+
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    #[test]
+    fn infer_asr_provider_from_rknn_model() {
+        assert_eq!(
+            infer_asr_provider(
+                "cpu",
+                "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+            ),
+            "rknn"
+        );
+        assert_eq!(
+            infer_asr_provider("rknn", "models/sensevoice-rk3588/x.rknn"),
+            "rknn"
+        );
+        assert_eq!(
+            infer_asr_provider("cpu", "models/sensevoice/model.onnx"),
+            "cpu"
+        );
     }
 }

@@ -114,10 +114,7 @@ impl AsrConfig {
                 cfg.provider = global.provider.clone();
             }
         }
-        #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-        if cfg.provider == "cpu" && cfg.model.ends_with(".rknn") {
-            cfg.provider = "rknn".to_string();
-        }
+        cfg.provider = crate::sherpa::infer_asr_provider(&cfg.provider, &cfg.model);
         cfg
     }
 }
@@ -1547,9 +1544,7 @@ impl Config {
 
         #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
         if let Some(asr) = &mut self.asr.sherpa {
-            if asr.provider == "cpu" && asr.model.ends_with(".rknn") {
-                asr.provider = "rknn".to_string();
-            }
+            asr.provider = crate::sherpa::infer_asr_provider(&asr.provider, &asr.model);
         }
     }
 
