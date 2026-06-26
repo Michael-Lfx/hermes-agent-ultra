@@ -143,6 +143,11 @@ class Tokenizer {
   }
 };
 
+struct ShapedFloat {
+  std::vector<float> data;
+  std::vector<int64_t> shape;
+};
+
 class RknnRunner {
  public:
   RknnRunner() = default;
@@ -196,8 +201,7 @@ class RknnRunner {
     return shape;
   }
 
-  std::vector<float> infer(const std::vector<const float*>& inputs,
-                           const std::vector<size_t>& elem_counts) {
+  ShapedFloat infer(const std::vector<ShapedFloat>& inputs) {
     if (inputs.size() != in_attrs_.size())
       throw std::runtime_error("rknn input count mismatch");
     std::vector<rknn_input> ins(inputs.size());
@@ -205,15 +209,19 @@ class RknnRunner {
     owned.resize(inputs.size());
     for (size_t i = 0; i < inputs.size(); ++i) {
       const auto& attr = in_attrs_[i];
-      size_t n = elem_counts[i];
-      owned[i].resize(n * sizeof(float));
-      std::memcpy(owned[i].data(), inputs[i], n * sizeof(float));
+      if (inputs[i].data.size() != static_cast<size_t>(attr.n_elems)) {
+        throw std::runtime_error(
+            "rknn input elem mismatch idx=" + std::to_string(i) + " got=" +
+            std::to_string(inputs[i].data.size()) + " expected=" + std::to_string(attr.n_elems));
+      }
+      owned[i].resize(attr.size);
+      std::memcpy(owned[i].data(), inputs[i].data.data(), attr.size);
       ins[i].index = static_cast<uint32_t>(i);
       ins[i].buf = owned[i].data();
-      ins[i].size = static_cast<uint32_t>(owned[i].size());
+      ins[i].size = attr.size;
       ins[i].pass_through = 0;
-      ins[i].type = RKNN_TENSOR_FLOAT32;
-      ins[i].fmt = RKNN_TENSOR_UNDEFINED;
+      ins[i].type = attr.type;
+      ins[i].fmt = attr.fmt;
     }
     int ret = rknn_inputs_set(ctx_, static_cast<uint32_t>(ins.size()), ins.data());
     if (ret != RKNN_SUCC) throw std::runtime_error("rknn_inputs_set failed");
@@ -227,9 +235,10 @@ class RknnRunner {
     ret = rknn_outputs_get(ctx_, static_cast<uint32_t>(outs.size()), outs.data(), nullptr);
     if (ret != RKNN_SUCC) throw std::runtime_error("rknn_outputs_get failed");
     if (outs.empty() || !outs[0].buf) throw std::runtime_error("rknn empty output");
-    size_t out_elems = outs[0].size / sizeof(float);
-    std::vector<float> result(out_elems);
-    std::memcpy(result.data(), outs[0].buf, outs[0].size);
+    ShapedFloat result;
+    result.shape = output_shape();
+    result.data.resize(out_attrs_[0].n_elems);
+    std::memcpy(result.data.data(), outs[0].buf, outs[0].size);
     rknn_outputs_release(ctx_, static_cast<uint32_t>(outs.size()), outs.data());
     return result;
   }
@@ -314,8 +323,19 @@ static std::vector<int64_t> resolve_tensor_shape(const std::vector<int64_t>& sha
   return out;
 }
 
-static std::vector<int64_t> ort_input_shape(Ort::Session& sess, size_t idx) {
-  return sess.GetInputTypeInfo(idx).GetTensorTypeAndShapeInfo().GetShape();
+static ShapedFloat shaped_from_ort(const Ort::Value& v) {
+  ShapedFloat out;
+  auto info = v.GetTensorTypeAndShapeInfo();
+  out.shape = info.GetShape();
+  out.data = tensor_to_float_vector(v);
+  return out;
+}
+
+static void normalize_peak(std::vector<float>& audio, float target = 0.95f) {
+  float peak = 0.0f;
+  for (float v : audio) peak = std::max(peak, std::fabs(v));
+  if (peak <= 0.0f) return;
+  for (float& v : audio) v = v / peak * target;
 }
 
 static std::vector<int16_t> float_to_pcm16(const std::vector<float>& audio) {
@@ -468,40 +488,21 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
         find_output_by_name(*impl->prefix_sess, alloc, prefix_outputs, kDecoderInput, 0);
     const Ort::Value* style_slice_val =
         find_output_by_name(*impl->prefix_sess, alloc, prefix_outputs, kStyleSlice, 1);
-    auto decoder_input = tensor_to_float_vector(*decoder_val);
-    auto style_slice = tensor_to_float_vector(*style_slice_val);
+    auto decoder_input = shaped_from_ort(*decoder_val);
+    auto style_slice = shaped_from_ort(*style_slice_val);
 
-    std::vector<const float*> rk_in{decoder_input.data(), style_slice.data()};
-    std::vector<size_t> rk_counts{decoder_input.size(), style_slice.size()};
-    auto hidden = impl->front_rknn.infer(rk_in, rk_counts);
-    auto hidden_shape = impl->front_rknn.output_shape();
+    auto hidden = impl->front_rknn.infer({decoder_input, style_slice});
 
-    rk_in = {hidden.data(), style_slice.data()};
-    rk_counts = {hidden.size(), style_slice.size()};
-    auto voc_add = impl->vocoder_front_rknn.infer(rk_in, rk_counts);
-    auto voc_shape = impl->vocoder_front_rknn.output_shape();
+    auto voc_add = impl->vocoder_front_rknn.infer({hidden, style_slice});
 
-    std::array<int64_t, 1> tail_speed_shape{1};
-    Ort::Value tail_speed =
-        Ort::Value::CreateTensor(mem, speed_arr.data(), speed_arr.size(), tail_speed_shape.data(), 1);
-
-    auto make_tail_tensor = [&](const std::vector<float>& data,
-                                const std::vector<int64_t>& shape) -> Ort::Value {
-      auto resolved = resolve_tensor_shape(shape, data.size());
-      return Ort::Value::CreateTensor<float>(mem, const_cast<float*>(data.data()), data.size(),
-                                             resolved.data(), resolved.size());
+    auto make_tail_tensor = [&](const ShapedFloat& tensor) -> Ort::Value {
+      auto resolved = resolve_tensor_shape(tensor.shape, tensor.data.size());
+      return Ort::Value::CreateTensor<float>(
+          mem, const_cast<float*>(tensor.data.data()), tensor.data.size(), resolved.data(),
+          resolved.size());
     };
 
-    std::vector<int64_t> slice_shape;
-    {
-      auto ti = style_slice_val->GetTensorTypeAndShapeInfo();
-      slice_shape = ti.GetShape();
-    }
-    hidden_shape = resolve_tensor_shape(hidden_shape, hidden.size());
-    voc_shape = resolve_tensor_shape(voc_shape, voc_add.size());
-    slice_shape = resolve_tensor_shape(slice_shape, style_slice.size());
-
-    // Map by input names on tail_rest session.
+    // Map by input names on tail_rest session (same contract as rkvoice-stream).
     size_t tail_in_count = impl->tail_rest_sess->GetInputCount();
     std::vector<std::string> tail_name_storage;
     std::vector<const char*> tail_names;
@@ -509,33 +510,25 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
     for (size_t i = 0; i < tail_in_count; ++i) {
       auto name = impl->tail_rest_sess->GetInputNameAllocated(i, alloc);
       std::string n = name.get();
-      auto expected = ort_input_shape(*impl->tail_rest_sess, i);
       if (n == kVocoderFrontOutput || n.find("Add_5") != std::string::npos)
-        ordered.push_back(make_tail_tensor(voc_add, expected));
+        ordered.push_back(make_tail_tensor(voc_add));
       else if (n == kFrontOutput || n.find("Mul_output_0") != std::string::npos)
-        ordered.push_back(make_tail_tensor(hidden, expected));
+        ordered.push_back(make_tail_tensor(hidden));
       else if (n == kStyleSlice || n.find("Slice_2") != std::string::npos)
-        ordered.push_back(make_tail_tensor(style_slice, expected));
+        ordered.push_back(make_tail_tensor(style_slice));
       else
-        ordered.push_back(std::move(tail_speed));
+        throw std::runtime_error("unsupported tail_rest input: " + n);
       tail_name_storage.push_back(n);
       tail_names.push_back(tail_name_storage.back().c_str());
-    }
-    if (ordered.size() != tail_in_count) {
-      ordered.clear();
-      tail_name_storage.clear();
-      tail_names.clear();
-      ordered.push_back(make_tail_tensor(voc_add, voc_shape));
-      ordered.push_back(make_tail_tensor(hidden, hidden_shape));
-      ordered.push_back(make_tail_tensor(style_slice, slice_shape));
-      tail_name_storage = {kVocoderFrontOutput, kFrontOutput, kStyleSlice};
-      for (const auto& n : tail_name_storage) tail_names.push_back(n.c_str());
     }
 
     auto tail_outputs = run_session_with_all_outputs(*impl->tail_rest_sess, tail_names.data(),
                                                      ordered.data(), ordered.size());
     if (tail_outputs.empty()) throw std::runtime_error("tail_rest produced no output");
-    auto audio = tensor_to_float_vector(tail_outputs[0]);
+    const Ort::Value* audio_val = find_output_by_name(*impl->tail_rest_sess, alloc, tail_outputs,
+                                                      "audio", 0);
+    auto audio = tensor_to_float_vector(*audio_val);
+    normalize_peak(audio);
     audio = trim_silence(audio);
     auto pcm = float_to_pcm16(audio);
     if (!pcm.empty()) callback(pcm.data(), pcm.size(), user_data);
