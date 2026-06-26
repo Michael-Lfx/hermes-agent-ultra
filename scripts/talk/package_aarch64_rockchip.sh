@@ -54,6 +54,24 @@ else
   echo "warn: missing ${RK_NPU_LIB_DIR}/librknnrt.so (ASR/TTS NPU runtime)" >&2
 fi
 
+# sherpa-onnx RKNN shared runtime (linked when SHERPA_ONNX_PACK=rknn)
+BIN_DIR="$(dirname "${BIN}")"
+shopt -s nullglob
+for so in "${BIN_DIR}"/*.so; do
+  cp -f "${so}" "${OUT}/lib/"
+done
+shopt -u nullglob
+SHERPA_RKNN_SHARED="${ROOT}/.cross-cache/sherpa-onnx/sherpa-onnx-v1.13.3-rknn-linux-aarch64-shared.tar.bz2"
+if [[ ! -f "${OUT}/lib/libsherpa-onnx-c-api.so" && -f "${SHERPA_RKNN_SHARED}" ]]; then
+  tar xjf "${SHERPA_RKNN_SHARED}" -C "${OUT}/lib" --strip-components=2 \
+    sherpa-onnx-v1.13.3-rknn-linux-aarch64-shared/lib/libonnxruntime.so \
+    sherpa-onnx-v1.13.3-rknn-linux-aarch64-shared/lib/libsherpa-onnx-c-api.so \
+    sherpa-onnx-v1.13.3-rknn-linux-aarch64-shared/lib/libsherpa-onnx-cxx-api.so 2>/dev/null || true
+fi
+if [[ ! -f "${OUT}/lib/libsherpa-onnx-c-api.so" ]]; then
+  echo "warn: missing sherpa RKNN shared libs in ${OUT}/lib; rebuild with SHERPA_ONNX_PACK=rknn" >&2
+fi
+
 # Sherpa kokoro-multi-lang-v1_1 CPU fallback (required)
 [[ -d "${MODELS_ROOT}/models/kokoro" ]] \
   || fail "missing ${MODELS_ROOT}/models/kokoro; run: make ensure-talk-models-rockchip"

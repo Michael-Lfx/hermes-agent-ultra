@@ -86,7 +86,7 @@ fn try_main() -> Result<(), DynError> {
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH")?;
     let pack = resolve_sherpa_pack(&target_os, &target_arch)?;
-    let link_mode = resolve_link_mode()?;
+    let link_mode = effective_link_mode(pack, resolve_link_mode()?);
     let lib_dir = resolve_lib_dir(link_mode, &target_os, &target_arch, pack)?;
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
@@ -103,10 +103,30 @@ fn try_main() -> Result<(), DynError> {
 
     match link_mode {
         LinkMode::Static => emit_static_link_directives(&target_os, pack),
-        LinkMode::Shared => emit_shared_link_directives(),
+        LinkMode::Shared => {
+            emit_shared_link_directives();
+            if pack == SherpaPack::Rknn {
+                println!("cargo:rustc-link-lib=dylib=rknnrt");
+            }
+        }
     }
 
     Ok(())
+}
+
+/// RKNN prebuilts ship as shared libs only (`*-rknn-*-shared.tar.bz2`); the
+/// `*-static.tar.bz2` release contains CLI binaries without a linkable `lib/`.
+fn effective_link_mode(pack: SherpaPack, requested: LinkMode) -> LinkMode {
+    if pack == SherpaPack::Rknn {
+        if requested == LinkMode::Static {
+            println!(
+                "cargo:warning=SHERPA_ONNX_PACK=rknn uses shared prebuilt libs (no static-lib release)"
+            );
+        }
+        LinkMode::Shared
+    } else {
+        requested
+    }
 }
 
 fn resolve_link_mode() -> Result<LinkMode, DynError> {

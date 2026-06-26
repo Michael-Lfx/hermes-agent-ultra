@@ -29,7 +29,7 @@ SHERPA_VER=1.13.3
 SHERPA_DIR="${CACHE}/sherpa-onnx"
 for SHERPA_ARCHIVE in \
   "sherpa-onnx-v${SHERPA_VER}-linux-aarch64-static-lib.tar.bz2" \
-  "sherpa-onnx-v${SHERPA_VER}-rknn-linux-aarch64-static.tar.bz2"
+  "sherpa-onnx-v${SHERPA_VER}-rknn-linux-aarch64-shared.tar.bz2"
 do
   SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/${SHERPA_ARCHIVE}"
   mkdir -p "${SHERPA_DIR}"
