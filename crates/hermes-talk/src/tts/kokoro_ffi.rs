@@ -31,7 +31,7 @@ type KokoroPcmCallback = unsafe extern "C" fn(*const i16, usize, *mut c_void);
 mod ffi {
     use super::*;
 
-    extern "C" {
+    unsafe extern "C" {
         pub fn kokoro_engine_create(
             cfg: *const KokoroEngineConfig,
             err_buf: *mut c_char,
@@ -91,7 +91,7 @@ impl KokoroEngineHandle {
                 voice: voice.as_ptr(),
                 seq_len: cfg.seq_len,
             };
-            let mut err = vec![0i8; 512];
+            let mut err = vec![0 as c_char; 512];
             let ptr = unsafe { ffi::kokoro_engine_create(&c_cfg, err.as_mut_ptr(), err.len()) };
             if ptr.is_null() {
                 return Err(DemoError::Tts(format!(
@@ -108,7 +108,7 @@ impl KokoroEngineHandle {
         text: &str,
         voice: &str,
         speed: f32,
-        on_pcm: impl FnMut(&[i16]),
+        mut on_pcm: impl FnMut(&[i16]),
     ) -> Result<()> {
         #[cfg(not(kokoro_rknn_ffi))]
         {
@@ -119,11 +119,11 @@ impl KokoroEngineHandle {
         {
             let c_text = CString::new(text).map_err(|e| DemoError::Tts(e.to_string()))?;
             let c_voice = CString::new(voice).map_err(|e| DemoError::Tts(e.to_string()))?;
-            let mut err = vec![0i8; 512];
+            let mut err = vec![0 as c_char; 512];
             struct Ctx<'a> {
                 cb: &'a mut dyn FnMut(&[i16]),
             }
-            extern "C" fn trampoline(samples: *const i16, count: usize, user: *mut c_void) {
+            unsafe extern "C" fn trampoline(samples: *const i16, count: usize, user: *mut c_void) {
                 if samples.is_null() || user.is_null() || count == 0 {
                     return;
                 }

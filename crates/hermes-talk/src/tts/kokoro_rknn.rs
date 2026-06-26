@@ -24,6 +24,13 @@ pub struct KokoroRknnTts {
 
 impl KokoroRknnTts {
     pub async fn connect(cfg: &KokoroRknnTtsConfig) -> Result<(Self, mpsc::Receiver<TtsAudio>)> {
+        #[cfg(not(kokoro_rknn_ffi))]
+        {
+            return Err(DemoError::Tts(
+                "Kokoro hybrid RKNN FFI not linked (run make prefetch-talk-aarch64 && rebuild with libkokoro_ffi.a)"
+                    .into(),
+            ));
+        }
         let (audio_tx, audio_rx) = mpsc::channel(128);
         let (cmd_tx, cmd_rx) = mpsc::channel::<TtsCommand>(32);
         let cfg = cfg.clone();

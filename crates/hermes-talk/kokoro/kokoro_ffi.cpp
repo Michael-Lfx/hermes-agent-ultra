@@ -246,8 +246,8 @@ static Ort::Session make_ort_session(Ort::Env& env, const std::string& path, int
   opts.SetIntraOpNumThreads(intra);
   opts.SetInterOpNumThreads(inter);
   opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-  opts.EnableMemPattern(false);
-  opts.EnableCpuMemArena(true);
+  opts.DisableMemPattern();
+  opts.EnableCpuMemArena();
   return Ort::Session(env, path.c_str(), opts);
 }
 
@@ -305,7 +305,7 @@ static std::vector<float> trim_silence(const std::vector<float>& audio, float th
                             audio.begin() + static_cast<std::ptrdiff_t>(end));
 }
 
-struct KokoroEngine {
+struct KokoroEngineImpl {
   Ort::Env ort_env{ORT_LOGGING_LEVEL_WARNING, "kokoro_hybrid"};
   Tokenizer tokenizer;
   std::vector<float> style;
@@ -357,7 +357,7 @@ KokoroEngine* kokoro_engine_create(const KokoroEngineConfig* cfg, char* err_buf,
         throw std::runtime_error("missing kokoro hybrid model: " + p);
     }
 
-    auto eng = std::make_unique<KokoroEngine>();
+    auto eng = std::make_unique<KokoroEngineImpl>();
     eng->seq_len = seq_len;
     eng->tokenizer.load(tokens);
     eng->style = load_style(style_path, model_dir, voice);
@@ -365,7 +365,7 @@ KokoroEngine* kokoro_engine_create(const KokoroEngineConfig* cfg, char* err_buf,
     eng->tail_rest_sess = std::make_unique<Ort::Session>(make_ort_session(eng->ort_env, tail_rest, 4, 1));
     eng->front_rknn.load(front);
     eng->vocoder_front_rknn.load(vocoder_front);
-    return eng.release();
+    return reinterpret_cast<KokoroEngine*>(eng.release());
   } catch (const std::exception& e) {
     copy_err(err_buf, err_len, e.what());
     return nullptr;
@@ -375,28 +375,31 @@ KokoroEngine* kokoro_engine_create(const KokoroEngineConfig* cfg, char* err_buf,
   }
 }
 
-void kokoro_engine_destroy(KokoroEngine* engine) { delete engine; }
+void kokoro_engine_destroy(KokoroEngine* engine) {
+  delete reinterpret_cast<KokoroEngineImpl*>(engine);
+}
 
 int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const char* /*voice*/,
                                   float speed, int /*british*/, KokoroPcmCallback callback,
                                   void* user_data, char* err_buf, size_t err_len) {
-  if (!engine || !text || !callback) {
+  auto* impl = reinterpret_cast<KokoroEngineImpl*>(engine);
+  if (!impl || !text || !callback) {
     copy_err(err_buf, err_len, "kokoro_engine_synthesize_text: invalid arguments");
     return 1;
   }
   try {
-    auto [token_ids, n_tokens] = engine->tokenizer.encode(text, engine->seq_len);
+    auto [token_ids, n_tokens] = impl->tokenizer.encode(text, impl->seq_len);
     if (n_tokens <= 0) {
       copy_err(err_buf, err_len, "tokenizer produced zero tokens");
       return 2;
     }
 
     std::vector<int64_t> tokens_i64 = token_ids;
-    std::vector<float> style = engine->style;
+    std::vector<float> style = impl->style;
     std::vector<float> speed_arr = {speed};
 
     Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-    std::array<int64_t, 2> token_shape{1, engine->seq_len};
+    std::array<int64_t, 2> token_shape{1, impl->seq_len};
     std::array<int64_t, 2> style_shape{1, kStyleDim};
     std::array<int64_t, 1> speed_shape{1};
 
@@ -410,24 +413,24 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
     const char* prefix_in[] = {"tokens", "style", "speed"};
     std::array<Ort::Value, 3> prefix_inputs{std::move(tokens_tensor), std::move(style_tensor),
                                             std::move(speed_tensor)};
-    auto prefix_outputs = engine->prefix_sess->Run(Ort::RunOptions{nullptr}, prefix_in, prefix_inputs.data(), 3,
+    auto prefix_outputs = impl->prefix_sess->Run(Ort::RunOptions{nullptr}, prefix_in, prefix_inputs.data(), 3,
                                                    nullptr, 0);
 
     Ort::AllocatorWithDefaultOptions alloc;
     const Ort::Value* decoder_val =
-        find_output_by_name(*engine->prefix_sess, alloc, prefix_outputs, kDecoderInput, 0);
+        find_output_by_name(*impl->prefix_sess, alloc, prefix_outputs, kDecoderInput, 0);
     const Ort::Value* style_slice_val =
-        find_output_by_name(*engine->prefix_sess, alloc, prefix_outputs, kStyleSlice, 1);
+        find_output_by_name(*impl->prefix_sess, alloc, prefix_outputs, kStyleSlice, 1);
     auto decoder_input = tensor_to_float_vector(*decoder_val);
     auto style_slice = tensor_to_float_vector(*style_slice_val);
 
     std::vector<const float*> rk_in{decoder_input.data(), style_slice.data()};
     std::vector<size_t> rk_counts{decoder_input.size(), style_slice.size()};
-    auto hidden = engine->front_rknn.infer(rk_in, rk_counts);
+    auto hidden = impl->front_rknn.infer(rk_in, rk_counts);
 
     rk_in = {hidden.data(), style_slice.data()};
     rk_counts = {hidden.size(), style_slice.size()};
-    auto voc_add = engine->vocoder_front_rknn.infer(rk_in, rk_counts);
+    auto voc_add = impl->vocoder_front_rknn.infer(rk_in, rk_counts);
 
     std::array<int64_t, 1> tail_speed_shape{1};
     Ort::Value tail_speed =
@@ -457,11 +460,11 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
     tail_inputs.push_back(make_tail_tensor(style_slice, slice_shape));
 
     // Map by input names on tail_rest session.
-    size_t tail_in_count = engine->tail_rest_sess->GetInputCount();
+    size_t tail_in_count = impl->tail_rest_sess->GetInputCount();
     std::vector<const char*> tail_names;
     std::vector<Ort::Value> ordered;
     for (size_t i = 0; i < tail_in_count; ++i) {
-      auto name = engine->tail_rest_sess->GetInputNameAllocated(i, alloc);
+      auto name = impl->tail_rest_sess->GetInputNameAllocated(i, alloc);
       std::string n = name.get();
       if (n == kVocoderFrontOutput || n.find("Add_5") != std::string::npos)
         ordered.push_back(make_tail_tensor(voc_add, hidden_shape));
@@ -482,7 +485,7 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
       tail_names = {kVocoderFrontOutput, kFrontOutput, kStyleSlice};
     }
 
-    auto tail_outputs = engine->tail_rest_sess->Run(Ort::RunOptions{nullptr}, tail_names.data(),
+    auto tail_outputs = impl->tail_rest_sess->Run(Ort::RunOptions{nullptr}, tail_names.data(),
                                                     ordered.data(), ordered.size(), nullptr, 0);
     if (tail_outputs.empty()) throw std::runtime_error("tail_rest produced no output");
     auto audio = tensor_to_float_vector(tail_outputs[0]);

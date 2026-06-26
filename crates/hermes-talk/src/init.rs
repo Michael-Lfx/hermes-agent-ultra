@@ -252,7 +252,7 @@ fn print_rockchip_sensevoice_init_notes(talk_home: &Path) {
         "  6. CPU fallback models: make ensure-talk-models-rockchip (kokoro-multi-lang-v1_1 tarball)."
     );
     println!(
-        "  7. make package-talk-rockchip bundles ASR + hybrid-v1 + CPU fallback; set KOKORO_BUILD=1 for NPU TTS."
+        "  7. make package-talk-rockchip-dev builds libkokoro_ffi.a automatically for NPU TTS."
     );
     println!("  8. Run `hermes talk list-devices` to verify audio devices.");
     println!("  9. Run `hermes talk` to start the voice dialog loop.");

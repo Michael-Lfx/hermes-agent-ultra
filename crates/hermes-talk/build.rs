@@ -90,6 +90,12 @@ fn link_prebuilt(lib: &Path) {
     if let Some(dir) = lib.parent() {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
+    if let Ok(dir) = env::var("RK_NPU_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={dir}");
+    }
+    if let Ok(dir) = env::var("SHERPA_ONNX_LIB_DIR") {
+        println!("cargo:rustc-link-search=native={dir}");
+    }
     println!("cargo:rustc-link-lib=static=kokoro_ffi");
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
     println!("cargo:rustc-link-lib=dylib=rknnrt");

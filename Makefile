@@ -90,6 +90,7 @@ DIST        := $(ROOT)/target/dist
 GCC_AARCH64 := $(CROSS_CACHE)/gcc-aarch64/bin/aarch64-none-linux-gnu-gcc
 CXX_AARCH64 := $(CROSS_CACHE)/gcc-aarch64/bin/aarch64-none-linux-gnu-g++
 MOLD_BIN    := $(CROSS_CACHE)/mold/bin/mold
+KOKORO_FFI_LIB := $(CROSS_CACHE)/kokoro-hybrid/libkokoro_ffi.a
 
 # Rockchip SDK paths (override as needed)
 RK_TTS_SDK_DIR ?= /home/leeyang/Rockchip_RKTTS_SDK_Release
@@ -344,7 +345,7 @@ release-talk-rockchip:
 	$(CARGO) build --release $(TALK_PKG_RK)
 	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES_RK), sherpa RKNN pack)"
 
-release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
+release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(KOKORO_FFI_LIB)
 	SHERPA_ONNX_PACK=rknn \
 	$(CROSS_AARCH64_ENV) \
 	RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
@@ -352,7 +353,7 @@ release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
 	patchelf --set-rpath '$$ORIGIN/lib' $(ARM64_RELEASE)
 	@echo "Built $(ARM64_RELEASE) (features: $(TALK_FEATURES_RK))"
 
-debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
+debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(KOKORO_FFI_LIB)
 	SHERPA_ONNX_PACK=rknn \
 	$(CROSS_AARCH64_ENV) \
 	RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
@@ -361,6 +362,13 @@ debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
 	@echo "Built $(ARM64_DEBUG) (debug, features: $(TALK_FEATURES_RK))"
 
 build-talk-rockchip-dev: debug-talk-rockchip-arm64
+
+$(KOKORO_FFI_LIB): $(GCC_AARCH64) $(TALK_SCRIPTS)/build_kokoro_hybrid_ffi.sh \
+		$(TALK_CRATE)/kokoro/kokoro_ffi.cpp $(TALK_CRATE)/kokoro/kokoro_ffi.h
+	HERMES_ULTRA_ROOT=$(ROOT) CROSS_CACHE=$(CROSS_CACHE) CXX_AARCH64=$(CXX_AARCH64) \
+		bash $(TALK_SCRIPTS)/build_kokoro_hybrid_ffi.sh
+
+build-kokoro-hybrid-ffi: $(KOKORO_FFI_LIB)
 
 $(TALK_RKAUDIO)/librktts_c_api.a: $(TALK_RKAUDIO)/rk_tts_c_api.cpp $(TALK_RKAUDIO)/rk_tts_c_api.h
 	mkdir -p $(TALK_RKAUDIO)
