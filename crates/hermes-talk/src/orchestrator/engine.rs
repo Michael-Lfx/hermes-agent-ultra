@@ -1,9 +1,39 @@
-/// Whether assistant `content` tokens may be streamed to TTS.
+/// Whether assistant `content` tokens may be streamed to TTS (full accumulated buffer).
 pub fn assistant_content_tts_allowed(buf: &str, actionable_tool_deltas: bool) -> bool {
     if actionable_tool_deltas {
         return false;
     }
-    hermes_core::speakable_tts_prefix_end(buf) == buf.len()
+    let stripped = super::think_strip::strip_think_blocks(buf);
+    hermes_core::speakable_tts_prefix_end(&stripped) == stripped.len()
+}
+
+/// Safe prefix of one gate-emitted speakable delta for incremental streaming TTS.
+pub fn speakable_stream_delta(chunk: &str) -> &str {
+    let end = hermes_core::speakable_tts_prefix_end(chunk);
+    &chunk[..end]
+}
+
+/// Append one speakable stream delta to the TTS buffer when tool calls are not active.
+pub fn append_speakable_stream_delta(
+    tts_buf: &mut String,
+    speakable: &str,
+    actionable_tool_deltas: bool,
+) -> bool {
+    if actionable_tool_deltas {
+        return false;
+    }
+    let safe = speakable_stream_delta(speakable);
+    if safe.is_empty() {
+        return false;
+    }
+    tts_buf.push_str(safe);
+    true
+}
+
+pub fn has_actionable_tool_deltas(
+    map: &std::collections::HashMap<u32, crate::llm::AccumulatedToolCall>,
+) -> bool {
+    map.values().any(|acc| !acc.name.trim().is_empty())
 }
 
 #[cfg(not(all(feature = "rockchip", not(feature = "sherpa-asr-tts"))))]
@@ -176,5 +206,59 @@ mod tests {
         let mut buf = "完成。<seed:tool_call></seed:tool_call>".to_string();
         assert_eq!(flush_remainder(&mut buf).as_deref(), Some("完成。"));
         assert!(buf.contains("seed:tool_call"));
+    }
+
+    #[test]
+    fn assistant_content_tts_allowed_with_thinking_block_in_buf() {
+        use crate::orchestrator::think_strip::{
+            REDACTED_THINKING_CLOSE_TAG, REDACTED_THINKING_OPEN_TAG,
+        };
+        let input = format!(
+            "{OPEN}plan{CLOSE}tail",
+            OPEN = REDACTED_THINKING_OPEN_TAG,
+            CLOSE = REDACTED_THINKING_CLOSE_TAG,
+        );
+        assert!(assistant_content_tts_allowed(&input, false));
+    }
+
+    #[test]
+    fn speakable_stream_delta_withholds_tool_suffix() {
+        let chunk = "你好呀。<seed:tool_call>";
+        assert_eq!(speakable_stream_delta(chunk), "你好呀。");
+    }
+
+    #[test]
+    fn append_speakable_stream_delta_respects_actionable_tools() {
+        let mut buf = String::new();
+        assert!(!append_speakable_stream_delta(&mut buf, "你好", true));
+        assert!(append_speakable_stream_delta(&mut buf, "你好", false));
+        assert_eq!(buf, "你好");
+    }
+
+    #[test]
+    fn assistant_content_tts_blocked_when_tool_deltas_actionable() {
+        assert!(!assistant_content_tts_allowed("好的，我来查。", true));
+        assert!(assistant_content_tts_allowed("好的，我来查。", false));
+    }
+
+    #[test]
+    fn has_actionable_tool_deltas_requires_non_empty_name() {
+        use crate::llm::AccumulatedToolCall;
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            0,
+            AccumulatedToolCall {
+                index: 0,
+                id: String::new(),
+                name: String::new(),
+                arguments: "{".to_string(),
+            },
+        );
+        assert!(!has_actionable_tool_deltas(&map));
+
+        map.get_mut(&0).unwrap().name = "execute".to_string();
+        assert!(has_actionable_tool_deltas(&map));
     }
 }

@@ -157,30 +157,10 @@ async fn run_rktts_driver(
         infer_gen: infer_gen.clone(),
     });
 
-    let auth = CString::new(config.auth_config.as_str())
-        .map_err(|e| DemoError::Tts(format!("invalid auth_config: {e}")))?;
-    let model = CString::new(config.model_path.as_str())
-        .map_err(|e| DemoError::Tts(format!("invalid model_path: {e}")))?;
-    let dicts = CString::new(config.dicts_path.as_str())
-        .map_err(|e| DemoError::Tts(format!("invalid dicts_path: {e}")))?;
-
-    let ret = unsafe {
-        rktts_init(
-            handle.0,
-            auth.as_ptr(),
-            model.as_ptr(),
-            dicts.as_ptr(),
-            config.speaker_id,
-            config.alpha,
-            24000,
-            audio_callback,
-            &*ctx as *const CallbackContext as *mut std::ffi::c_void,
-        )
-    };
-    if ret != 0 {
+    rktts_init_engine(&handle, &config, &ctx).map_err(|e| {
         unsafe { rktts_destroy(handle.0) };
-        return Err(DemoError::Tts(format!("rktts_init failed: {ret}")));
-    }
+        e
+    })?;
 
     info!(
         "rktts initialized (speaker={}, alpha={})",
@@ -215,8 +195,13 @@ async fn run_rktts_driver(
                     }
                     RkCommand::InterruptTurn(done) => {
                         text_buf.clear();
-                        // Advance gen to unblock any waiting run_inference.
+                        unsafe {
+                            rktts_release(handle.0);
+                        }
                         infer_gen.fetch_add(1, Ordering::SeqCst);
+                        if let Err(e) = rktts_init_engine(&handle, &config, &ctx) {
+                            warn!(error = %e, "rktts re-init after interrupt failed");
+                        }
                         let _ = done.send(Ok(()));
                     }
                 }
@@ -228,6 +213,37 @@ async fn run_rktts_driver(
     unsafe { rktts_destroy(handle.0) };
     drop(ctx);
     info!("rktts driver shut down");
+    Ok(())
+}
+
+fn rktts_init_engine(
+    handle: &RkTtsHandle,
+    config: &RockchipTtsConfig,
+    ctx: &CallbackContext,
+) -> Result<()> {
+    let auth = CString::new(config.auth_config.as_str())
+        .map_err(|e| DemoError::Tts(format!("invalid auth_config: {e}")))?;
+    let model = CString::new(config.model_path.as_str())
+        .map_err(|e| DemoError::Tts(format!("invalid model_path: {e}")))?;
+    let dicts = CString::new(config.dicts_path.as_str())
+        .map_err(|e| DemoError::Tts(format!("invalid dicts_path: {e}")))?;
+
+    let ret = unsafe {
+        rktts_init(
+            handle.0,
+            auth.as_ptr(),
+            model.as_ptr(),
+            dicts.as_ptr(),
+            config.speaker_id,
+            config.alpha,
+            24000,
+            audio_callback,
+            ctx as *const CallbackContext as *mut std::ffi::c_void,
+        )
+    };
+    if ret != 0 {
+        return Err(DemoError::Tts(format!("rktts_init failed: {ret}")));
+    }
     Ok(())
 }
 

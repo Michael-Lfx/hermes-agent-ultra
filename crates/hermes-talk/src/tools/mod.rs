@@ -200,12 +200,21 @@ pub async fn execute_tool(
             let result = sender.list_tasks(request_id).await?;
             Ok(format_list_result(&result))
         }
-        "shutup" => Ok("shutup: 系统已进入休眠模式。".to_string()),
+        "shutup" => Ok(String::new()),
         other => Err(DemoError::Tool(format!("unknown tool: {other}"))),
     }
 }
 
-/// Skip talk LLM round 1 when every tool was a successful `call_hermes` enqueue.
+pub fn is_shutup_tool(name: &str) -> bool {
+    name.trim() == "shutup"
+}
+
+pub fn tool_calls_include_shutup<'a>(names: impl IntoIterator<Item = &'a str>) -> bool {
+    names.into_iter().any(is_shutup_tool)
+}
+
+/// End the talk turn after successful `call_hermes` enqueue — no follow-up LLM round;
+/// user-facing text was already spoken via the tool's `spoken` field.
 pub fn should_skip_call_hermes_confirmation<'a>(
     tool_names: impl IntoIterator<Item = &'a str>,
     tool_results: &[String],
@@ -224,6 +233,16 @@ pub fn extract_spoken(arguments: &str) -> Option<String> {
         .ok()
         .and_then(|v| v["spoken"].as_str().map(|s| s.to_string()))
         .filter(|s| !s.is_empty())
+}
+
+pub fn extract_tool_spoken(name: &str, arguments: &str) -> Option<String> {
+    if let Some(spoken) = extract_spoken(arguments) {
+        return Some(spoken);
+    }
+    if name == "call_hermes" {
+        return generate_hermes_spoken(arguments);
+    }
+    None
 }
 
 pub fn generate_hermes_spoken(arguments: &str) -> Option<String> {
@@ -323,6 +342,14 @@ mod skip_confirmation_tests {
         let spoken = generate_hermes_spoken(args).unwrap();
         assert!(spoken.contains("查明天北京天气"));
         assert!(spoken.contains(HERMES_SPOKEN_WAIT_TAIL));
+    }
+
+    #[test]
+    fn shutup_tool_detected() {
+        assert!(is_shutup_tool("shutup"));
+        assert!(!is_shutup_tool("call_hermes"));
+        assert!(tool_calls_include_shutup(["shutup"]));
+        assert!(!tool_calls_include_shutup(["call_hermes", "execute"]));
     }
 
     #[test]

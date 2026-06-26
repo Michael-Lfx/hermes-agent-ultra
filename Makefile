@@ -24,6 +24,7 @@
 #   make package-talk-windows       # bundle for Windows (zip)
 #   make package-talk-linux         # bundle for Linux (tar.gz)
 #   make package-talk-macos         # bundle for macOS (tar.gz)
+#   make package-talk-rockchip-dev  # debug cross-build + bundle (faster dev deploy)
 #   make ensure-talk-models         # verify .models/ talk ONNX; download if missing
 #   make download-talk-models       # fetch sherpa-onnx ONNX models into .models/
 
@@ -78,6 +79,7 @@ endif
 # Cross-compilation targets
 ARM64_TARGET        := aarch64-unknown-linux-gnu
 ARM64_RELEASE       := $(TARGET)/$(ARM64_TARGET)/release/$(BIN)
+ARM64_DEBUG         := $(TARGET)/$(ARM64_TARGET)/debug/$(BIN)
 ARM64_MUSL_TARGET   := aarch64-unknown-linux-musl
 ARM64_MUSL_RELEASE  := $(TARGET)/$(ARM64_MUSL_TARGET)/release/$(BIN)
 
@@ -129,9 +131,10 @@ PACKAGE_TALK_ENV  := ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) BI
 
 .PHONY: help build release release-arm release-arm64 release-arm64-musl \
         test check clippy clean \
-        build-talk build-talk-windows release-talk release-talk-rockchip release-talk-rockchip-arm64 \
+        build-talk build-talk-rockchip-dev build-talk-windows release-talk release-talk-rockchip release-talk-rockchip-arm64 \
+        debug-talk-rockchip-arm64 \
         package-talk package-talk-windows package-talk-linux package-talk-macos \
-        package-talk-rockchip prefetch-talk-aarch64 ensure-talk-models \
+        package-talk-rockchip package-talk-rockchip-dev prefetch-talk-aarch64 ensure-talk-models \
         fetch-talk-sherpa-runtime fetch-talk-sherpa-runtime-windows \
         download-talk-models download-talk-models-windows download-talk-models-unix \
         check-talk-models check-talk-models-windows check-talk-models-unix \
@@ -166,7 +169,8 @@ help:
 	@echo "  package-talk-windows         Bundle for Windows (.zip)"
 	@echo "  package-talk-linux           Bundle for Linux (.tar.gz)"
 	@echo "  package-talk-macos           Bundle for macOS (.tar.gz)"
-	@echo "  package-talk-rockchip      Bundle binary + SDK libs + models from .models/"
+	@echo "  package-talk-rockchip        Bundle binary + SDK libs + models from .models/ (release)"
+	@echo "  package-talk-rockchip-dev    Same bundle using debug cross-build (faster; hermes-talk-rk3588-dev)"
 	@echo "  ensure-talk-models         Verify talk models; download missing (auto OS)"
 	@echo "  check-talk-models          Verify talk models only; fail if missing (auto OS)"
 	@echo "  download-talk-models       Download sherpa-onnx models into .models/ (auto OS)"
@@ -335,6 +339,16 @@ release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(TALK_RKAUDIO)/librktts
 	patchelf --set-rpath '$$ORIGIN/lib' $(ARM64_RELEASE)
 	@echo "Built $(ARM64_RELEASE) (features: $(TALK_FEATURES_RK))"
 
+debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(TALK_RKAUDIO)/librktts_c_api.a $(TALK_RKAUDIO)/lib
+	SHERPA_ONNX_PACK=cpu \
+	$(CROSS_AARCH64_ENV) \
+	RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
+	$(CROSS) build --target $(ARM64_TARGET) $(TALK_PKG_RK)
+	patchelf --set-rpath '$$ORIGIN/lib' $(ARM64_DEBUG)
+	@echo "Built $(ARM64_DEBUG) (debug, features: $(TALK_FEATURES_RK))"
+
+build-talk-rockchip-dev: debug-talk-rockchip-arm64
+
 $(TALK_RKAUDIO)/librktts_c_api.a: $(TALK_RKAUDIO)/rk_tts_c_api.cpp $(TALK_RKAUDIO)/rk_tts_c_api.h
 	mkdir -p $(TALK_RKAUDIO)
 	$(CXX_AARCH64) -std=c++11 \
@@ -393,6 +407,12 @@ download-talk-models-linux download-talk-models-macos download-talk-models-unix:
 
 package-talk-rockchip: release-talk-rockchip-arm64
 	ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) $(TALK_SCRIPTS)/package_aarch64_rockchip.sh
+
+package-talk-rockchip-dev: debug-talk-rockchip-arm64
+	ROOT=$(ROOT) DIST_DIR=$(DIST) MODELS_ROOT=$(MODELS_ROOT) \
+	OUT_NAME=hermes-talk-rk3588-dev \
+	BIN_PATH=$(ARM64_DEBUG) \
+	$(TALK_SCRIPTS)/package_aarch64_rockchip.sh
 
 package-talk: package-talk-$(HOST_OS)
 
