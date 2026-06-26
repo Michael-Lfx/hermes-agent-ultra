@@ -168,7 +168,7 @@ async fn create_kokoro_rknn_or_fallback(
         let (client, rx) = SherpaTts::connect(&sherpa_cfg).await?;
         return Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx));
     }
-    match KokoroRknnTts::connect(&rk_cfg).await {
+    match KokoroRknnTts::connect(&rk_cfg, &tts_cfg.effective_sherpa_fallback()).await {
         Ok((client, rx)) => Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx)),
         Err(e) => {
             warn!(

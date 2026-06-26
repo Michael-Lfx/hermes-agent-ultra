@@ -8,7 +8,7 @@ use sherpa_onnx::{
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info};
 
-use crate::config::{SherpaKokoroTtsConfig, SherpaTtsRuntime, SherpaZipvoiceTtsConfig};
+use crate::config::{SherpaTtsRuntime, SherpaZipvoiceTtsConfig};
 use crate::error::{DemoError, Result};
 use crate::tts::{TtsEngine, bailian::TtsAudio};
 
@@ -125,55 +125,79 @@ fn run_driver_loop(
     Ok(())
 }
 
+/// CPU sherpa Kokoro (zh/en G2P). Used as fallback when hybrid RKNN cannot tokenize Han text.
+pub struct SherpaKokoroEngine {
+    tts: OfflineTts,
+    sid: i32,
+    speed: f32,
+}
+
+impl SherpaKokoroEngine {
+    pub fn open(cfg: &SherpaTtsRuntime) -> Result<Self> {
+        let kokoro_cfg = cfg.kokoro.clone();
+        let sid = kokoro_cfg.effective_sid()?;
+        let kokoro = OfflineTtsKokoroModelConfig {
+            model: Some(kokoro_cfg.model.clone()),
+            voices: Some(kokoro_cfg.voices.clone()),
+            tokens: Some(kokoro_cfg.tokens.clone()),
+            data_dir: Some(kokoro_cfg.data_dir.clone()),
+            dict_dir: Some(kokoro_cfg.dict_dir.clone()),
+            lexicon: Some(kokoro_cfg.lexicon.clone()),
+            length_scale: kokoro_cfg.length_scale,
+            lang: kokoro_cfg.lang.clone(),
+        };
+
+        let tts_config = OfflineTtsConfig {
+            model: sherpa_onnx::OfflineTtsModelConfig {
+                kokoro,
+                num_threads: cfg.num_threads,
+                provider: Some(cfg.provider.clone()),
+                debug: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let tts = OfflineTts::create(&tts_config).ok_or_else(|| {
+            DemoError::Config(format!(
+                "failed to create Kokoro TTS (check tts.sherpa.kokoro paths): model={}",
+                kokoro_cfg.model
+            ))
+        })?;
+
+        info!(
+            engine = "kokoro",
+            model = %kokoro_cfg.model,
+            provider = %cfg.provider,
+            sample_rate = tts.sample_rate(),
+            speakers = tts.num_speakers(),
+            voice = kokoro_cfg.voice.as_deref().unwrap_or(""),
+            sid,
+            "sherpa Kokoro TTS ready"
+        );
+
+        Ok(Self {
+            tts,
+            sid,
+            speed: kokoro_cfg.speed,
+        })
+    }
+
+    pub fn synthesize_turn(&self, text: &str, audio_tx: &mpsc::Sender<TtsAudio>) -> Result<()> {
+        synthesize_kokoro_turn(&self.tts, self.sid, self.speed, text, audio_tx)
+    }
+}
+
 fn run_kokoro_driver(
     cfg: SherpaTtsRuntime,
     cmd_rx: mpsc::Receiver<TtsCommand>,
     audio_tx: mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
-    let kokoro_cfg = cfg.kokoro.clone();
-    let sid = kokoro_cfg.effective_sid()?;
-    let kokoro = OfflineTtsKokoroModelConfig {
-        model: Some(kokoro_cfg.model.clone()),
-        voices: Some(kokoro_cfg.voices.clone()),
-        tokens: Some(kokoro_cfg.tokens.clone()),
-        data_dir: Some(kokoro_cfg.data_dir.clone()),
-        dict_dir: Some(kokoro_cfg.dict_dir.clone()),
-        lexicon: Some(kokoro_cfg.lexicon.clone()),
-        length_scale: kokoro_cfg.length_scale,
-        lang: kokoro_cfg.lang.clone(),
-    };
-
-    let tts_config = OfflineTtsConfig {
-        model: sherpa_onnx::OfflineTtsModelConfig {
-            kokoro,
-            num_threads: cfg.num_threads,
-            provider: Some(cfg.provider.clone()),
-            debug: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    let tts = OfflineTts::create(&tts_config).ok_or_else(|| {
-        DemoError::Config(format!(
-            "failed to create Kokoro TTS (check tts.sherpa.kokoro paths): model={}",
-            kokoro_cfg.model
-        ))
-    })?;
-
-    info!(
-        engine = "kokoro",
-        model = %kokoro_cfg.model,
-        provider = %cfg.provider,
-        sample_rate = tts.sample_rate(),
-        speakers = tts.num_speakers(),
-        voice = kokoro_cfg.voice.as_deref().unwrap_or(""),
-        sid,
-        "sherpa Kokoro TTS ready"
-    );
-
-    run_driver_loop(cmd_rx, audio_tx, &tts, move |tts, text, audio_tx| {
-        synthesize_kokoro_turn(tts, sid, &kokoro_cfg, text, audio_tx)
+    let engine = SherpaKokoroEngine::open(&cfg)?;
+    let sid = engine.sid;
+    let speed = engine.speed;
+    run_driver_loop(cmd_rx, audio_tx, &engine.tts, move |tts, text, audio_tx| {
+        synthesize_kokoro_turn(tts, sid, speed, text, audio_tx)
     })
 }
 
@@ -243,13 +267,13 @@ fn run_zipvoice_driver(
 fn synthesize_kokoro_turn(
     tts: &OfflineTts,
     sid: i32,
-    cfg: &SherpaKokoroTtsConfig,
+    speed: f32,
     text: &str,
     audio_tx: &mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
     let gen_config = GenerationConfig {
         sid,
-        speed: cfg.speed,
+        speed,
         ..Default::default()
     };
 

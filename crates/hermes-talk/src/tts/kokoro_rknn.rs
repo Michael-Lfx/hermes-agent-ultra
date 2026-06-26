@@ -1,12 +1,16 @@
 //! In-process Kokoro RKNN TTS via libkokoro FFI (RK3588 NPU decoder).
+//!
+//! Hybrid RKNN `tokens.txt` uses Bopomofo/phoneme symbols (see rkvoice-stream). Han text
+//! is routed to sherpa CPU Kokoro (`kokoro-multi-lang-v1_1`) which includes zh/en G2P.
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
-use tracing::info;
+use tracing::{info, warn};
 
-use crate::config::KokoroRknnTtsConfig;
+use crate::config::{KokoroRknnTtsConfig, SherpaTtsRuntime};
 use crate::error::{DemoError, Result};
 use crate::tts::kokoro_ffi::KokoroEngineHandle;
+use crate::tts::sherpa_tts::SherpaKokoroEngine;
 use crate::tts::{TtsEngine, bailian::TtsAudio};
 
 enum TtsCommand {
@@ -23,9 +27,13 @@ pub struct KokoroRknnTts {
 }
 
 impl KokoroRknnTts {
-    pub async fn connect(cfg: &KokoroRknnTtsConfig) -> Result<(Self, mpsc::Receiver<TtsAudio>)> {
+    pub async fn connect(
+        rk_cfg: &KokoroRknnTtsConfig,
+        sherpa_fallback: &SherpaTtsRuntime,
+    ) -> Result<(Self, mpsc::Receiver<TtsAudio>)> {
         #[cfg(not(kokoro_rknn_ffi))]
         {
+            let _ = (rk_cfg, sherpa_fallback);
             return Err(DemoError::Tts(
                 "Kokoro hybrid RKNN FFI not linked (run make prefetch-talk-aarch64 && rebuild with libkokoro_ffi.a)"
                     .into(),
@@ -33,10 +41,11 @@ impl KokoroRknnTts {
         }
         let (audio_tx, audio_rx) = mpsc::channel(128);
         let (cmd_tx, cmd_rx) = mpsc::channel::<TtsCommand>(32);
-        let cfg = cfg.clone();
+        let rk_cfg = rk_cfg.clone();
+        let sherpa_fallback = sherpa_fallback.clone();
 
         tokio::task::spawn_blocking(move || {
-            if let Err(e) = run_driver(cfg, cmd_rx, audio_tx) {
+            if let Err(e) = run_driver(rk_cfg, sherpa_fallback, cmd_rx, audio_tx) {
                 tracing::error!(error = %e, "kokoro RKNN tts driver exited");
             }
         });
@@ -87,18 +96,21 @@ impl TtsEngine for KokoroRknnTts {
 }
 
 fn run_driver(
-    cfg: KokoroRknnTtsConfig,
+    rk_cfg: KokoroRknnTtsConfig,
+    sherpa_fallback: SherpaTtsRuntime,
     mut cmd_rx: mpsc::Receiver<TtsCommand>,
     audio_tx: mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
-    let engine = KokoroEngineHandle::create(&cfg)?;
+    let engine = KokoroEngineHandle::create(&rk_cfg)?;
+    let sherpa = SherpaKokoroEngine::open(&sherpa_fallback)?;
     info!(
         engine = "kokoro_hybrid_v1",
-        model_dir = %cfg.model_dir,
-        front = %cfg.front_rknn,
-        voice = %cfg.voice,
-        seq_len = cfg.seq_len,
-        "Kokoro hybrid-v1 RKNN TTS ready"
+        model_dir = %rk_cfg.model_dir,
+        front = %rk_cfg.front_rknn,
+        voice = %rk_cfg.voice,
+        seq_len = rk_cfg.seq_len,
+        sherpa_model = %sherpa_fallback.kokoro.model,
+        "Kokoro hybrid-v1 RKNN TTS ready (Han -> sherpa CPU, ASCII -> RKNN)"
     );
 
     let mut text_buf = String::new();
@@ -114,7 +126,7 @@ fn run_driver(
                     continue;
                 }
                 let text = std::mem::take(&mut text_buf);
-                let result = synthesize_turn(&engine, &cfg, &text, &audio_tx);
+                let result = synthesize_turn(&engine, &sherpa, &rk_cfg, &text, &audio_tx);
                 let _ = done.send(result);
             }
             TtsCommand::InterruptTurn(done) => {
@@ -126,7 +138,48 @@ fn run_driver(
     Ok(())
 }
 
+/// Hybrid RKNN tokens are phoneme/Bopomofo; CJK and fullwidth text needs sherpa G2P.
+fn needs_sherpa_g2p(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            c,
+            '\u{4E00}'..='\u{9FFF}'
+                | '\u{3400}'..='\u{4DBF}'
+                | '\u{F900}'..='\u{FAFF}'
+                | '\u{3000}'..='\u{303F}'
+                | '\u{FF00}'..='\u{FFEF}'
+        )
+    })
+}
+
 fn synthesize_turn(
+    engine: &KokoroEngineHandle,
+    sherpa: &SherpaKokoroEngine,
+    cfg: &KokoroRknnTtsConfig,
+    text: &str,
+    audio_tx: &mpsc::Sender<TtsAudio>,
+) -> Result<()> {
+    if needs_sherpa_g2p(text) {
+        info!(chars = text.chars().count(), "tts route: sherpa CPU (zh/CJK text)");
+        return sherpa.synthesize_turn(text, audio_tx);
+    }
+
+    info!(chars = text.chars().count(), "tts route: kokoro hybrid RKNN");
+    match synthesize_rknn_turn(engine, cfg, text, audio_tx) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("zero tokens") || msg.contains("zero phoneme") {
+                warn!(error = %msg, "kokoro RKNN tokenize failed; falling back to sherpa CPU");
+                sherpa.synthesize_turn(text, audio_tx)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+fn synthesize_rknn_turn(
     engine: &KokoroEngineHandle,
     cfg: &KokoroRknnTtsConfig,
     text: &str,
