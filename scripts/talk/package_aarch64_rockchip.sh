@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # Package hermes-agent-ultra (talk-rockchip) for aarch64 Rockchip boards.
 #
-# Bundled stack: SenseVoice RKNN ASR (in-process) + Kokoro TTS (kokoro-server sidecar).
+# Bundled stack: SenseVoice RKNN ASR + in-process Kokoro TTS (RKNN + sherpa CPU fallback).
 #
-# Prepare under repo-root `.models/` (gitignored) or source trees:
-#   .models/models/sensevoice-rk3588/
-#   .models/models/kws-zh-en/ vad/ denoise/ speaker/
-#   KOKORO_SERVER_DIR/build/kokoro-server + onnx/ voices_npy/ Kokoro-82M/config.json
+# Prepare under repo-root `.models/` (gitignored):
+#   models/sensevoice-rk3588/  models/kokoro/ (model.onnx + optional RKNN split models)
+#   models/kws-zh-en/ vad/ denoise/ speaker/
 #
-# Env:
-#   KOKORO_SERVER_DIR  default: /home/leeyang/kokoro-server
-#   RK_NPU_LIB_DIR     default: RK_TTS_SDK/lib/Linux/aarch64 (for librknnrt.so)
+# Optional RKNN split models from KOKORO_SERVER_DIR (build.py):
+#   onnx/kokoro_encoder.onnx, har_generator.onnx, kokoro_decoder.rknn, voices_npy/, config.json
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -21,12 +19,17 @@ OUT="${DIST}/${OUT_NAME:-hermes-talk-rk3588}"
 MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 
 KOKORO_SERVER_DIR="${KOKORO_SERVER_DIR:-/home/leeyang/kokoro-server}"
+KOKORO_CACHE="${KOKORO_CACHE:-${ROOT}/.cross-cache/kokoro-server}"
 RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
 RK_NPU_LIB_DIR="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}"
 
-if [[ ! -f "${BIN}" ]]; then
-  echo "missing ${BIN}; run: make release-talk-rockchip-arm64" >&2
+fail() {
+  echo "error: $*" >&2
   exit 1
+}
+
+if [[ ! -f "${BIN}" ]]; then
+  fail "missing ${BIN}; run: make release-talk-rockchip-arm64 (or package-talk-rockchip-dev)"
 fi
 
 rm -rf "${OUT}"
@@ -52,47 +55,70 @@ else
   echo "warn: missing ${RK_NPU_LIB_DIR}/librknnrt.so (ASR/TTS NPU runtime)" >&2
 fi
 
-# kokoro-server binary
-KOKORO_BIN="${KOKORO_SERVER_DIR}/build/kokoro-server"
-if [[ -x "${KOKORO_BIN}" ]]; then
-  cp -f "${KOKORO_BIN}" "${OUT}/bin/kokoro-server"
-  chmod +x "${OUT}/bin/kokoro-server"
-else
-  echo "warn: missing ${KOKORO_BIN}; build kokoro-server with -DUSE_RKNN=ON" >&2
-fi
+# Sherpa CPU kokoro fallback (required)
+[[ -d "${MODELS_ROOT}/models/kokoro" ]] \
+  || fail "missing ${MODELS_ROOT}/models/kokoro; run: make ensure-talk-models-rockchip"
+for f in model.onnx voices.bin tokens.txt; do
+  [[ -f "${MODELS_ROOT}/models/kokoro/${f}" ]] \
+    || fail "missing ${MODELS_ROOT}/models/kokoro/${f}"
+done
+mkdir -p "${OUT}/models/kokoro"
+cp -a "${MODELS_ROOT}/models/kokoro/." "${OUT}/models/kokoro/"
 
-# Kokoro models (encoder/har ONNX + decoder RKNN + voices)
-KOKORO_OUT="${OUT}/models/kokoro"
-mkdir -p "${KOKORO_OUT}"
-for f in kokoro_encoder.onnx har_generator.onnx kokoro_decoder.rknn; do
-  if [[ -f "${KOKORO_SERVER_DIR}/onnx/${f}" ]]; then
-    cp -f "${KOKORO_SERVER_DIR}/onnx/${f}" "${KOKORO_OUT}/"
+# Optional RKNN split models + G2P data
+resolve_kokoro_onnx_dir() {
+  if [[ -d "${KOKORO_SERVER_DIR}/onnx" ]] \
+    && [[ -f "${KOKORO_SERVER_DIR}/onnx/kokoro_decoder.rknn" ]]; then
+    echo "${KOKORO_SERVER_DIR}/onnx"
+  elif [[ -d "${KOKORO_CACHE}/onnx" ]] \
+    && [[ -f "${KOKORO_CACHE}/onnx/kokoro_decoder.rknn" ]]; then
+    echo "${KOKORO_CACHE}/onnx"
+  elif [[ -f "${OUT}/models/kokoro/kokoro_decoder.rknn" ]]; then
+    echo "${OUT}/models/kokoro"
   else
-    echo "warn: missing ${KOKORO_SERVER_DIR}/onnx/${f}" >&2
+    return 1
   fi
-done
-if [[ -f "${KOKORO_SERVER_DIR}/Kokoro-82M/config.json" ]]; then
-  cp -f "${KOKORO_SERVER_DIR}/Kokoro-82M/config.json" "${KOKORO_OUT}/config.json"
-fi
-if [[ -d "${KOKORO_SERVER_DIR}/voices_npy" ]]; then
-  mkdir -p "${KOKORO_OUT}/voices_npy"
-  cp -a "${KOKORO_SERVER_DIR}/voices_npy/." "${KOKORO_OUT}/voices_npy/"
-fi
-for aux in misaki-data espeak-ng-data; do
-  if [[ -d "${KOKORO_SERVER_DIR}/${aux}" ]]; then
-    cp -a "${KOKORO_SERVER_DIR}/${aux}" "${OUT}/${aux}"
-  elif [[ -d "${KOKORO_SERVER_DIR}/build/${aux}" ]]; then
-    cp -a "${KOKORO_SERVER_DIR}/build/${aux}" "${OUT}/${aux}"
-  fi
-done
+}
 
-# SenseVoice RKNN ASR
-if [[ -d "${MODELS_ROOT}/models/sensevoice-rk3588" ]]; then
-  mkdir -p "${OUT}/models/sensevoice-rk3588"
-  cp -a "${MODELS_ROOT}/models/sensevoice-rk3588/." "${OUT}/models/sensevoice-rk3588/"
+if KOKORO_ONNX="$(resolve_kokoro_onnx_dir)"; then
+  for f in kokoro_encoder.onnx har_generator.onnx kokoro_decoder.rknn; do
+    if [[ -f "${KOKORO_ONNX}/${f}" ]]; then
+      cp -f "${KOKORO_ONNX}/${f}" "${OUT}/models/kokoro/"
+    fi
+  done
+  KOKORO_CONFIG="${KOKORO_SERVER_DIR}/Kokoro-82M/config.json"
+  if [[ ! -f "${KOKORO_CONFIG}" && -f "${KOKORO_CACHE}/Kokoro-82M/config.json" ]]; then
+    KOKORO_CONFIG="${KOKORO_CACHE}/Kokoro-82M/config.json"
+  fi
+  if [[ -f "${KOKORO_CONFIG}" ]]; then
+    cp -f "${KOKORO_CONFIG}" "${OUT}/models/kokoro/config.json"
+  fi
+  VOICES_SRC="${KOKORO_SERVER_DIR}/voices_npy"
+  if [[ ! -d "${VOICES_SRC}" && -d "${KOKORO_CACHE}/voices_npy" ]]; then
+    VOICES_SRC="${KOKORO_CACHE}/voices_npy"
+  fi
+  if [[ -d "${VOICES_SRC}" ]]; then
+    mkdir -p "${OUT}/models/kokoro/voices_npy"
+    cp -a "${VOICES_SRC}/." "${OUT}/models/kokoro/voices_npy/"
+  fi
+  for aux in misaki-data espeak-ng-data; do
+    if [[ -d "${KOKORO_SERVER_DIR}/${aux}" ]]; then
+      cp -a "${KOKORO_SERVER_DIR}/${aux}" "${OUT}/${aux}"
+    elif [[ -d "${KOKORO_SERVER_DIR}/build/${aux}" ]]; then
+      cp -a "${KOKORO_SERVER_DIR}/build/${aux}" "${OUT}/${aux}"
+    elif [[ -d "${KOKORO_CACHE}/${aux}" ]]; then
+      cp -a "${KOKORO_CACHE}/${aux}" "${OUT}/${aux}"
+    fi
+  done
 else
-  echo "warn: missing ${MODELS_ROOT}/models/sensevoice-rk3588" >&2
+  echo "warn: missing Kokoro RKNN split models; board will use sherpa CPU kokoro fallback" >&2
 fi
+
+# SenseVoice RKNN ASR (required)
+[[ -d "${MODELS_ROOT}/models/sensevoice-rk3588" ]] \
+  || fail "missing ${MODELS_ROOT}/models/sensevoice-rk3588; run: make ensure-talk-models-rockchip"
+mkdir -p "${OUT}/models/sensevoice-rk3588"
+cp -a "${MODELS_ROOT}/models/sensevoice-rk3588/." "${OUT}/models/sensevoice-rk3588/"
 
 # Sherpa ONNX aux (wake / vad / denoise / speaker)
 if [[ -d "${MODELS_ROOT}/models/kws-zh-en" ]]; then

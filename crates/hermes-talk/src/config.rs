@@ -166,9 +166,9 @@ pub struct TtsConfig {
     /// Configuration for sherpa-onnx TTS (Kokoro + ZipVoice profiles).
     #[serde(default)]
     pub sherpa: Option<SherpaTtsSection>,
-    /// Configuration for kokoro-server HTTP TTS (RK3588 NPU).
+    /// In-process Kokoro RKNN TTS (RK3588 NPU decoder via libkokoro FFI).
     #[serde(default)]
-    pub kokoro_server: Option<KokoroServerTtsConfig>,
+    pub kokoro_rknn: Option<KokoroRknnTtsConfig>,
 }
 
 impl Default for TtsConfig {
@@ -184,20 +184,30 @@ impl Default for TtsConfig {
             local: None,
             rockchip: None,
             sherpa: None,
-            kokoro_server: None,
+            kokoro_rknn: None,
         }
     }
 }
 
 impl TtsConfig {
-    pub fn effective_kokoro_server(&self) -> KokoroServerTtsConfig {
-        let mut cfg = self.kokoro_server.clone().unwrap_or_default();
-        if cfg.voice.is_empty() || cfg.voice == default_kokoro_server_voice() {
+    pub fn effective_kokoro_rknn(&self) -> KokoroRknnTtsConfig {
+        let mut cfg = self.kokoro_rknn.clone().unwrap_or_default();
+        if cfg.voice.is_empty() || cfg.voice == default_kokoro_rknn_voice() {
             if !self.voice.is_empty() && self.voice != default_voice() {
                 cfg.voice = self.voice.clone();
             }
         }
         cfg
+    }
+
+    pub fn effective_sherpa_fallback(&self) -> SherpaTtsRuntime {
+        let mut section = self.sherpa.clone().unwrap_or_default();
+        section.normalize();
+        if section.kokoro.voice.is_none() && !self.voice.is_empty() && self.voice != default_voice()
+        {
+            section.kokoro.voice = Some(self.voice.clone());
+        }
+        section.resolve(self.engine.as_deref())
     }
 
     pub fn effective_sherpa(&self) -> SherpaTtsRuntime {
@@ -238,32 +248,50 @@ impl Default for RockchipTtsConfig {
     }
 }
 
-/// kokoro-server HTTP TTS (encoder/har CPU + decoder RKNN on RK3588).
+/// In-process Kokoro RKNN TTS (encoder/har CPU + decoder RKNN on RK3588).
 #[derive(Debug, Clone, Deserialize)]
-pub struct KokoroServerTtsConfig {
-    #[serde(default = "default_kokoro_server_url")]
-    pub base_url: String,
-    #[serde(default = "default_kokoro_server_voice")]
+pub struct KokoroRknnTtsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_kokoro_rknn_encoder")]
+    pub encoder: String,
+    #[serde(default = "default_kokoro_rknn_har")]
+    pub har_gen: String,
+    #[serde(default = "default_kokoro_rknn_decoder")]
+    pub decoder: String,
+    #[serde(default = "default_kokoro_rknn_vocab")]
+    pub vocab: String,
+    #[serde(default = "default_kokoro_rknn_voices_dir")]
+    pub voices_dir: String,
+    #[serde(default = "default_kokoro_rknn_espeak_data")]
+    pub espeak_data: String,
+    #[serde(default = "default_kokoro_rknn_lexicon_dir")]
+    pub lexicon_dir: String,
+    #[serde(default = "default_kokoro_rknn_voice")]
     pub voice: String,
     #[serde(default = "default_kokoro_speed")]
     pub speed: f32,
     #[serde(default)]
     pub british: bool,
-    #[serde(default = "default_kokoro_server_audio_format")]
-    pub audio_format: String,
-    #[serde(default)]
-    pub auth_token: String,
+    #[serde(default = "default_kokoro_rknn_t_fix")]
+    pub t_fix: i32,
 }
 
-impl Default for KokoroServerTtsConfig {
+impl Default for KokoroRknnTtsConfig {
     fn default() -> Self {
         Self {
-            base_url: default_kokoro_server_url(),
-            voice: default_kokoro_server_voice(),
+            enabled: true,
+            encoder: default_kokoro_rknn_encoder(),
+            har_gen: default_kokoro_rknn_har(),
+            decoder: default_kokoro_rknn_decoder(),
+            vocab: default_kokoro_rknn_vocab(),
+            voices_dir: default_kokoro_rknn_voices_dir(),
+            espeak_data: default_kokoro_rknn_espeak_data(),
+            lexicon_dir: default_kokoro_rknn_lexicon_dir(),
+            voice: default_kokoro_rknn_voice(),
             speed: default_kokoro_speed(),
             british: false,
-            audio_format: default_kokoro_server_audio_format(),
-            auth_token: String::new(),
+            t_fix: default_kokoro_rknn_t_fix(),
         }
     }
 }
@@ -403,7 +431,7 @@ pub struct SherpaTtsSection {
     legacy_zip: LegacyFlatZipvoiceFields,
     #[serde(default = "default_sherpa_threads")]
     pub num_threads: i32,
-    #[serde(default = "default_sherpa_provider")]
+    #[serde(default = "default_tts_sherpa_provider")]
     pub provider: String,
 }
 
@@ -416,7 +444,7 @@ impl Default for SherpaTtsSection {
             legacy_kokoro: LegacyFlatKokoroFields::default(),
             legacy_zip: LegacyFlatZipvoiceFields::default(),
             num_threads: default_sherpa_threads(),
-            provider: default_sherpa_provider(),
+            provider: default_tts_sherpa_provider(),
         }
     }
 }
@@ -1008,14 +1036,42 @@ fn default_kokoro_length_scale() -> f32 {
 fn default_kokoro_speed() -> f32 {
     1.0
 }
-fn default_kokoro_server_url() -> String {
-    "http://127.0.0.1:8848".to_string()
+fn default_kokoro_rknn_encoder() -> String {
+    "models/kokoro/kokoro_encoder.onnx".to_string()
 }
-fn default_kokoro_server_voice() -> String {
+fn default_kokoro_rknn_har() -> String {
+    "models/kokoro/har_generator.onnx".to_string()
+}
+fn default_kokoro_rknn_decoder() -> String {
+    "models/kokoro/kokoro_decoder.rknn".to_string()
+}
+fn default_kokoro_rknn_vocab() -> String {
+    "models/kokoro/config.json".to_string()
+}
+fn default_kokoro_rknn_voices_dir() -> String {
+    "models/kokoro/voices_npy".to_string()
+}
+fn default_kokoro_rknn_espeak_data() -> String {
+    "espeak-ng-data".to_string()
+}
+fn default_kokoro_rknn_lexicon_dir() -> String {
+    "misaki-data".to_string()
+}
+fn default_kokoro_rknn_voice() -> String {
     "af_heart".to_string()
 }
-fn default_kokoro_server_audio_format() -> String {
-    "pcm".to_string()
+fn default_kokoro_rknn_t_fix() -> i32 {
+    50
+}
+fn default_tts_sherpa_provider() -> String {
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    {
+        "cpu".to_string()
+    }
+    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+    {
+        "cpu".to_string()
+    }
 }
 fn default_sherpa_tts_engine() -> String {
     "kokoro".to_string()
@@ -1543,6 +1599,15 @@ impl Config {
             rockchip.dicts_path = join_if_relative(base, &rockchip.dicts_path);
             rockchip.auth_config = resolve_auth_license_paths(&rockchip.auth_config, base);
         }
+        if let Some(ref mut rk) = self.tts.kokoro_rknn {
+            rk.encoder = join_if_relative(base, &rk.encoder);
+            rk.har_gen = join_if_relative(base, &rk.har_gen);
+            rk.decoder = join_if_relative(base, &rk.decoder);
+            rk.vocab = join_if_relative(base, &rk.vocab);
+            rk.voices_dir = join_if_relative(base, &rk.voices_dir);
+            rk.espeak_data = join_if_relative(base, &rk.espeak_data);
+            rk.lexicon_dir = join_if_relative(base, &rk.lexicon_dir);
+        }
         if let Some(ref mut sherpa) = self.asr.sherpa {
             sherpa.model = join_if_relative(base, &sherpa.model);
             sherpa.tokens = join_if_relative(base, &sherpa.tokens);
@@ -1690,7 +1755,7 @@ fn validate_talk_backends(cfg: &Config) -> Result<()> {
     {
         use crate::backends::{TalkBackendKind, classify_talk_backend};
         if classify_talk_backend(&cfg.tts.backend) == TalkBackendKind::LocalHardware {
-            // kokoro-server sidecar; no [tts.local] required
+            // In-process Kokoro RKNN TTS; no [tts.local] required
         }
     }
 

@@ -245,10 +245,10 @@ fn print_rockchip_sensevoice_init_notes(talk_home: &Path) {
         talk_home.display()
     );
     println!(
-        "  5. Build kokoro-server (cmake -DUSE_RKNN=ON -DBUILD_SERVER=ON) and run build.py for RKNN models."
+        "  5. Optional RKNN TTS split models: bash scripts/talk/ensure_kokoro_rockchip.sh (needs kokoro-server sources)."
     );
     println!(
-        "  6. make package-talk-rockchip bundles kokoro-server + models/kokoro/; start.sh runs TTS on :8848."
+        "  6. make package-talk-rockchip bundles in-process TTS (RKNN + sherpa CPU kokoro fallback)."
     );
     println!("  7. Run `hermes talk list-devices` to verify audio devices.");
     println!("  8. Run `hermes talk` to start the voice dialog loop.");

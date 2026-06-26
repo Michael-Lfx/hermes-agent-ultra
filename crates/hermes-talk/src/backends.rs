@@ -50,12 +50,6 @@ pub fn uses_sherpa_asr(backend: &str) -> bool {
 }
 
 pub fn uses_sherpa_tts(backend: &str) -> bool {
-    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-    {
-        let _ = backend;
-        false
-    }
-    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
     match classify_talk_backend(backend) {
         TalkBackendKind::Sherpa => true,
         TalkBackendKind::LocalHardware => cfg!(feature = "sherpa-asr-tts"),

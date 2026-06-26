@@ -266,14 +266,23 @@ echo
 
 mkdir -p "${DEST}"
 
-install_sensevoice
-install_sensevoice_rk3588
-install_kokoro
-install_zipvoice
-install_kws
-install_vad
-install_denoise
-install_speaker
+if [[ "${ROCKCHIP_ONLY:-0}" == "1" ]]; then
+  install_sensevoice_rk3588
+  install_kokoro
+  install_kws
+  install_vad
+  install_denoise
+  install_speaker
+else
+  install_sensevoice
+  install_sensevoice_rk3588
+  install_kokoro
+  install_zipvoice
+  install_kws
+  install_vad
+  install_denoise
+  install_speaker
+fi
 
 install_to_talk_home
 

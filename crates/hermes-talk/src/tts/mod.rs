@@ -1,6 +1,8 @@
 mod bailian;
 #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-mod kokoro_server;
+mod kokoro_ffi;
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+mod kokoro_rknn;
 #[cfg(all(
     feature = "rockchip",
     target_arch = "aarch64",
@@ -14,6 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+use tracing::warn;
 
 use crate::backends::{TalkBackendKind, classify_talk_backend};
 use crate::config::{DashscopeConfig, TtsConfig};
@@ -23,7 +27,7 @@ pub use bailian::BailianTts;
 pub use bailian::TtsAudio;
 
 #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-pub use kokoro_server::KokoroServerTts;
+pub use kokoro_rknn::KokoroRknnTts;
 #[cfg(all(
     feature = "rockchip",
     target_arch = "aarch64",
@@ -47,7 +51,7 @@ pub enum TtsBackend {
     #[cfg(feature = "sherpa-asr-tts")]
     Sherpa,
     #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-    KokoroServer,
+    KokoroRknn,
     #[cfg(all(
         feature = "rockchip",
         target_arch = "aarch64",
@@ -67,7 +71,7 @@ impl TtsBackend {
 
 #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
 fn resolve_local_sherpa_tts() -> TtsBackend {
-    TtsBackend::KokoroServer
+    TtsBackend::KokoroRknn
 }
 
 #[cfg(all(
@@ -112,11 +116,7 @@ pub async fn create_tts(
             Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
         }
         #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
-        TtsBackend::KokoroServer => {
-            let cfg = tts_cfg.effective_kokoro_server();
-            let (client, rx) = KokoroServerTts::connect(&cfg).await?;
-            Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
-        }
+        TtsBackend::KokoroRknn => create_kokoro_rknn_or_fallback(tts_cfg).await,
         #[cfg(all(
             feature = "rockchip",
             target_arch = "aarch64",
@@ -133,6 +133,25 @@ pub async fn create_tts(
                     )
                 })?;
             let (client, rx) = RockchipTts::connect(rockchip_cfg).await?;
+            Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
+        }
+    }
+}
+
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+async fn create_kokoro_rknn_or_fallback(
+    tts_cfg: &TtsConfig,
+) -> Result<(Arc<dyn TtsEngine>, mpsc::Receiver<TtsAudio>)> {
+    let rk_cfg = tts_cfg.effective_kokoro_rknn();
+    match KokoroRknnTts::connect(&rk_cfg).await {
+        Ok((client, rx)) => Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx)),
+        Err(e) => {
+            warn!(
+                error = %e,
+                "kokoro RKNN unavailable; falling back to sherpa CPU kokoro"
+            );
+            let sherpa_cfg = tts_cfg.effective_sherpa_fallback();
+            let (client, rx) = SherpaTts::connect(&sherpa_cfg).await?;
             Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
         }
     }
