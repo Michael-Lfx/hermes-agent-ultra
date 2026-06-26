@@ -75,6 +75,8 @@ fn try_main() -> Result<(), DynError> {
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_PACK");
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_LIB_DIR");
     println!("cargo:rerun-if-env-changed=SHERPA_ONNX_ARCHIVE_DIR");
+    println!("cargo:rerun-if-env-changed=RK_NPU_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=RK_TTS_SDK_DIR");
     println!("cargo:rerun-if-env-changed=DOCS_RS");
 
     if env::var_os("DOCS_RS").is_some() {
@@ -102,16 +104,51 @@ fn try_main() -> Result<(), DynError> {
     }
 
     match link_mode {
-        LinkMode::Static => emit_static_link_directives(&target_os, pack),
+        LinkMode::Static => emit_static_link_directives(&target_os, pack)?,
         LinkMode::Shared => {
             emit_shared_link_directives();
             if pack == SherpaPack::Rknn {
-                println!("cargo:rustc-link-lib=dylib=rknnrt");
+                emit_rknnrt_link()?;
             }
         }
     }
 
     Ok(())
+}
+
+fn emit_rknnrt_link() -> Result<(), DynError> {
+    let lib_dir = resolve_rknnrt_lib_dir().ok_or_else(|| {
+        "librknnrt.so not found: set RK_NPU_LIB_DIR, RK_TTS_SDK_DIR, or run make prefetch-talk-aarch64"
+            .to_string()
+    })?;
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    println!("cargo:rustc-link-lib=dylib=rknnrt");
+    Ok(())
+}
+
+fn resolve_rknnrt_lib_dir() -> Option<PathBuf> {
+    for key in ["RK_NPU_LIB_DIR", "RKNNRT_LIB_DIR"] {
+        if let Ok(dir) = env::var(key) {
+            let path = PathBuf::from(&dir);
+            if path.join("librknnrt.so").is_file() {
+                return Some(path);
+            }
+        }
+    }
+    if let Ok(sdk) = env::var("RK_TTS_SDK_DIR") {
+        let path = PathBuf::from(sdk).join("lib/Linux/aarch64");
+        if path.join("librknnrt.so").is_file() {
+            return Some(path);
+        }
+    }
+    let out_dir = PathBuf::from(env::var("OUT_DIR").ok()?);
+    let target_dir = target_dir_from_out_dir(&out_dir).ok()?;
+    let root = target_dir.parent()?;
+    let cache = root.join(".cross-cache/rknn");
+    if cache.join("librknnrt.so").is_file() {
+        return Some(cache);
+    }
+    None
 }
 
 /// RKNN prebuilts ship as shared libs only (`*-rknn-*-shared.tar.bz2`); the
@@ -315,7 +352,7 @@ fn emit_shared_link_directives() {
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
 }
 
-fn emit_static_link_directives(target_os: &str, pack: SherpaPack) {
+fn emit_static_link_directives(target_os: &str, pack: SherpaPack) -> Result<(), DynError> {
     for lib in SHERPA_ONNX_STATIC_LIBS {
         println!("cargo:rustc-link-lib=static={lib}");
     }
@@ -323,7 +360,7 @@ fn emit_static_link_directives(target_os: &str, pack: SherpaPack) {
     match target_os {
         "linux" => {
             if pack == SherpaPack::Rknn {
-                println!("cargo:rustc-link-lib=dylib=rknnrt");
+                emit_rknnrt_link()?;
             }
             println!("cargo:rustc-link-lib=dylib=stdc++");
             println!("cargo:rustc-link-lib=dylib=m");
@@ -336,6 +373,7 @@ fn emit_static_link_directives(target_os: &str, pack: SherpaPack) {
         }
         _ => {}
     }
+    Ok(())
 }
 
 fn target_dir_from_out_dir(out_dir: &Path) -> Result<PathBuf, DynError> {

@@ -57,6 +57,18 @@ else
     echo "  ripgrep already cached at ${RG_DIR}/${RG_ARCHIVE}"
 fi
 
+echo "=== Caching Rockchip NPU runtime (librknnrt.so) ==="
+RKNN_DIR="${CACHE}/rknn"
+RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
+RK_NPU_SRC="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}/librknnrt.so"
+mkdir -p "${RKNN_DIR}"
+if [[ -f "${RK_NPU_SRC}" ]]; then
+  cp -f "${RK_NPU_SRC}" "${RKNN_DIR}/librknnrt.so"
+  echo "  librknnrt.so cached at ${RKNN_DIR}/librknnrt.so"
+else
+  echo "  warn: missing ${RK_NPU_SRC} (set RK_TTS_SDK_DIR or RK_NPU_LIB_DIR)" >&2
+fi
+
 echo "=== Downloading mold (fast linker for aarch64 cross release) ==="
 MOLD_VER=2.36.0
 MOLD_DIR="${CACHE}/mold"

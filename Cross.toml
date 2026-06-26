@@ -13,6 +13,7 @@ passthrough = [
     # hermes-talk rockchip local ASR/TTS (set by `make release-talk-rockchip-arm64`)
     "RK_TTS_SDK_DIR",
     "RK_ASR_SDK_DIR",
+    "RK_NPU_LIB_DIR",
     # cross also forwards host http(s)_proxy after passthrough; use a LAN-reachable
     # proxy on the host (not 127.0.0.1) before `cross build`, e.g.:
     #   export https_proxy=http://192.168.31.200:7890
@@ -38,6 +39,7 @@ passthrough = [
     "LIBCLANG_PATH",
     "RK_TTS_SDK_DIR",
     "RK_ASR_SDK_DIR",
+    "RK_NPU_LIB_DIR",
     "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER",
     "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_RUSTFLAGS",
     "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_gnu",
