@@ -105,6 +105,7 @@ TTS_STREAM_CACHE    := $(abspath $(ROOT)/../tts-stream/.cross-cache)
 MODELS_ROOT         ?= $(ROOT)/.models
 
 CROSS_AARCH64_ENV := \
+	SHERPA_ONNX_PACK=rknn \
 	SHERPA_ONNX_ARCHIVE_DIR=$(CROSS_CACHE)/sherpa-onnx \
 	HERMES_BUNDLED_RG_ARCHIVE_DIR=$(CROSS_CACHE)/ripgrep \
 	PKG_CONFIG_ALLOW_CROSS=1 \
@@ -336,11 +337,11 @@ check-talk-models-linux check-talk-models-macos check-talk-models-unix:
 	CHECK_ONLY=1 HERMES_ULTRA_ROOT=$(ROOT) MODELS_ROOT=$(MODELS_ROOT) bash $(TALK_SCRIPTS)/ensure_models.sh
 
 release-talk-rockchip:
-	SHERPA_ONNX_PACK=cpu \
+	SHERPA_ONNX_PACK=rknn \
 	RUSTFLAGS="$(RK_LINK_FLAGS)" \
 	RK_TTS_SDK_DIR=$(RK_TTS_SDK_DIR) \
 	$(CARGO) build --release $(TALK_PKG_RK)
-	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES_RK))"
+	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES_RK), sherpa RKNN pack)"
 
 release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
 	SHERPA_ONNX_PACK=rknn \

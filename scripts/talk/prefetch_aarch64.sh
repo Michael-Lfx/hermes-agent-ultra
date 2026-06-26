@@ -24,20 +24,23 @@ else
     echo "  LLVM 14 already cached at ${LLVM_DIR}"
 fi
 
-echo "=== Downloading sherpa-onnx aarch64 ==="
+echo "=== Downloading sherpa-onnx aarch64 (CPU + RKNN) ==="
 SHERPA_VER=1.13.3
 SHERPA_DIR="${CACHE}/sherpa-onnx"
-SHERPA_ARCHIVE="sherpa-onnx-v${SHERPA_VER}-linux-aarch64-static-lib.tar.bz2"
-SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/${SHERPA_ARCHIVE}"
-
-mkdir -p "${SHERPA_DIR}"
-if [[ ! -f "${SHERPA_DIR}/${SHERPA_ARCHIVE}" ]]; then
+for SHERPA_ARCHIVE in \
+  "sherpa-onnx-v${SHERPA_VER}-linux-aarch64-static-lib.tar.bz2" \
+  "sherpa-onnx-v${SHERPA_VER}-rknn-linux-aarch64-static.tar.bz2"
+do
+  SHERPA_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v${SHERPA_VER}/${SHERPA_ARCHIVE}"
+  mkdir -p "${SHERPA_DIR}"
+  if [[ ! -f "${SHERPA_DIR}/${SHERPA_ARCHIVE}" ]]; then
     echo "  GET ${SHERPA_URL}"
     curl -fsSL -o "${SHERPA_DIR}/${SHERPA_ARCHIVE}" "${SHERPA_URL}"
     echo "  sherpa-onnx cached at ${SHERPA_DIR}/${SHERPA_ARCHIVE}"
-else
+  else
     echo "  sherpa-onnx already cached at ${SHERPA_DIR}/${SHERPA_ARCHIVE}"
-fi
+  fi
+done
 
 echo "=== Downloading ripgrep aarch64 (hermes-bundled-rg cross) ==="
 RG_VER=14.1.1

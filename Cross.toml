@@ -8,6 +8,7 @@ passthrough = [
     "XDG_CACHE_HOME=/tmp/cross-cache",
     # hermes-talk / sherpa-onnx cross (set by `make prefetch-talk-aarch64`)
     "SHERPA_ONNX_ARCHIVE_DIR",
+    "SHERPA_ONNX_PACK",
     "HERMES_BUNDLED_RG_ARCHIVE_DIR",
     # hermes-talk rockchip local ASR/TTS (set by `make release-talk-rockchip-arm64`)
     "RK_TTS_SDK_DIR",
@@ -32,6 +33,7 @@ pre-build = [
 passthrough = [
     "PKG_CONFIG_ALLOW_CROSS",
     "SHERPA_ONNX_ARCHIVE_DIR",
+    "SHERPA_ONNX_PACK",
     "HERMES_BUNDLED_RG_ARCHIVE_DIR",
     "LIBCLANG_PATH",
     "RK_TTS_SDK_DIR",
@@ -50,6 +52,7 @@ pre-build = [
 passthrough = [
     "PKG_CONFIG_ALLOW_CROSS",
     "SHERPA_ONNX_ARCHIVE_DIR",
+    "SHERPA_ONNX_PACK",
     "HERMES_BUNDLED_RG_ARCHIVE_DIR",
     "LIBCLANG_PATH",
     "BINDGEN_EXTRA_CLANG_ARGS_aarch64_unknown_linux_musl",
