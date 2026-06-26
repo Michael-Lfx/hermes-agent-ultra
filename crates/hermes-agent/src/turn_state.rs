@@ -226,6 +226,10 @@ pub(crate) struct TurnContext {
 
     // --- Listed-equity tool ordering (analyze_stock before web) ---
     pub equity_research_gate: crate::equity_research_gate::EquityResearchGate,
+    /// `/quick-scan` or `/analyze-stock` from equity-research skill frontmatter.
+    pub equity_slash_mode: hermes_tools::EquitySlashMode,
+    /// Slash workflow progress (analyze → web fill → deliver).
+    pub equity_slash_session: hermes_tools::EquitySlashSession,
 
     // --- Checkpoint manager ---
     pub checkpoint_mgr: hermes_tools::CheckpointManager,
@@ -272,6 +276,7 @@ impl TurnContext {
             crate::equity_research_gate::EquityResearchGate::from_tool_schemas(
                 tool_schemas.as_ref(),
             );
+        let equity_slash_mode = hermes_tools::detect_equity_slash_mode(&first_user);
         TurnContext {
             ctx,
             system_content,
@@ -340,6 +345,8 @@ impl TurnContext {
             web_research_ctrl,
             web_auxiliary,
             equity_research_gate,
+            equity_slash_mode,
+            equity_slash_session: hermes_tools::EquitySlashSession::default(),
             checkpoint_mgr: hermes_tools::CheckpointManager::new(
                 checkpoints_enabled,
                 hermes_home.as_deref().map(Path::new),
@@ -1063,6 +1070,41 @@ async fn turn_process_output(agent: &AgentLoop, tc: &mut TurnContext) -> TurnSta
         .collect();
 
     if tool_calls.is_empty() {
+        if tc.equity_slash_mode != hermes_tools::EquitySlashMode::None {
+            if let Some(action) = hermes_tools::handle_slash_text_stall(
+                tc.equity_slash_mode,
+                &tc.first_user,
+                &mut tc.equity_slash_session,
+            ) {
+                match action {
+                    hermes_tools::EquitySlashStallAction::ContinueAgent(nudge) => {
+                        tc.ctx.add_message(Message::user(nudge));
+                        return TurnState::CallLlm;
+                    }
+                    hermes_tools::EquitySlashStallAction::ForceDeliver(outcome) => {
+                        let delivery = match outcome {
+                            hermes_tools::EquitySlashDeliveryOutcome::Deliver(t)
+                            | hermes_tools::EquitySlashDeliveryOutcome::Partial(t)
+                            | hermes_tools::EquitySlashDeliveryOutcome::Failed(t) => t,
+                            hermes_tools::EquitySlashDeliveryOutcome::Pending => {
+                                return TurnState::CallLlm;
+                            }
+                        };
+                        tracing::info!(
+                            chars = delivery.chars().count(),
+                            "equity slash force delivery after text stall"
+                        );
+                        return finish_turn_with_assistant_text(
+                            agent,
+                            tc,
+                            &delivery,
+                            "equity_slash_force_delivery",
+                        );
+                    }
+                }
+            }
+        }
+
         let effective_finish_reason = crate::llm_caller::effective_finish_reason(
             agent,
             &response,
@@ -2044,6 +2086,53 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     }
     let lsp_note = agent.lsp_context_note(&tool_calls, &results);
 
+    if tc.equity_slash_mode != hermes_tools::EquitySlashMode::None {
+        match hermes_tools::try_equity_slash_delivery(
+            tc.equity_slash_mode,
+            &tc.first_user,
+            &tool_calls,
+            &results,
+            &mut tc.equity_slash_session,
+        ) {
+            hermes_tools::EquitySlashDeliveryOutcome::Deliver(delivery)
+            | hermes_tools::EquitySlashDeliveryOutcome::Partial(delivery)
+            | hermes_tools::EquitySlashDeliveryOutcome::Failed(delivery) => {
+                tracing::info!(
+                    mode = ?tc.equity_slash_mode,
+                    chars = delivery.chars().count(),
+                    "equity slash direct delivery"
+                );
+                let num_tool_msgs = results.len();
+                for result in &results {
+                    tc.replay.record(
+                        "tool_result",
+                        serde_json::json!({
+                            "turn": tc.total_turns,
+                            "tool_call_id": result.tool_call_id,
+                            "is_error": result.is_error,
+                            "content_preview": result.content.chars().take(240).collect::<String>(),
+                        }),
+                    );
+                    tc.ctx
+                        .add_message(Message::tool_result(&result.tool_call_id, &result.content));
+                }
+                agent
+                    .pending_steer
+                    .apply_to_tool_results(tc.ctx.get_messages_mut(), num_tool_msgs);
+                if let Some(note) = lsp_note {
+                    tc.ctx.add_message(Message::system(note));
+                }
+                return finish_turn_with_assistant_text(
+                    agent,
+                    tc,
+                    &delivery,
+                    "equity_slash_delivery",
+                );
+            }
+            hermes_tools::EquitySlashDeliveryOutcome::Pending => {}
+        }
+    }
+
     let execute_code_refund = !tool_calls.is_empty()
         && tool_calls
             .iter()
@@ -2067,6 +2156,12 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     agent
         .pending_steer
         .apply_to_tool_results(tc.ctx.get_messages_mut(), num_tool_msgs);
+    if tc.equity_slash_mode == hermes_tools::EquitySlashMode::AnalyzeStock {
+        if let Some(hint) = hermes_tools::slash_web_fill_system_hint(&tc.equity_slash_session) {
+            tracing::info!("equity slash: injecting web gap-fill hint");
+            tc.ctx.add_message(Message::system(hint));
+        }
+    }
     if let Some(note) = lsp_note {
         tc.ctx.add_message(Message::system(note));
     }
@@ -2215,6 +2310,54 @@ async fn turn_post_tool(agent: &AgentLoop, tc: &mut TurnContext) -> TurnState {
     agent.auto_compress_if_over_threshold(&mut tc.ctx).await;
 
     TurnState::Guard
+}
+
+/// End the agent loop with deterministic assistant text (equity slash delivery).
+fn finish_turn_with_assistant_text(
+    agent: &AgentLoop,
+    tc: &mut TurnContext,
+    text: &str,
+    exit_reason: &str,
+) -> TurnState {
+    tc.ctx.add_message(Message::assistant(text));
+    let (u, a) = extract_last_user_assistant(tc.ctx.get_messages());
+    agent.memory_sync(&u, &a, &tc.session_id);
+    agent.spawn_background_review(
+        tc.total_turns,
+        &tc.ctx,
+        tc.review_memory_at_end,
+        Some(tc.session_id.as_str()),
+    );
+    crate::hooks::turn_end_plugin_hooks(
+        agent,
+        tc.ctx.get_messages(),
+        true,
+        false,
+        tc.total_turns,
+        tc.session_started_hooks_fired,
+    );
+    tc.replay.record(
+        "session_end",
+        serde_json::json!({
+            "reason": exit_reason,
+            "total_turns": tc.total_turns,
+            "session_cost_usd": tc.session_cost_usd,
+        }),
+    );
+    TurnState::Done(Ok(agent.enrich_turn_telemetry(
+        agent.seal_loop_result(
+            &tc.ctx,
+            tc.persist_user_idx,
+            tc.prefill_range.clone(),
+            LoopExit::base(exit_reason, tc.api_call_count, false, false, true, false),
+            tc.total_turns,
+            std::mem::take(&mut tc.tool_errors),
+            tc.accumulated_usage.take(),
+            tc.session_cost_usd,
+            tc.session_started_hooks_fired,
+        ),
+        Some(&tc.tool_guardrails),
+    )))
 }
 
 // ---------------------------------------------------------------------------

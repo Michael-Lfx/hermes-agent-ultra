@@ -736,6 +736,9 @@ async fn run_with_message_prelude(
             )));
         }
     }
+    if let Some(hint) = hermes_tools::slash_turn_start_system_hint(turn_ctx.equity_slash_mode) {
+        turn_ctx.ctx.add_message(Message::system(hint));
+    }
     let mut state = TurnState::Guard;
     loop {
         match state {

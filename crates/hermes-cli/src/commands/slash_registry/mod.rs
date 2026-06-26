@@ -581,8 +581,11 @@ async fn try_dispatch_skill_slash(
         &config.skills.disabled,
     );
     let args_text = args.join(" ");
+    let resolved_cmd = strip_plugin_command_prefix(cmd);
     match hermes_tools::skill_commands::resolve_installed_skill_slash_command(
-        cmd, &args_text, &resolver,
+        resolved_cmd.as_str(),
+        &args_text,
+        &resolver,
     ) {
         Ok(Some(invocation)) => Ok(CommandResult::RunAgent(invocation.message)),
         Ok(None) => {
@@ -599,6 +602,22 @@ async fn try_dispatch_skill_slash(
             emit_command_output(host, format!("Skill invocation blocked: {err}"));
             Ok(CommandResult::Handled)
         }
+    }
+}
+
+/// Map Cursor plugin-style `/stock-deep-analyzer:analyze-stock` → `/analyze-stock`.
+fn strip_plugin_command_prefix(cmd: &str) -> String {
+    let Some((_, rest)) = cmd.split_once(':') else {
+        return cmd.to_string();
+    };
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return cmd.to_string();
+    }
+    if rest.starts_with('/') {
+        rest.to_string()
+    } else {
+        format!("/{rest}")
     }
 }
 

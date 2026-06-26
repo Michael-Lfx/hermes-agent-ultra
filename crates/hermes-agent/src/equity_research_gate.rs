@@ -9,13 +9,17 @@ use hermes_core::{ToolCall, ToolResult};
 use serde_json::Value;
 
 const BLOCK_MSG: &str = "Listed-equity pipeline: call analyze_stock(symbol, use_providers=true) before web_search/web_extract. \
-analyze_stock fetches hard data + DCF + scoring; use web_search only after it returns, to fill data_confidence gaps.";
+analyze_stock fetches hard data + DCF + scoring; use web_search only after it returns, to fill gaps in missing_dims / dim_summary / data_confidence.";
 
 #[derive(Debug, Clone, Default)]
 pub struct EquityResearchGate {
     enabled: bool,
     pending_symbol: Option<String>,
     analyze_done: bool,
+    /// `/quick-scan` (depth=lite): do not defer web tools — skill forbids web anyway.
+    lite_mode: bool,
+    /// Parsed from last `analyze_stock` when `data_confidence.score < 0.5`.
+    low_confidence_hint: Option<String>,
 }
 
 impl EquityResearchGate {
@@ -42,7 +46,7 @@ impl EquityResearchGate {
 
     /// Remove deferred web tools; returns synthetic error results for the model.
     pub fn gate_tool_calls(&mut self, tool_calls: &mut Vec<ToolCall>) -> Vec<ToolResult> {
-        if !self.enabled {
+        if !self.enabled || self.lite_mode {
             return Vec::new();
         }
 
@@ -56,7 +60,7 @@ impl EquityResearchGate {
         let mut kept = Vec::new();
         for tc in tool_calls.drain(..) {
             if self.should_block_web_tool(&tc) {
-                blocked.push(ToolResult::err(tc.id.clone(), BLOCK_MSG));
+                blocked.push(ToolResult::err(tc.id.clone(), &self.block_message()));
             } else {
                 kept.push(tc);
             }
@@ -83,9 +87,18 @@ impl EquityResearchGate {
                 }
                 "analyze_stock" => {
                     self.analyze_done = true;
+                    if let Ok(args) = serde_json::from_str::<Value>(&tc.function.arguments) {
+                        if is_lite_depth(args.get("depth").and_then(|v| v.as_str())) {
+                            self.lite_mode = true;
+                        }
+                    }
                     if let Some(sym) = symbol_from_tool_json(&result.content) {
                         self.pending_symbol = Some(sym);
                     }
+                    if depth_from_result(&result.content).as_deref() == Some("lite") {
+                        self.lite_mode = true;
+                    }
+                    self.low_confidence_hint = low_confidence_hint_from_result(&result.content);
                 }
                 _ => {}
             }
@@ -115,6 +128,9 @@ impl EquityResearchGate {
                         if let Some(sym) = args.get("symbol").and_then(|v| v.as_str()) {
                             self.pending_symbol = Some(sym.to_string());
                         }
+                        if is_lite_depth(args.get("depth").and_then(|v| v.as_str())) {
+                            self.lite_mode = true;
+                        }
                     }
                 }
                 _ => {}
@@ -142,11 +158,63 @@ impl EquityResearchGate {
         }
         false
     }
+
+    fn block_message(&self) -> String {
+        if let Some(hint) = &self.low_confidence_hint {
+            format!("{BLOCK_MSG}\n{hint}")
+        } else {
+            BLOCK_MSG.into()
+        }
+    }
+
+    /// Hint from last low-confidence `analyze_stock` (missing_dims / dim_summary).
+    #[must_use]
+    pub fn low_confidence_hint(&self) -> Option<&str> {
+        self.low_confidence_hint.as_deref()
+    }
 }
 
 fn symbol_from_tool_json(content: &str) -> Option<String> {
     let v: Value = serde_json::from_str(content).ok()?;
     v.get("symbol").and_then(|s| s.as_str()).map(str::to_string)
+}
+
+fn depth_from_result(content: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(content).ok()?;
+    v.get("depth").and_then(|s| s.as_str()).map(str::to_string)
+}
+
+fn low_confidence_hint_from_result(content: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(content).ok()?;
+    let score = v.get("data_confidence")?.get("score")?.as_f64()?;
+    if score >= 0.5 {
+        return None;
+    }
+    let missing: Vec<String> = v
+        .get("missing_dims")
+        .and_then(|m| m.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if missing.is_empty() {
+        return Some(format!(
+            "Last analyze_stock data_confidence={score:.2} (<0.5): check dim_summary and use web_search for qualitative gaps."
+        ));
+    }
+    Some(format!(
+        "Last analyze_stock data_confidence={score:.2}; missing_dims=[{}] — web_search to fill before final narrative.",
+        missing.join(", ")
+    ))
+}
+
+fn is_lite_depth(depth: Option<&str>) -> bool {
+    matches!(
+        depth.map(str::trim).map(str::to_ascii_lowercase).as_deref(),
+        Some("lite" | "quick" | "quick-scan")
+    )
 }
 
 fn is_a_share_symbol(sym: &str) -> bool {
@@ -278,6 +346,42 @@ mod tests {
         let mut batch = vec![tc("1", "web_search", r#"{"query":"300750 earnings"}"#)];
         let blocked = gate.gate_tool_calls(&mut batch);
         assert_eq!(blocked.len(), 1);
+    }
+
+    #[test]
+    fn lite_depth_disables_web_gate() {
+        let schemas = vec![ToolSchema::new(
+            "analyze_stock",
+            "",
+            JsonSchema::new("object"),
+        )];
+        let mut gate = EquityResearchGate::from_tool_schemas(&schemas);
+        gate.seed_pending_symbol("688126.SH");
+        gate.lite_mode = true;
+        let mut batch = vec![tc("1", "web_search", r#"{"query":"news"}"#)];
+        let blocked = gate.gate_tool_calls(&mut batch);
+        assert!(blocked.is_empty());
+        assert_eq!(batch.len(), 1);
+    }
+
+    #[test]
+    fn analyze_stock_lite_arg_disables_gate() {
+        let schemas = vec![ToolSchema::new(
+            "analyze_stock",
+            "",
+            JsonSchema::new("object"),
+        )];
+        let mut gate = EquityResearchGate::from_tool_schemas(&schemas);
+        gate.seed_pending_symbol("688126.SH");
+        let mut batch = vec![tc(
+            "1",
+            "analyze_stock",
+            r#"{"symbol":"688126.SH","depth":"lite"}"#,
+        )];
+        let _ = gate.gate_tool_calls(&mut batch);
+        let mut web = vec![tc("2", "web_search", r#"{"query":"foo"}"#)];
+        let blocked = gate.gate_tool_calls(&mut web);
+        assert!(blocked.is_empty());
     }
 
     #[test]

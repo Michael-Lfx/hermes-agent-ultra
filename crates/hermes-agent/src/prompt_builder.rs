@@ -277,9 +277,10 @@ is always better than inventing a result.";
 pub const EQUITY_RESEARCH_ORCHESTRATION_GUIDANCE: &str = "# Listed equity research (tool order)\n\
 When the user wants **fundamentals, valuation, investment merit, DCF, peers, or buy/hold/sell** on a **listed stock**:\n\
 1. Resolve symbol if needed (`resolve_a_share_symbol` for Chinese names/codes).\n\
-2. Call **`analyze_stock`** first (`use_providers=true` default). It fetches hard data, DCF, 19-dim scoring, and persona panel.\n\
-3. Call **`web_search` / `web_extract` only after** `analyze_stock`, to fill gaps in `data_confidence.missing` or qualitative dims (macro, policy, moat).\n\
-4. Use **`get_quote` alone** only for **spot price** with no valuation narrative.\n\
+2. **`/quick-scan`** → `analyze_stock(depth=lite)` first; **no** `web_search`, **no** HTML report; paste quick-scan markdown.\n\
+3. **`/analyze-stock`** or **`/equity-research`** → `analyze_stock(depth=medium)` (`use_providers=true` default). Full 19-dim scoring + 66-judge panel.\n\
+4. Call **`web_search` / `web_extract` only after** medium `analyze_stock`, to fill gaps in `data_confidence.missing` or qualitative dims (macro, policy, moat).\n\
+5. Use **`get_quote` alone** only for **spot price** with no valuation narrative.\n\
 Do not answer listed-stock investment questions from web snippets alone when `analyze_stock` is available.";
 
 // OpenAI GPT/Codex-specific execution guidance.  Addresses known failure modes
