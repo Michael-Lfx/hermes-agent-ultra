@@ -180,6 +180,7 @@ fn render_institutional_html_inner(
         syn,
         &result.content,
         &result.raw_dims,
+        &scored,
     ));
     html.push_str(&render_fundamentals_section(&result.content.fundamentals));
     html.push_str(&render_sector_section(&result.content.sector));
@@ -274,6 +275,7 @@ mod tests {
         let dims = json!({
             "0_basic": { "data": { "name": "贵州茅台", "industry": "白酒", "price": 1680.0, "pe_ttm": 28.5, "pb": 8.2, "market_cap_yi": 21000, "shares_outstanding_yi": 12.56 } },
             "1_financials": { "data": { "roe": 32.0, "net_margin": 52.0, "revenue_latest_yi": 1500, "revenue_history": [1200.0, 1300.0, 1400.0, 1500.0], "roe_history": [28.0, 30.0, 31.0, 32.0], "financial_health": { "debt_ratio": 18.0, "current_ratio": 2.1 } } },
+            "2_kline": { "data": { "stage": "Stage 2 上升", "ma_align": "多头排列", "ma5": 1670.0, "ma20": 1650.0, "ma60": 1600.0 } },
             "10_valuation": { "data": { "pe_ttm": 28.5, "pe_percentile": 35.0 } },
             "4_peers": { "data": { "peer_table": [{ "name": "五粮液", "ticker": "000858", "pe": 18.0, "pb": 4.2 }] } },
             "6_research": { "data": { "research_count": 10 } },
@@ -337,8 +339,8 @@ mod tests {
             &result,
             Some("P0 预览：institutional HTML 含 CORE / DEEP SCAN / DCF 三节。"),
         );
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target/p0-report-preview.html");
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/p0-report-preview.html");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).expect("create target dir");
         }
@@ -359,7 +361,10 @@ mod tests {
         assert!(html.len() <= MAX_HTML_BYTES);
 
         eprintln!("\n=== P0 HTML PREVIEW ===");
-        eprintln!("path: {}", path.canonicalize().unwrap_or(path.clone()).display());
+        eprintln!(
+            "path: {}",
+            path.canonicalize().unwrap_or(path.clone()).display()
+        );
         eprintln!("bytes: {}", html.len());
         for (label, ok) in checks {
             eprintln!("  [{ok}] {label}");

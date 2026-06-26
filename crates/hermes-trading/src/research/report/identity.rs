@@ -59,6 +59,7 @@ impl ReportIdentity {
         ) {
             id.fundamental_score = Some(scored.fundamental_score);
         }
+        id.enrich_from_raw_dims(&result.raw_dims);
         for m in &result.content.fundamentals.metrics {
             match m.label.as_str() {
                 "PB" if id.pb.is_none() => {
@@ -74,6 +75,43 @@ impl ReportIdentity {
             }
         }
         id
+    }
+
+    fn enrich_from_raw_dims(&mut self, raw_dims: &Value) {
+        let basic = raw_dims
+            .get("0_basic")
+            .and_then(|v| v.get("data"))
+            .and_then(|v| v.as_object());
+        let Some(basic) = basic else {
+            return;
+        };
+        if self.price.is_none() {
+            self.price = basic.get("price").and_then(|v| v.as_f64());
+        }
+        if self.change_pct.is_none() {
+            self.change_pct = basic
+                .get("change_pct")
+                .and_then(|v| v.as_f64())
+                .or_else(|| basic.get("pct_change").and_then(|v| v.as_f64()));
+        }
+        if self
+            .company_name
+            .as_ref()
+            .is_none_or(|n| !is_usable_company_name(n))
+            && let Some(name) = basic.get("name").and_then(|v| v.as_str())
+            && is_usable_company_name(name)
+        {
+            self.company_name = Some(name.to_string());
+        }
+        if self.market_cap_yi.is_none() {
+            self.market_cap_yi = basic.get("market_cap_yi").and_then(|v| v.as_f64());
+        }
+        if self.pe.is_none() {
+            self.pe = basic.get("pe_ttm").and_then(|v| v.as_f64());
+        }
+        if self.pb.is_none() {
+            self.pb = basic.get("pb").and_then(|v| v.as_f64());
+        }
     }
 
     pub fn enrich_from_dcf(&mut self, dcf: &Value) {

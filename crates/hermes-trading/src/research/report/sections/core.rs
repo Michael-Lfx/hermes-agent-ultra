@@ -5,6 +5,8 @@ use serde_json::Value;
 use crate::research::report::content::ReportContent;
 use crate::research::report::identity::ReportIdentity;
 use crate::research::report::sections::util::escape_html;
+use crate::research::report_filter::scrub_dim_label;
+use crate::research::scoring::ScoreDimensionsResult;
 use crate::research::synthesis::SynthesisReport;
 
 #[must_use]
@@ -13,9 +15,10 @@ pub fn render_core_section(
     syn: &SynthesisReport,
     content: &ReportContent,
     raw_dims: &Value,
+    scored: &ScoreDimensionsResult,
 ) -> String {
     let conclusion = core_conclusion_text(syn);
-    let trend = map_trend(raw_dims);
+    let trend = map_trend(raw_dims, scored);
     let price = map_price(identity, raw_dims);
     let volume = map_volume(raw_dims, &content.flows_events.bullets);
     let chips = map_chips(raw_dims);
@@ -103,16 +106,25 @@ fn render_key_metrics(syn: &SynthesisReport) -> String {
     format!(r#"<div class="core-metrics">{cells}</div>"#)
 }
 
-fn map_trend(raw_dims: &Value) -> String {
+fn map_trend(raw_dims: &Value, scored: &ScoreDimensionsResult) -> String {
     let kline = dim_data(raw_dims, "2_kline");
     let stage = str_field(kline, "stage");
     let align = str_field(kline, "ma_align");
-    match (stage, align) {
+    let from_raw = match (stage, align) {
         (Some(s), Some(a)) if !s.is_empty() && !a.is_empty() => format!("{s} · {a}"),
         (Some(s), _) if !s.is_empty() => s,
         (_, Some(a)) if !a.is_empty() => a,
-        _ => "—".into(),
+        _ => String::new(),
+    };
+    if !from_raw.is_empty() {
+        return from_raw;
     }
+    scored
+        .dimensions
+        .get("2_kline")
+        .map(|d| scrub_dim_label(&d.label))
+        .filter(|s| !s.is_empty() && s != "—")
+        .unwrap_or_else(|| "—".into())
 }
 
 fn map_price(identity: &ReportIdentity, raw_dims: &Value) -> String {
@@ -228,6 +240,46 @@ mod tests {
     }
 
     #[test]
+    fn core_trend_falls_back_to_scored_kline_label() {
+        let identity = ReportIdentity {
+            company_name: None,
+            symbol: "600528.SH".into(),
+            price: None,
+            change_pct: None,
+            industry: None,
+            market_cap_yi: None,
+            pe: None,
+            pb: None,
+            fundamental_score: None,
+        };
+        let scored = ScoreDimensionsResult {
+            ticker: "600528.SH".into(),
+            fundamental_score: 50.0,
+            dimensions: [(
+                "2_kline".into(),
+                crate::research::scoring::DimScore {
+                    score: 6,
+                    weight: 4,
+                    display_name: String::new(),
+                    label: "Stage 1 筑底 · 均线缠绕".into(),
+                    missing: vec![],
+                    reasons_pass: vec![],
+                    reasons_fail: vec![],
+                },
+            )]
+            .into(),
+        };
+        let html = render_core_section(
+            &identity,
+            &stub_syn(),
+            &ReportContent::default(),
+            &serde_json::json!({}),
+            &scored,
+        );
+        assert!(html.contains("Stage 1 筑底"));
+    }
+
+    #[test]
     fn core_section_renders_bento() {
         let identity = ReportIdentity {
             company_name: Some("贵州茅台".into()),
@@ -254,7 +306,29 @@ mod tests {
             },
             ..Default::default()
         };
-        let html = render_core_section(&identity, &stub_syn(), &content, &raw);
+        let html = render_core_section(
+            &identity,
+            &stub_syn(),
+            &content,
+            &raw,
+            &ScoreDimensionsResult {
+                ticker: "600519.SH".into(),
+                fundamental_score: 72.5,
+                dimensions: [(
+                    "2_kline".into(),
+                    crate::research::scoring::DimScore {
+                        score: 7,
+                        weight: 4,
+                        display_name: String::new(),
+                        label: "Stage 2 上升 · 多头排列".into(),
+                        missing: vec![],
+                        reasons_pass: vec![],
+                        reasons_fail: vec![],
+                    },
+                )]
+                .into(),
+            },
+        );
         assert!(html.contains("01 / CORE"));
         assert!(html.contains("核心结论"));
         assert!(html.contains("ONE-SHOT CONCLUSION"));
