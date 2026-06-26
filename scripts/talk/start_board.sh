@@ -76,17 +76,22 @@ write_talk_config() {
 
 preflight() {
     missing=0
-    encoder="${DIR}/models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
-    if [ -f "${encoder}" ]; then
-        size="$(wc -c <"${encoder}")"
+    model="${DIR}/models/sensevoice-rk3588/model.rknn"
+    if [ -f "${model}" ]; then
+        size="$(wc -c <"${model}")"
         if [ "${size}" -lt 400000000 ]; then
-            echo "error: ${encoder} is truncated (${size} bytes, need ~490MB)" >&2
-            echo "hint: on dev machine run: rm ${encoder} && make ensure-talk-models-rockchip && make package-talk-rockchip-dev" >&2
+            echo "error: ${model} is truncated (${size} bytes, need ~459MB)" >&2
+            echo "hint: on dev machine run: make ensure-talk-models-rockchip && make package-talk-rockchip-dev" >&2
             missing=1
         fi
     fi
+    legacy="${DIR}/models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+    if [ -f "${legacy}" ] && [ ! -f "${model}" ]; then
+        echo "error: legacy harvestsu encoder is incompatible; deploy k2-fsa model.rknn" >&2
+        missing=1
+    fi
     for f in \
-        "${encoder}" \
+        "${model}" \
         "${DIR}/models/kokoro/model.onnx" \
         "${DIR}/models/kokoro/voices.bin" \
         "${DIR}/models/kokoro/tokens.txt" \

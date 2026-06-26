@@ -29,8 +29,9 @@ HF_BASE="${HF_ENDPOINT:-https://hf-mirror.com}"
 HF_BASE="${HF_BASE%/}"
 DOWNLOAD_PROXY="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
 
-# harvestsu/sensevoice-rknn LFS blob (2024-07); truncated downloads break rknn_init.
-SENSEVOICE_RK3588_ENCODER_MIN_BYTES=400000000
+# harvestsu HF encoder lacks sherpa custom_string metadata; k2-fsa model.rknn is ~459MB.
+SENSEVOICE_RK3588_MODEL_MIN_BYTES=400000000
+SENSEVOICE_RK3588_TARBALL="sherpa-onnx-rk3588-10-seconds-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
 
 file_size_bytes() {
   wc -c <"$1" | tr -d ' '
@@ -108,53 +109,32 @@ extract_tarball() {
 install_sensevoice_rk3588() {
   local name="sensevoice-rk3588"
   local dest="${DEST}/${name}"
-  local encoder="encoder.rk3588.fp16-scaled.rknn"
-  if verify_min_bytes "${dest}/${encoder}" "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}" \
+  local model="model.rknn"
+  if verify_min_bytes "${dest}/${model}" "${SENSEVOICE_RK3588_MODEL_MIN_BYTES}" \
     && [[ -f "${dest}/tokens.txt" ]]; then
     echo "=== ${name}: already present ==="
     return 0
   fi
-  echo "=== ${name} (SenseVoice RKNN for RK3588, via ${HF_BASE}) ==="
+  echo "=== ${name} (SenseVoice RKNN for RK3588, k2-fsa ${SENSEVOICE_RK3588_TARBALL}) ==="
   mkdir -p "${dest}"
-  local repo="harvestsu/sensevoice-rknn"
-  fetch_min_bytes \
-    "${HF_BASE}/${repo}/resolve/main/sense-voice-encoder.rk3588.fp16-scaled.rknn" \
-    "${dest}/${encoder}" \
-    "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}"
-  fetch_hf "${repo}" "am.mvn" "${dest}/am.mvn"
-  fetch_hf "${repo}" "embedding.npy" "${dest}/embedding.npy"
-  fetch_hf "${repo}" "chn_jpn_yue_eng_ko_spectok.bpe.model" "${dest}/chn_jpn_yue_eng_ko_spectok.bpe.model"
-  local tokens_archive="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
-  if [[ ! -f "${dest}/tokens.txt" ]]; then
-    local archive=""
-    if [[ -f "${dest}/${tokens_archive}" ]]; then
-      archive="${dest}/${tokens_archive}"
-      echo "  use local: ${tokens_archive}"
-    else
-      archive="${TMP}/${tokens_archive}"
-      fetch_hf "${repo}" "${tokens_archive}" "${archive}"
-    fi
-    local extract="${TMP}/sensevoice-rk3588-tokens"
-    rm -rf "${extract}"
-    mkdir -p "${extract}"
-    tar xf "${archive}" -C "${extract}" --no-same-owner
-    local inner
-    inner="$(find "${extract}" -name tokens.txt | head -1)"
-    if [[ -n "${inner}" ]]; then
-      cp -f "${inner}" "${dest}/tokens.txt"
-    else
-      echo "warn: tokens.txt not found in ${tokens_archive}; trying k2-fsa fallback" >&2
-      fetch "${SHERPA_BASE}/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2" \
-        "${TMP}/sherpa-sensevoice-int8.tar.bz2"
-      rm -rf "${extract}"
-      mkdir -p "${extract}"
-      tar xf "${TMP}/sherpa-sensevoice-int8.tar.bz2" -C "${extract}" --no-same-owner
-      inner="$(find "${extract}" -name tokens.txt | head -1)"
-      [[ -n "${inner}" ]] && cp -f "${inner}" "${dest}/tokens.txt"
-    fi
+  local archive="${TMP}/${SENSEVOICE_RK3588_TARBALL}"
+  fetch "${SHERPA_BASE}/asr-models/${SENSEVOICE_RK3588_TARBALL}" "${archive}"
+  local extract="${TMP}/sensevoice-rk3588-extract"
+  rm -rf "${extract}"
+  mkdir -p "${extract}"
+  tar xjf "${archive}" -C "${extract}" --no-same-owner
+  local inner
+  inner="$(find "${extract}" -name model.rknn | head -1)"
+  if [[ -z "${inner}" || ! -f "${inner%/*}/tokens.txt" ]]; then
+    echo "error: ${SENSEVOICE_RK3588_TARBALL} missing model.rknn or tokens.txt" >&2
+    exit 1
   fi
-  if [[ ! -f "${dest}/tokens.txt" ]]; then
-    echo "error: failed to obtain tokens.txt for ${name}" >&2
+  cp -f "${inner}" "${dest}/${model}"
+  cp -f "${inner%/*}/tokens.txt" "${dest}/tokens.txt"
+  if ! verify_min_bytes "${dest}/${model}" "${SENSEVOICE_RK3588_MODEL_MIN_BYTES}"; then
+    local size
+    size="$(file_size_bytes "${dest}/${model}" 2>/dev/null || echo 0)"
+    echo "error: ${dest}/${model} looks truncated (${size} bytes)" >&2
     exit 1
   fi
   echo "  -> ${dest}"

@@ -59,14 +59,27 @@ fi
 
 echo "=== Caching Rockchip NPU runtime (librknnrt.so) ==="
 RKNN_DIR="${CACHE}/rknn"
+RKNNRT_V220_URL="https://github.com/airockchip/rknn-toolkit2/raw/v2.2.0/rknpu2/runtime/Linux/librknn_api/aarch64/librknnrt.so"
 RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
-RK_NPU_SRC="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}/librknnrt.so"
+RK_NPU_FALLBACK="${RK_TTS_SDK_DIR}/lib/Linux/aarch64/librknnrt.so"
 mkdir -p "${RKNN_DIR}"
-if [[ -f "${RK_NPU_SRC}" ]]; then
-  cp -f "${RK_NPU_SRC}" "${RKNN_DIR}/librknnrt.so"
-  echo "  librknnrt.so cached at ${RKNN_DIR}/librknnrt.so"
+need_fetch=1
+if [[ -f "${RKNN_DIR}/librknnrt.so" ]] \
+  && strings "${RKNN_DIR}/librknnrt.so" 2>/dev/null | grep -q "librknnrt version: 2.2.0"; then
+  need_fetch=0
+fi
+if [[ "${need_fetch}" -eq 1 ]]; then
+  echo "  GET ${RKNNRT_V220_URL}"
+  if curl -fsSL --retry 3 --retry-delay 2 -o "${RKNN_DIR}/librknnrt.so" "${RKNNRT_V220_URL}"; then
+    echo "  librknnrt.so 2.2.0 cached at ${RKNN_DIR}/librknnrt.so"
+  elif [[ -f "${RK_NPU_FALLBACK}" ]]; then
+    cp -f "${RK_NPU_FALLBACK}" "${RKNN_DIR}/librknnrt.so"
+    echo "  warn: using fallback ${RK_NPU_FALLBACK} (upgrade to rknn-toolkit2 2.2.0 recommended)" >&2
+  else
+    echo "  warn: could not fetch librknnrt.so (set RK_TTS_SDK_DIR or network)" >&2
+  fi
 else
-  echo "  warn: missing ${RK_NPU_SRC} (set RK_TTS_SDK_DIR or RK_NPU_LIB_DIR)" >&2
+  echo "  librknnrt.so 2.2.0 already cached at ${RKNN_DIR}/librknnrt.so"
 fi
 
 echo "=== Downloading mold (fast linker for aarch64 cross release) ==="

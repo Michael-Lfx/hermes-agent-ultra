@@ -241,7 +241,7 @@ fn print_rockchip_sensevoice_init_notes(talk_home: &Path) {
         "  3. Download SenseVoice RKNN models: bash scripts/talk/download_models.sh (HF mirror + optional https_proxy)."
     );
     println!(
-        "  4. Expect {}/models/sensevoice-rk3588/ (encoder.rk3588.fp16-scaled.rknn, tokens.txt, …).",
+        "  4. Expect {}/models/sensevoice-rk3588/ (model.rknn, tokens.txt from k2-fsa RKNN pack).",
         talk_home.display()
     );
     println!(

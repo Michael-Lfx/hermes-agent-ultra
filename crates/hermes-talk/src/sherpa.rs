@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(
             infer_asr_provider(
                 "cpu",
-                "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+                "models/sensevoice-rk3588/model.rknn"
             ),
             "rknn"
         );

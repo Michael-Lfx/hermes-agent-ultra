@@ -14,11 +14,11 @@ MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 DEST="${MODELS_ROOT}/models"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Must match download_models.sh (truncated HF LFS downloads fail rknn_init on board).
-SENSEVOICE_RK3588_ENCODER_MIN_BYTES=400000000
+# Must match download_models.sh (k2-fsa model.rknn ~459MB).
+SENSEVOICE_RK3588_MODEL_MIN_BYTES=400000000
 
 REQUIRED=(
-  "sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+  "sensevoice-rk3588/model.rknn"
   "sensevoice-rk3588/tokens.txt"
   "kokoro/model.onnx"
   "kokoro/voices.bin"
@@ -44,14 +44,20 @@ for rel in "${REQUIRED[@]}"; do
     missing+=("${rel}")
   fi
 done
-encoder="${DEST}/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
-if [[ -f "${encoder}" ]]; then
-  size="$(wc -c <"${encoder}" | tr -d ' ')"
-  if [[ "${size}" -lt "${SENSEVOICE_RK3588_ENCODER_MIN_BYTES}" ]]; then
-    echo "warn: ${encoder} looks truncated (${size} bytes, need >= ${SENSEVOICE_RK3588_ENCODER_MIN_BYTES})" >&2
-    missing+=("sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn (re-download)")
-    rm -f "${encoder}"
+model="${DEST}/sensevoice-rk3588/model.rknn"
+if [[ -f "${model}" ]]; then
+  size="$(wc -c <"${model}" | tr -d ' ')"
+  if [[ "${size}" -lt "${SENSEVOICE_RK3588_MODEL_MIN_BYTES}" ]]; then
+    echo "warn: ${model} looks truncated (${size} bytes, need >= ${SENSEVOICE_RK3588_MODEL_MIN_BYTES})" >&2
+    missing+=("sensevoice-rk3588/model.rknn (re-download)")
+    rm -f "${model}"
   fi
+fi
+# Legacy harvestsu encoder is incompatible with sherpa-onnx RKNN (missing custom_string).
+legacy="${DEST}/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+if [[ -f "${legacy}" && ! -f "${model}" ]]; then
+  echo "warn: removing legacy ${legacy} (use k2-fsa model.rknn)" >&2
+  rm -f "${legacy}"
 fi
 for rel in "${REQUIRED_DIRS[@]}"; do
   if [[ ! -d "${DEST}/${rel}" ]]; then

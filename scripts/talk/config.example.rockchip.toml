@@ -18,7 +18,7 @@ format = "pcm"
 provider = "rknn"
 
 [asr.sherpa]
-model = "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+model = "models/sensevoice-rk3588/model.rknn"
 tokens = "models/sensevoice-rk3588/tokens.txt"
 language = "auto"
 use_itn = true

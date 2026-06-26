@@ -988,7 +988,7 @@ fn default_rktts_alpha() -> f32 {
 fn default_sensevoice_model() -> String {
     #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
     {
-        "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn".to_string()
+        "models/sensevoice-rk3588/model.rknn".to_string()
     }
     #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
     {

@@ -20,7 +20,11 @@ OUT="${DIST}/${OUT_NAME:-hermes-talk-rk3588}"
 MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 
 RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
-RK_NPU_LIB_DIR="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}"
+# Prefer prefetched rknn-toolkit2 2.2.0 runtime (RKTTS SDK ships 2.0.0b16).
+RK_NPU_LIB_DIR="${RK_NPU_LIB_DIR:-${ROOT}/.cross-cache/rknn}"
+if [[ ! -f "${RK_NPU_LIB_DIR}/librknnrt.so" ]]; then
+  RK_NPU_LIB_DIR="${RK_TTS_SDK_DIR}/lib/Linux/aarch64"
+fi
 
 fail() {
   echo "error: $*" >&2
