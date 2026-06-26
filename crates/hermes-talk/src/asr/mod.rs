@@ -1,6 +1,4 @@
 mod bailian;
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-pub mod rk_asr;
 #[cfg(feature = "sherpa-asr-tts")]
 mod sherpa_asr;
 mod types;
@@ -17,8 +15,6 @@ use crate::error::Result;
 pub use bailian::BailianAsr;
 pub use types::AsrEvent;
 
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-pub use rk_asr::RockchipAsr;
 #[cfg(feature = "sherpa-asr-tts")]
 pub use sherpa_asr::SherpaAsr;
 
@@ -30,7 +26,6 @@ pub trait AsrEngine: Send + Sync {
     async fn set_gate(&self, on: bool) -> Result<()>;
     async fn reconnect(&self) -> Result<()>;
     async fn finish_utterance(&self) -> Result<()>;
-    /// Reset decoder state before a new VAD utterance (RK streaming ASR).
     async fn begin_utterance(&self) -> Result<()> {
         Ok(())
     }
@@ -41,66 +36,31 @@ pub enum AsrBackend {
     Bailian,
     #[cfg(feature = "sherpa-asr-tts")]
     Sherpa,
-    #[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-    Rockchip,
 }
 
 impl AsrBackend {
     pub fn from_config(asr_cfg: &AsrConfig) -> Self {
         match classify_talk_backend(&asr_cfg.backend) {
             TalkBackendKind::Cloud => AsrBackend::Bailian,
-            TalkBackendKind::Sherpa => resolve_sherpa_named_asr(),
-            TalkBackendKind::LocalHardware => resolve_local_asr(),
+            TalkBackendKind::Sherpa | TalkBackendKind::LocalHardware => resolve_local_sherpa_asr(),
         }
     }
 }
 
 #[cfg(feature = "sherpa-asr-tts")]
-fn resolve_sherpa_named_asr() -> AsrBackend {
+fn resolve_local_sherpa_asr() -> AsrBackend {
     AsrBackend::Sherpa
 }
 
-#[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    feature = "rockchip",
-    target_arch = "aarch64"
-))]
-fn resolve_sherpa_named_asr() -> AsrBackend {
-    AsrBackend::Rockchip
-}
-
-#[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    not(all(feature = "rockchip", target_arch = "aarch64"))
-))]
-fn resolve_sherpa_named_asr() -> AsrBackend {
-    AsrBackend::Bailian
-}
-
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-fn resolve_local_asr() -> AsrBackend {
-    AsrBackend::Rockchip
-}
-
-#[cfg(all(
-    feature = "sherpa-asr-tts",
-    not(all(feature = "rockchip", target_arch = "aarch64"))
-))]
-fn resolve_local_asr() -> AsrBackend {
-    AsrBackend::Sherpa
-}
-
-#[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    not(all(feature = "rockchip", target_arch = "aarch64"))
-))]
-fn resolve_local_asr() -> AsrBackend {
+#[cfg(not(feature = "sherpa-asr-tts"))]
+fn resolve_local_sherpa_asr() -> AsrBackend {
     AsrBackend::Bailian
 }
 
 pub async fn create_asr(
     dashscope: &DashscopeConfig,
     asr_cfg: &AsrConfig,
+    sherpa: &crate::config::SherpaConfig,
     start_paused: bool,
     backend: AsrBackend,
 ) -> Result<(Arc<dyn AsrEngine>, mpsc::Receiver<AsrEvent>)> {
@@ -111,19 +71,9 @@ pub async fn create_asr(
         }
         #[cfg(feature = "sherpa-asr-tts")]
         AsrBackend::Sherpa => {
-            let sherpa_cfg = asr_cfg.effective_sherpa();
+            let sherpa_cfg = asr_cfg.effective_sherpa(sherpa);
             let (client, rx) =
                 SherpaAsr::connect(&sherpa_cfg, asr_cfg.sample_rate, start_paused).await?;
-            Ok((Arc::new(client) as Arc<dyn AsrEngine>, rx))
-        }
-        #[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-        AsrBackend::Rockchip => {
-            let rockchip_cfg = asr_cfg.local.as_ref().ok_or_else(|| {
-                crate::error::DemoError::Config(
-                    "asr.local config required when backend = \"local\"".into(),
-                )
-            })?;
-            let (client, rx) = RockchipAsr::connect(rockchip_cfg, start_paused).await?;
             Ok((Arc::new(client) as Arc<dyn AsrEngine>, rx))
         }
     }

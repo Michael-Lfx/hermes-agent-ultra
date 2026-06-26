@@ -5,37 +5,32 @@ use std::path::Path;
 
 use crate::error::{DemoError, Result};
 
-#[cfg(feature = "sherpa-asr-tts")]
+#[cfg(all(feature = "sherpa-asr-tts", not(feature = "rockchip")))]
 const CONFIG_EXAMPLE: &str = include_str!("../../../scripts/talk/config.example.windows.toml");
 
-#[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
+#[cfg(feature = "rockchip")]
 const CONFIG_EXAMPLE: &str = include_str!("../../../scripts/talk/config.example.rockchip.toml");
 
 const SUBDIRS_COMMON: &[&str] = &[
-    "auth",
-    "data",
-    "frontend_extras",
     "models/vad",
     "models/denoise",
     "models/speaker",
     "models/kws-zh-en",
-    "models/rk3588",
 ];
 
-#[cfg(feature = "sherpa-asr-tts")]
-const SUBDIRS_SHERPA_ASR_TTS: &[&str] = &["models/sensevoice", "models/kokoro", "models/zipvoice"];
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+const SUBDIRS_ROCKCHIP: &[&str] = &["models/sensevoice-rk3588", "models/kokoro"];
+
+#[cfg(all(feature = "sherpa-asr-tts", not(feature = "rockchip")))]
+const SUBDIRS_SHERPA_DESKTOP: &[&str] = &["models/sensevoice", "models/kokoro", "models/zipvoice"];
 
 fn talk_subdirs() -> Vec<&'static str> {
-    #[cfg(feature = "sherpa-asr-tts")]
-    {
-        let mut dirs: Vec<&'static str> = SUBDIRS_COMMON.to_vec();
-        dirs.extend_from_slice(SUBDIRS_SHERPA_ASR_TTS);
-        dirs
-    }
-    #[cfg(not(feature = "sherpa-asr-tts"))]
-    {
-        SUBDIRS_COMMON.to_vec()
-    }
+    let mut dirs: Vec<&'static str> = SUBDIRS_COMMON.to_vec();
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    dirs.extend_from_slice(SUBDIRS_ROCKCHIP);
+    #[cfg(all(feature = "sherpa-asr-tts", not(feature = "rockchip")))]
+    dirs.extend_from_slice(SUBDIRS_SHERPA_DESKTOP);
+    dirs
 }
 
 /// Create Hermes home + talk directory tree and default configs if missing (quiet; auto-init).
@@ -102,7 +97,7 @@ fn seed_bundled_assets(talk_home: &Path) -> Result<()> {
         );
     }
 
-    for item in ["auth", "data", "models", "frontend_extras"] {
+    for item in ["auth", "models", "frontend_extras"] {
         let src = bundle_root.join(item);
         let dst = talk_home.join(item);
         if !src.exists() || dst.exists() {
@@ -213,7 +208,9 @@ fn print_post_init_notes(hermes_home: &Path, talk_home: &Path) {
         "  2. Edit {} for embedded Hermes / gateway settings (if using channel transport).",
         hermes_config::config_path().display()
     );
-    #[cfg(feature = "sherpa-asr-tts")]
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    print_rockchip_sensevoice_init_notes(talk_home);
+    #[cfg(all(feature = "sherpa-asr-tts", not(feature = "rockchip")))]
     print_desktop_init_notes(talk_home);
     #[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
     print_rockchip_init_notes(talk_home);
@@ -226,7 +223,7 @@ fn print_post_init_notes(hermes_home: &Path, talk_home: &Path) {
     );
 }
 
-#[cfg(feature = "sherpa-asr-tts")]
+#[cfg(all(feature = "sherpa-asr-tts", not(feature = "rockchip")))]
 fn print_desktop_init_notes(talk_home: &Path) {
     println!("  3. Download sherpa-onnx models: make download-talk-models (into <repo>/.models/).");
     println!(
@@ -236,6 +233,25 @@ fn print_desktop_init_notes(talk_home: &Path) {
     println!("     Docs: https://k2-fsa.github.io/sherpa/onnx/index.html");
     println!("  4. Run `hermes talk list-devices` to verify audio devices.");
     println!("  5. Run `hermes talk` to start the voice dialog loop.");
+}
+
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+fn print_rockchip_sensevoice_init_notes(talk_home: &Path) {
+    println!(
+        "  3. Download SenseVoice RKNN models: bash scripts/talk/download_models.sh (HF mirror + optional https_proxy)."
+    );
+    println!(
+        "  4. Expect {}/models/sensevoice-rk3588/ (encoder.rk3588.fp16-scaled.rknn, tokens.txt, …).",
+        talk_home.display()
+    );
+    println!(
+        "  5. Build kokoro-server (cmake -DUSE_RKNN=ON -DBUILD_SERVER=ON) and run build.py for RKNN models."
+    );
+    println!(
+        "  6. make package-talk-rockchip bundles kokoro-server + models/kokoro/; start.sh runs TTS on :8848."
+    );
+    println!("  7. Run `hermes talk list-devices` to verify audio devices.");
+    println!("  8. Run `hermes talk` to start the voice dialog loop.");
 }
 
 #[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]

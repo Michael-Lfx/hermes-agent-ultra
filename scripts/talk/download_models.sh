@@ -25,6 +25,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "${TMP}"' EXIT
 
 SHERPA_BASE="https://github.com/k2-fsa/sherpa-onnx/releases/download"
+HF_BASE="${HF_ENDPOINT:-https://hf-mirror.com}"
+HF_BASE="${HF_BASE%/}"
 DOWNLOAD_PROXY="${HTTPS_PROXY:-${https_proxy:-${HTTP_PROXY:-${http_proxy:-}}}}"
 
 fetch() {
@@ -42,6 +44,13 @@ fetch() {
   fi
 }
 
+fetch_hf() {
+  local repo="$1"
+  local file="$2"
+  local out="$3"
+  fetch "${HF_BASE}/${repo}/resolve/main/${file}" "${out}"
+}
+
 extract_tarball() {
   local archive="$1"
   local dest="$2"
@@ -54,6 +63,50 @@ extract_tarball() {
     exit 1
   fi
   cp -a "${inner}/." "${dest}/"
+}
+
+install_sensevoice_rk3588() {
+  local name="sensevoice-rk3588"
+  local dest="${DEST}/${name}"
+  local encoder="encoder.rk3588.fp16-scaled.rknn"
+  if [[ -f "${dest}/${encoder}" && -f "${dest}/tokens.txt" ]]; then
+    echo "=== ${name}: already present ==="
+    return 0
+  fi
+  echo "=== ${name} (SenseVoice RKNN for RK3588, via ${HF_BASE}) ==="
+  mkdir -p "${dest}"
+  local repo="harvestsu/sensevoice-rknn"
+  fetch_hf "${repo}" "sense-voice-encoder.rk3588.fp16-scaled.rknn" "${dest}/${encoder}"
+  fetch_hf "${repo}" "am.mvn" "${dest}/am.mvn"
+  fetch_hf "${repo}" "embedding.npy" "${dest}/embedding.npy"
+  fetch_hf "${repo}" "chn_jpn_yue_eng_ko_spectok.bpe.model" "${dest}/chn_jpn_yue_eng_ko_spectok.bpe.model"
+  local tokens_archive="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17.tar.bz2"
+  if [[ ! -f "${dest}/tokens.txt" ]]; then
+    fetch_hf "${repo}" "${tokens_archive}" "${TMP}/${tokens_archive}"
+    local extract="${TMP}/sensevoice-rk3588-tokens"
+    rm -rf "${extract}"
+    mkdir -p "${extract}"
+    tar xf "${TMP}/${tokens_archive}" -C "${extract}"
+    local inner
+    inner="$(find "${extract}" -name tokens.txt | head -1)"
+    if [[ -n "${inner}" ]]; then
+      cp -f "${inner}" "${dest}/tokens.txt"
+    else
+      echo "warn: tokens.txt not found in ${tokens_archive}; trying k2-fsa fallback" >&2
+      fetch "${SHERPA_BASE}/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2" \
+        "${TMP}/sherpa-sensevoice-int8.tar.bz2"
+      rm -rf "${extract}"
+      mkdir -p "${extract}"
+      tar xf "${TMP}/sherpa-sensevoice-int8.tar.bz2" -C "${extract}"
+      inner="$(find "${extract}" -name tokens.txt | head -1)"
+      [[ -n "${inner}" ]] && cp -f "${inner}" "${dest}/tokens.txt"
+    fi
+  fi
+  if [[ ! -f "${dest}/tokens.txt" ]]; then
+    echo "error: failed to obtain tokens.txt for ${name}" >&2
+    exit 1
+  fi
+  echo "  -> ${dest}"
 }
 
 install_sensevoice() {
@@ -194,7 +247,7 @@ install_to_talk_home() {
     return 0
   fi
   echo "=== install to talk home: ${talk_home} ==="
-  for sub in sensevoice kokoro zipvoice kws-zh-en vad denoise speaker; do
+  for sub in sensevoice sensevoice-rk3588 kokoro zipvoice kws-zh-en vad denoise speaker; do
     if [[ -d "${DEST}/${sub}" ]]; then
       mkdir -p "${talk_home}/${sub}"
       cp -a "${DEST}/${sub}/." "${talk_home}/${sub}/"
@@ -214,6 +267,7 @@ echo
 mkdir -p "${DEST}"
 
 install_sensevoice
+install_sensevoice_rk3588
 install_kokoro
 install_zipvoice
 install_kws

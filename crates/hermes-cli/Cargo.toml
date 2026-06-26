@@ -13,7 +13,11 @@ default = []
 otlp = ["hermes-telemetry/otlp"]
 swarms = ["hermes-intelligence/swarms"]
 talk = ["dep:hermes-talk", "hermes-talk/sherpa-asr-tts"]
-talk-rockchip = ["dep:hermes-talk", "hermes-talk/rockchip"]
+talk-rockchip = [
+    "dep:hermes-talk",
+    "hermes-talk/rockchip",
+    "hermes-talk/sherpa-asr-tts",
+]
 
 [[bin]]
 name = "hermes"

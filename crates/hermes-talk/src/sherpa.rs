@@ -1,20 +1,27 @@
-//! Shared sherpa-onnx runtime settings (ONNX Runtime execution provider).
+//! Shared sherpa-onnx runtime settings (ONNX Runtime / RKNN execution provider).
 
 use crate::error::{DemoError, Result};
 
-/// Only CPU execution provider is supported.
+#[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
 pub const PLATFORM_PROVIDERS: &[&str] = &["cpu"];
 
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+pub const PLATFORM_PROVIDERS: &[&str] = &["cpu", "rknn"];
+
 pub fn platform_supports(provider: &str) -> bool {
-    provider == "cpu"
+    PLATFORM_PROVIDERS.contains(&provider)
 }
 
 pub fn validate_provider(provider: &str) -> Result<()> {
     if platform_supports(provider) {
         Ok(())
     } else {
+        #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+        let hint = "expected 'cpu' or 'rknn'";
+        #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+        let hint = "only 'cpu' is supported";
         Err(DemoError::Config(format!(
-            "invalid sherpa provider '{provider}' (only 'cpu' is supported; directml/coreml removed)"
+            "invalid sherpa provider '{provider}' ({hint})"
         )))
     }
 }
@@ -33,5 +40,11 @@ mod tests {
         assert!(validate_provider("directml").is_err());
         assert!(validate_provider("coreml").is_err());
         assert!(validate_provider("gpu").is_err());
+    }
+
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    #[test]
+    fn rknn_supported_on_rockchip() {
+        validate_provider("rknn").unwrap();
     }
 }

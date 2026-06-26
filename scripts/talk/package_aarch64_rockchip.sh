@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Package hermes-agent-ultra (talk-rockchip) for aarch64 Rockchip boards.
 #
-# ONNX / bundled models: place under repo-root `.models/` (gitignored), e.g.
-#   .models/models/vad/silero_vad.onnx
-#   .models/models/denoise/dpdfnet_baseline.onnx
-#   .models/models/speaker/3dspeaker.onnx
-#   .models/models/kws-zh-en/{encoder,decoder,joiner}.onnx, tokens.txt, en.phone
-#   .models/models/rk3588/          (optional; falls back to RK_TTS_SDK_DIR)
-#   .models/data/                   (optional; falls back to RK_ASR_SDK_DIR)
-#   .models/frontend_extras/        (optional; falls back to RK_TTS_SDK_DIR)
-#   .models/auth/                   Rockchip license keys (key_asr.lic, key_tts.lic)
-# Board default config: scripts/talk/config.example.rockchip.{toml,yaml}
+# Bundled stack: SenseVoice RKNN ASR (in-process) + Kokoro TTS (kokoro-server sidecar).
+#
+# Prepare under repo-root `.models/` (gitignored) or source trees:
+#   .models/models/sensevoice-rk3588/
+#   .models/models/kws-zh-en/ vad/ denoise/ speaker/
+#   KOKORO_SERVER_DIR/build/kokoro-server + onnx/ voices_npy/ Kokoro-82M/config.json
+#
+# Env:
+#   KOKORO_SERVER_DIR  default: /home/leeyang/kokoro-server
+#   RK_NPU_LIB_DIR     default: RK_TTS_SDK/lib/Linux/aarch64 (for librknnrt.so)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -18,14 +18,14 @@ DIST="${DIST_DIR:-${ROOT}/target/dist}"
 BIN="${BIN_PATH:-${ROOT}/target/aarch64-unknown-linux-gnu/release/hermes-agent-ultra}"
 GCC="${ROOT}/.cross-cache/gcc-aarch64/aarch64-none-linux-gnu"
 OUT="${DIST}/${OUT_NAME:-hermes-talk-rk3588}"
-RKAUDIO="${ROOT}/crates/hermes-talk/rkaudio"
 MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 
+KOKORO_SERVER_DIR="${KOKORO_SERVER_DIR:-/home/leeyang/kokoro-server}"
 RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
-RK_ASR_SDK_DIR="${RK_ASR_SDK_DIR:-/home/leeyang/ASR_SDK/ROCKASR2_RK3588/rockasr2_android_linux_rk3588_20260312}"
+RK_NPU_LIB_DIR="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}"
 
 if [[ ! -f "${BIN}" ]]; then
-  echo "missing ${BIN}; run: make release-talk-rockchip-arm64 (or make debug-talk-rockchip-arm64 for dev)" >&2
+  echo "missing ${BIN}; run: make release-talk-rockchip-arm64" >&2
   exit 1
 fi
 
@@ -46,59 +46,65 @@ cp -a "${GCC}/lib64/libstdc++.so.6.0.32" "${OUT}/lib/"
 ln -sf libstdc++.so.6.0.32 "${OUT}/lib/libstdc++.so.6"
 cp -a "${GCC}/lib64/libgcc_s.so.1" "${OUT}/lib/"
 
-cp "${RKAUDIO}/lib/librktts.so" "${OUT}/lib/"
-cp "${RKAUDIO}/lib/librknnrt.so" "${OUT}/lib/"
+if [[ -f "${RK_NPU_LIB_DIR}/librknnrt.so" ]]; then
+  cp "${RK_NPU_LIB_DIR}/librknnrt.so" "${OUT}/lib/"
+else
+  echo "warn: missing ${RK_NPU_LIB_DIR}/librknnrt.so (ASR/TTS NPU runtime)" >&2
+fi
 
-for lib in librockasr.so librockx2.so librockx_modules.so librkllmrt.so \
-           librknn3_api.so libonnxruntime.so libgomp.so.1; do
-  [[ -f "${RKAUDIO}/lib/${lib}" ]] && cp "${RKAUDIO}/lib/${lib}" "${OUT}/lib/"
+# kokoro-server binary
+KOKORO_BIN="${KOKORO_SERVER_DIR}/build/kokoro-server"
+if [[ -x "${KOKORO_BIN}" ]]; then
+  cp -f "${KOKORO_BIN}" "${OUT}/bin/kokoro-server"
+  chmod +x "${OUT}/bin/kokoro-server"
+else
+  echo "warn: missing ${KOKORO_BIN}; build kokoro-server with -DUSE_RKNN=ON" >&2
+fi
+
+# Kokoro models (encoder/har ONNX + decoder RKNN + voices)
+KOKORO_OUT="${OUT}/models/kokoro"
+mkdir -p "${KOKORO_OUT}"
+for f in kokoro_encoder.onnx har_generator.onnx kokoro_decoder.rknn; do
+  if [[ -f "${KOKORO_SERVER_DIR}/onnx/${f}" ]]; then
+    cp -f "${KOKORO_SERVER_DIR}/onnx/${f}" "${KOKORO_OUT}/"
+  else
+    echo "warn: missing ${KOKORO_SERVER_DIR}/onnx/${f}" >&2
+  fi
+done
+if [[ -f "${KOKORO_SERVER_DIR}/Kokoro-82M/config.json" ]]; then
+  cp -f "${KOKORO_SERVER_DIR}/Kokoro-82M/config.json" "${KOKORO_OUT}/config.json"
+fi
+if [[ -d "${KOKORO_SERVER_DIR}/voices_npy" ]]; then
+  mkdir -p "${KOKORO_OUT}/voices_npy"
+  cp -a "${KOKORO_SERVER_DIR}/voices_npy/." "${KOKORO_OUT}/voices_npy/"
+fi
+for aux in misaki-data espeak-ng-data; do
+  if [[ -d "${KOKORO_SERVER_DIR}/${aux}" ]]; then
+    cp -a "${KOKORO_SERVER_DIR}/${aux}" "${OUT}/${aux}"
+  elif [[ -d "${KOKORO_SERVER_DIR}/build/${aux}" ]]; then
+    cp -a "${KOKORO_SERVER_DIR}/build/${aux}" "${OUT}/${aux}"
+  fi
 done
 
-# Rockchip TTS models + dictionaries (.models preferred, SDK fallback)
-if [[ -d "${MODELS_ROOT}/models/rk3588" ]]; then
-  cp -r "${MODELS_ROOT}/models/rk3588" "${OUT}/models/"
-elif [[ -d "${RK_TTS_SDK_DIR}/models/rk3588" ]]; then
-  cp -r "${RK_TTS_SDK_DIR}/models/rk3588" "${OUT}/models/"
+# SenseVoice RKNN ASR
+if [[ -d "${MODELS_ROOT}/models/sensevoice-rk3588" ]]; then
+  mkdir -p "${OUT}/models/sensevoice-rk3588"
+  cp -a "${MODELS_ROOT}/models/sensevoice-rk3588/." "${OUT}/models/sensevoice-rk3588/"
 else
-  echo "warn: no TTS models in ${MODELS_ROOT}/models/rk3588 or RK_TTS_SDK_DIR" >&2
+  echo "warn: missing ${MODELS_ROOT}/models/sensevoice-rk3588" >&2
 fi
 
-if [[ -d "${MODELS_ROOT}/frontend_extras" ]]; then
-  cp -r "${MODELS_ROOT}/frontend_extras" "${OUT}/"
-elif [[ -d "${RK_TTS_SDK_DIR}/frontend_extras" ]]; then
-  cp -r "${RK_TTS_SDK_DIR}/frontend_extras" "${OUT}/"
-fi
-
-# Sherpa ONNX models (wake / vad / denoise / speaker)
+# Sherpa ONNX aux (wake / vad / denoise / speaker)
 if [[ -d "${MODELS_ROOT}/models/kws-zh-en" ]]; then
   mkdir -p "${OUT}/models/kws-zh-en"
   cp -a "${MODELS_ROOT}/models/kws-zh-en/." "${OUT}/models/kws-zh-en/"
-else
-  echo "warn: missing ${MODELS_ROOT}/models/kws-zh-en (wake word)" >&2
 fi
-
 for sub in vad denoise speaker; do
   if [[ -d "${MODELS_ROOT}/models/${sub}" ]]; then
     mkdir -p "${OUT}/models/${sub}"
     cp -a "${MODELS_ROOT}/models/${sub}/." "${OUT}/models/${sub}/"
   fi
 done
-
-# Rockchip ASR model data (.models preferred, SDK fallback)
-if [[ -d "${MODELS_ROOT}/data" ]]; then
-  cp -r "${MODELS_ROOT}/data" "${OUT}/data"
-elif [[ -d "${RK_ASR_SDK_DIR}/data" ]]; then
-  cp -r "${RK_ASR_SDK_DIR}/data" "${OUT}/data"
-else
-  echo "warn: no ASR data in ${MODELS_ROOT}/data or RK_ASR_SDK_DIR" >&2
-fi
-
-# Rockchip license keys (.models/auth)
-if [[ -d "${MODELS_ROOT}/auth" ]]; then
-  cp -a "${MODELS_ROOT}/auth" "${OUT}/auth"
-else
-  echo "warn: missing ${MODELS_ROOT}/auth (Rockchip license keys)" >&2
-fi
 
 cp "${ROOT}/scripts/talk/config.example.rockchip.toml" "${OUT}/config.example.toml"
 cp "${ROOT}/scripts/talk/config.example.rockchip.yaml" "${OUT}/config.example.yaml"
@@ -107,4 +113,3 @@ chmod +x "${OUT}/start.sh"
 
 echo "Bundled: ${OUT}"
 echo "On board: cd ${OUT} && ./start.sh"
-echo "  (first run: ~/.hermes-agent-ultra + hermes-talk/config.toml; models linked from bundle)"

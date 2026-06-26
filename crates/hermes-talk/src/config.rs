@@ -83,10 +83,10 @@ pub struct AsrConfig {
     /// Language hints for recognition (e.g. ["zh","en","ja","yue","ko"])
     #[serde(default)]
     pub language_hints: Option<Vec<String>>,
-    /// Configuration for local Rockchip ASR backend
+    /// Deprecated: LLMASR removed; kept for deserializing old configs.
     #[serde(default)]
     pub local: Option<RockchipAsrConfig>,
-    /// Configuration for sherpa-onnx SenseVoice (Windows / x86 CPU)
+    /// Configuration for sherpa-onnx SenseVoice (CPU desktop or RKNN on RK3588)
     #[serde(default)]
     pub sherpa: Option<SherpaAsrConfig>,
 }
@@ -107,8 +107,14 @@ impl Default for AsrConfig {
 }
 
 impl AsrConfig {
-    pub fn effective_sherpa(&self) -> SherpaAsrConfig {
-        self.sherpa.clone().unwrap_or_default()
+    pub fn effective_sherpa(&self, global: &SherpaConfig) -> SherpaAsrConfig {
+        let mut cfg = self.sherpa.clone().unwrap_or_default();
+        if cfg.provider.trim().is_empty() || cfg.provider == default_sherpa_provider() {
+            if !global.provider.trim().is_empty() {
+                cfg.provider = global.provider.clone();
+            }
+        }
+        cfg
     }
 }
 
@@ -160,6 +166,9 @@ pub struct TtsConfig {
     /// Configuration for sherpa-onnx TTS (Kokoro + ZipVoice profiles).
     #[serde(default)]
     pub sherpa: Option<SherpaTtsSection>,
+    /// Configuration for kokoro-server HTTP TTS (RK3588 NPU).
+    #[serde(default)]
+    pub kokoro_server: Option<KokoroServerTtsConfig>,
 }
 
 impl Default for TtsConfig {
@@ -175,11 +184,22 @@ impl Default for TtsConfig {
             local: None,
             rockchip: None,
             sherpa: None,
+            kokoro_server: None,
         }
     }
 }
 
 impl TtsConfig {
+    pub fn effective_kokoro_server(&self) -> KokoroServerTtsConfig {
+        let mut cfg = self.kokoro_server.clone().unwrap_or_default();
+        if cfg.voice.is_empty() || cfg.voice == default_kokoro_server_voice() {
+            if !self.voice.is_empty() && self.voice != default_voice() {
+                cfg.voice = self.voice.clone();
+            }
+        }
+        cfg
+    }
+
     pub fn effective_sherpa(&self) -> SherpaTtsRuntime {
         let mut section = self.sherpa.clone().unwrap_or_default();
         section.normalize();
@@ -218,7 +238,37 @@ impl Default for RockchipTtsConfig {
     }
 }
 
-/// sherpa-onnx SenseVoice offline ASR (see https://k2-fsa.github.io/sherpa/onnx/sense-voice/index.html)
+/// kokoro-server HTTP TTS (encoder/har CPU + decoder RKNN on RK3588).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KokoroServerTtsConfig {
+    #[serde(default = "default_kokoro_server_url")]
+    pub base_url: String,
+    #[serde(default = "default_kokoro_server_voice")]
+    pub voice: String,
+    #[serde(default = "default_kokoro_speed")]
+    pub speed: f32,
+    #[serde(default)]
+    pub british: bool,
+    #[serde(default = "default_kokoro_server_audio_format")]
+    pub audio_format: String,
+    #[serde(default)]
+    pub auth_token: String,
+}
+
+impl Default for KokoroServerTtsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_kokoro_server_url(),
+            voice: default_kokoro_server_voice(),
+            speed: default_kokoro_speed(),
+            british: false,
+            audio_format: default_kokoro_server_audio_format(),
+            auth_token: String::new(),
+        }
+    }
+}
+
+/// sherpa-onnx SenseVoice offline ASR
 #[derive(Debug, Clone, Deserialize)]
 pub struct SherpaAsrConfig {
     #[serde(default = "default_sensevoice_model")]
@@ -912,10 +962,24 @@ fn default_rktts_alpha() -> f32 {
     1.0
 }
 fn default_sensevoice_model() -> String {
-    "models/sensevoice/model.int8.onnx".to_string()
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    {
+        "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn".to_string()
+    }
+    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+    {
+        "models/sensevoice/model.int8.onnx".to_string()
+    }
 }
 fn default_sensevoice_tokens() -> String {
-    "models/sensevoice/tokens.txt".to_string()
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    {
+        "models/sensevoice-rk3588/tokens.txt".to_string()
+    }
+    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+    {
+        "models/sensevoice/tokens.txt".to_string()
+    }
 }
 fn default_sensevoice_language() -> String {
     "auto".to_string()
@@ -943,6 +1007,15 @@ fn default_kokoro_length_scale() -> f32 {
 }
 fn default_kokoro_speed() -> f32 {
     1.0
+}
+fn default_kokoro_server_url() -> String {
+    "http://127.0.0.1:8848".to_string()
+}
+fn default_kokoro_server_voice() -> String {
+    "af_heart".to_string()
+}
+fn default_kokoro_server_audio_format() -> String {
+    "pcm".to_string()
 }
 fn default_sherpa_tts_engine() -> String {
     "kokoro".to_string()
@@ -978,7 +1051,14 @@ fn default_sherpa_threads() -> i32 {
     2
 }
 fn default_sherpa_provider() -> String {
-    "cpu".to_string()
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    {
+        "rknn".to_string()
+    }
+    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+    {
+        "cpu".to_string()
+    }
 }
 fn default_16k() -> u32 {
     16000
@@ -1606,27 +1686,11 @@ fn validate_talk_backends(cfg: &Config) -> Result<()> {
         }
     }
 
-    #[cfg(all(
-        feature = "rockchip",
-        target_arch = "aarch64",
-        not(feature = "sherpa-asr-tts")
-    ))]
+    #[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
     {
         use crate::backends::{TalkBackendKind, classify_talk_backend};
-        if classify_talk_backend(&cfg.asr.backend) == TalkBackendKind::LocalHardware
-            && cfg.asr.local.is_none()
-        {
-            return Err(DemoError::Config(
-                "asr backend is local/rockchip but [asr.local] is missing".into(),
-            ));
-        }
-        let rk_tts = cfg.tts.local.as_ref().or(cfg.tts.rockchip.as_ref());
-        if classify_talk_backend(&cfg.tts.backend) == TalkBackendKind::LocalHardware
-            && rk_tts.is_none()
-        {
-            return Err(DemoError::Config(
-                "tts backend is local/rockchip but [tts.local] is missing".into(),
-            ));
+        if classify_talk_backend(&cfg.tts.backend) == TalkBackendKind::LocalHardware {
+            // kokoro-server sidecar; no [tts.local] required
         }
     }
 
@@ -1905,7 +1969,7 @@ api_key = "k"
 model = "m"
 "#;
         let cfg: Config = toml::from_str(raw).unwrap();
-        let asr = cfg.asr.effective_sherpa();
+        let asr = cfg.asr.effective_sherpa(&cfg.sherpa);
         assert!(asr.model.contains("sensevoice"));
         let tts = cfg.tts.effective_sherpa();
         assert!(tts.kokoro.model.contains("kokoro"));

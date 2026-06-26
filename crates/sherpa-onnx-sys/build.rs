@@ -45,17 +45,29 @@ fn main() {
 enum SherpaPack {
     /// Static CPU prebuilt (default).
     Cpu,
+    /// Rockchip NPU (RKNN) prebuilt for linux aarch64.
+    Rknn,
 }
 
-fn resolve_sherpa_pack(_target_os: &str, _target_arch: &str) -> Result<SherpaPack, DynError> {
+fn resolve_sherpa_pack(target_os: &str, target_arch: &str) -> Result<SherpaPack, DynError> {
     let pack = env::var("SHERPA_ONNX_PACK").unwrap_or_else(|_| "cpu".to_string());
     let pack = pack.trim().to_ascii_lowercase();
     match pack.as_str() {
         "cpu" | "auto" => Ok(SherpaPack::Cpu),
+        "rknn" | "rockchip" | "npu" => {
+            if target_os == "linux" && target_arch == "aarch64" {
+                Ok(SherpaPack::Rknn)
+            } else {
+                Err(format!(
+                    "SHERPA_ONNX_PACK={pack} requires linux+aarch64 (got {target_os}+{target_arch})"
+                )
+                .into())
+            }
+        }
         "cuda" | "gpu" | "directml" | "dml" | "macos" | "coreml" | "osx" => {
             Err(format!("SHERPA_ONNX_PACK={pack} is no longer supported; use cpu (default)").into())
         }
-        other => Err(format!("unknown SHERPA_ONNX_PACK='{other}' (expected cpu)").into()),
+        other => Err(format!("unknown SHERPA_ONNX_PACK='{other}' (expected cpu or rknn)").into()),
     }
 }
 
@@ -73,9 +85,9 @@ fn try_main() -> Result<(), DynError> {
 
     let target_os = env::var("CARGO_CFG_TARGET_OS")?;
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH")?;
-    let _pack = resolve_sherpa_pack(&target_os, &target_arch)?;
+    let pack = resolve_sherpa_pack(&target_os, &target_arch)?;
     let link_mode = resolve_link_mode()?;
-    let lib_dir = resolve_lib_dir(link_mode, &target_os, &target_arch)?;
+    let lib_dir = resolve_lib_dir(link_mode, &target_os, &target_arch, pack)?;
 
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
 
@@ -90,7 +102,7 @@ fn try_main() -> Result<(), DynError> {
     }
 
     match link_mode {
-        LinkMode::Static => emit_static_link_directives(&target_os),
+        LinkMode::Static => emit_static_link_directives(&target_os, pack),
         LinkMode::Shared => emit_shared_link_directives(),
     }
 
@@ -116,6 +128,7 @@ fn resolve_lib_dir(
     link_mode: LinkMode,
     target_os: &str,
     target_arch: &str,
+    pack: SherpaPack,
 ) -> Result<PathBuf, DynError> {
     if let Some(path) = env::var_os("SHERPA_ONNX_LIB_DIR") {
         let path = PathBuf::from(path);
@@ -129,15 +142,16 @@ fn resolve_lib_dir(
         return Ok(path);
     }
 
-    download_prebuilt_libs(link_mode, target_os, target_arch)
+    download_prebuilt_libs(link_mode, target_os, target_arch, pack)
 }
 
 fn download_prebuilt_libs(
     link_mode: LinkMode,
     target_os: &str,
     target_arch: &str,
+    pack: SherpaPack,
 ) -> Result<PathBuf, DynError> {
-    let archive_name = archive_name(link_mode, target_os, target_arch)?;
+    let archive_name = archive_name(link_mode, target_os, target_arch, pack)?;
     let archive_stem = archive_name.trim_end_matches(".tar.bz2");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
@@ -218,43 +232,56 @@ fn archive_name(
     link_mode: LinkMode,
     target_os: &str,
     target_arch: &str,
+    pack: SherpaPack,
 ) -> Result<String, DynError> {
     let version = env!("CARGO_PKG_VERSION");
 
-    let name = match (link_mode, target_os, target_arch) {
-        (LinkMode::Static, "linux", "x86_64") => {
+    let name = match (link_mode, target_os, target_arch, pack) {
+        (LinkMode::Static, "linux", "aarch64", SherpaPack::Rknn) => {
+            format!("sherpa-onnx-v{version}-rknn-linux-aarch64-static.tar.bz2")
+        }
+        (LinkMode::Shared, "linux", "aarch64", SherpaPack::Rknn) => {
+            format!("sherpa-onnx-v{version}-rknn-linux-aarch64-shared.tar.bz2")
+        }
+        (LinkMode::Static, "linux", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-linux-x64-static-lib.tar.bz2")
         }
-        (LinkMode::Static, "linux", "aarch64") => {
+        (LinkMode::Static, "linux", "aarch64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-linux-aarch64-static-lib.tar.bz2")
         }
-        (LinkMode::Static, "macos", "x86_64") => {
+        (LinkMode::Static, "macos", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-osx-x64-static-lib.tar.bz2")
         }
-        (LinkMode::Static, "macos", "aarch64") => {
+        (LinkMode::Static, "macos", "aarch64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-osx-arm64-static-lib.tar.bz2")
         }
-        (LinkMode::Static, "windows", "x86_64") => {
+        (LinkMode::Static, "windows", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-win-x64-static-MT-Release-lib.tar.bz2")
         }
-        (LinkMode::Shared, "linux", "x86_64") => {
+        (LinkMode::Shared, "linux", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-linux-x64-shared-lib.tar.bz2")
         }
-        (LinkMode::Shared, "linux", "aarch64") => {
+        (LinkMode::Shared, "linux", "aarch64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-linux-aarch64-shared-cpu-lib.tar.bz2")
         }
-        (LinkMode::Shared, "macos", "x86_64") => {
+        (LinkMode::Shared, "macos", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-osx-x64-shared-lib.tar.bz2")
         }
-        (LinkMode::Shared, "macos", "aarch64") => {
+        (LinkMode::Shared, "macos", "aarch64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-osx-arm64-shared-lib.tar.bz2")
         }
-        (LinkMode::Shared, "windows", "x86_64") => {
+        (LinkMode::Shared, "windows", "x86_64", SherpaPack::Cpu) => {
             format!("sherpa-onnx-v{version}-win-x64-shared-MT-Release-lib.tar.bz2")
+        }
+        (_, _, _, SherpaPack::Rknn) => {
+            return Err(format!(
+                "Unsupported sherpa-onnx RKNN link={link_mode:?} os={target_os} arch={target_arch}"
+            )
+            .into());
         }
         _ => {
             return Err(format!(
-                "Unsupported sherpa-onnx link={link_mode:?} os={target_os} arch={target_arch}"
+                "Unsupported sherpa-onnx link={link_mode:?} os={target_os} arch={target_arch} pack={pack:?}"
             )
             .into());
         }
@@ -268,13 +295,16 @@ fn emit_shared_link_directives() {
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
 }
 
-fn emit_static_link_directives(target_os: &str) {
+fn emit_static_link_directives(target_os: &str, pack: SherpaPack) {
     for lib in SHERPA_ONNX_STATIC_LIBS {
         println!("cargo:rustc-link-lib=static={lib}");
     }
 
     match target_os {
         "linux" => {
+            if pack == SherpaPack::Rknn {
+                println!("cargo:rustc-link-lib=dylib=rknnrt");
+            }
             println!("cargo:rustc-link-lib=dylib=stdc++");
             println!("cargo:rustc-link-lib=dylib=m");
             println!("cargo:rustc-link-lib=dylib=pthread");

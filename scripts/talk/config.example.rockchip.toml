@@ -1,38 +1,47 @@
 # ============================================================
-# hermes-talk Rockchip 板端配置（RK NPU ASR/TTS，无 sherpa SenseVoice/Kokoro）
+# hermes-talk Rockchip 板端配置（SenseVoice RKNN ASR + Kokoro RKNN TTS via kokoro-server）
 # 用于 make package-talk-rockchip；start.sh 首次运行会复制为 config.toml
 # license_path 相对 talk home（start.sh 会链接 bundle/auth/）
 # ============================================================
 
 # ============================================================
-# 语音识别 (ASR)
-# backend: local | rockchip | bailian | cloud | dashscope
+# 语音识别 (ASR) — SenseVoice RKNN on RK3588 NPU
+# backend: sensevoice | sherpa | local | rockchip | bailian | cloud | dashscope
 # ============================================================
 [asr]
-backend = "local"
+backend = "sensevoice"
 sample_rate = 16000
 chunk_ms = 100
 format = "pcm"
 
-[asr.local]
-data_path = "data"
-auth_config = '{ "trial": 1, "rkauth_modules_config": [{ "module": "asr", "license_path": "auth/key_asr.lic" }] }'
+[sherpa]
+provider = "rknn"
+
+[asr.sherpa]
+model = "models/sensevoice-rk3588/encoder.rk3588.fp16-scaled.rknn"
+tokens = "models/sensevoice-rk3588/tokens.txt"
+language = "auto"
+use_itn = true
+num_threads = 2
+provider = "rknn"
 
 # ============================================================
-# 语音合成 (TTS)
-# backend: local | rockchip | bailian | cloud | dashscope
+# 语音合成 (TTS) — Kokoro via kokoro-server (RK3588 NPU decoder)
+# backend: kokoro | local | rockchip | sherpa | bailian | cloud
 # ============================================================
 [tts]
-backend = "local"
+backend = "kokoro"
 sample_rate = 24000
 format = "pcm"
+voice = "af_heart"
 
-[tts.local]
-auth_config = '{ "trial": 1, "license_path": "auth/key_tts.lic" }'
-model_path = "models/rk3588"
-dicts_path = "frontend_extras"
-speaker_id = 0
-alpha = 1.0
+[tts.kokoro_server]
+base_url = "http://127.0.0.1:8848"
+voice = "af_heart"
+speed = 1.0
+british = false
+audio_format = "pcm"
+# auth_token = ""
 
 # 云端 ASR/TTS（板端也可使用，设置 backend = "bailian" 并配置 dashscope）:
 # [dashscope]

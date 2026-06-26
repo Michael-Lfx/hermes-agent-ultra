@@ -327,20 +327,19 @@ release-talk-rockchip:
 	SHERPA_ONNX_PACK=cpu \
 	RUSTFLAGS="$(RK_LINK_FLAGS)" \
 	RK_TTS_SDK_DIR=$(RK_TTS_SDK_DIR) \
-	RK_ASR_SDK_DIR=$(RK_ASR_SDK_DIR) \
 	$(CARGO) build --release $(TALK_PKG_RK)
 	@echo "Built $(RELEASE_BIN) (features: $(TALK_FEATURES_RK))"
 
-release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(TALK_RKAUDIO)/librktts_c_api.a $(TALK_RKAUDIO)/lib
-	SHERPA_ONNX_PACK=cpu \
+release-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
+	SHERPA_ONNX_PACK=rknn \
 	$(CROSS_AARCH64_ENV) \
 	RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
 	$(CROSS) build --release --target $(ARM64_TARGET) $(TALK_PKG_RK)
 	patchelf --set-rpath '$$ORIGIN/lib' $(ARM64_RELEASE)
 	@echo "Built $(ARM64_RELEASE) (features: $(TALK_FEATURES_RK))"
 
-debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN) $(TALK_RKAUDIO)/librktts_c_api.a $(TALK_RKAUDIO)/lib
-	SHERPA_ONNX_PACK=cpu \
+debug-talk-rockchip-arm64: $(GCC_AARCH64) $(MOLD_BIN)
+	SHERPA_ONNX_PACK=rknn \
 	$(CROSS_AARCH64_ENV) \
 	RUSTFLAGS="-C link-arg=-static-libstdc++ -C link-arg=-static-libgcc" \
 	$(CROSS) build --target $(ARM64_TARGET) $(TALK_PKG_RK)

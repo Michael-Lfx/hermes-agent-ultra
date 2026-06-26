@@ -6,7 +6,7 @@ pub const CLOUD_BACKEND_ALIASES: &[&str] = &["bailian", "cloud", "dashscope", "a
 /// sherpa-onnx local SenseVoice / Kokoro.
 pub const SHERPA_BACKEND_ALIASES: &[&str] = &["sherpa", "sensevoice", "kokoro"];
 
-/// Board NPU or generic local alias (`local` → Rockchip on RK3588, sherpa elsewhere).
+/// Board local alias (`local` / `rockchip` → sherpa SenseVoice RKNN on RK3588, CPU SenseVoice elsewhere).
 pub const LOCAL_BACKEND_ALIASES: &[&str] = &["local", "rockchip"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,9 +42,23 @@ pub fn uses_cloud_tts(backend: &str) -> bool {
 }
 
 pub fn uses_sherpa_asr(backend: &str) -> bool {
-    classify_talk_backend(backend) == TalkBackendKind::Sherpa
+    match classify_talk_backend(backend) {
+        TalkBackendKind::Sherpa => true,
+        TalkBackendKind::LocalHardware => cfg!(feature = "sherpa-asr-tts"),
+        TalkBackendKind::Cloud => false,
+    }
 }
 
 pub fn uses_sherpa_tts(backend: &str) -> bool {
-    classify_talk_backend(backend) == TalkBackendKind::Sherpa
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    {
+        let _ = backend;
+        false
+    }
+    #[cfg(not(all(feature = "rockchip", feature = "sherpa-asr-tts")))]
+    match classify_talk_backend(backend) {
+        TalkBackendKind::Sherpa => true,
+        TalkBackendKind::LocalHardware => cfg!(feature = "sherpa-asr-tts"),
+        TalkBackendKind::Cloud => false,
+    }
 }

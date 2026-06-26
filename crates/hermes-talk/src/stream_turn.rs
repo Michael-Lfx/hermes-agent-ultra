@@ -17,7 +17,7 @@ use crate::llm::{AccumulatedToolCall, ChatMessage, LlmClient, ToolCall};
 use crate::orchestrator::{
     StreamingThinkTtsGate, append_speakable_stream_delta, flush_remainder,
     has_actionable_tool_deltas, normalize_tts_text, speakable_after_think_close,
-    stream_has_think_close_tag, strip_think_blocks, take_early_chunk, take_sentence,
+    stream_has_think_close_tag, take_early_chunk, take_sentence,
 };
 use crate::tools;
 use crate::tools::hermes_queue::HermesQueueSender;

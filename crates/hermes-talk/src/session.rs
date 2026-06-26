@@ -32,7 +32,6 @@ use crate::orchestrator::{
     resolve_utterance_text_with_best, spawn_ordered_asr_feeder, wait_utterance_fed,
 };
 use crate::speaker::SpeakerVerifier;
-#[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
 use crate::stream_turn;
 use crate::tools;
 use crate::tools::hermes_queue::{HermesMessage, HermesQueue, HermesQueueSender, HermesWorkItem};
@@ -153,6 +152,7 @@ impl Session {
         let (asr, mut asr_rx) = create_asr(
             &self.cfg.dashscope,
             &self.cfg.asr,
+            &self.cfg.sherpa,
             wake_enabled,
             asr_backend,
         )
@@ -1192,6 +1192,8 @@ impl Session {
                     if let Some(ev) = ev {
                         match ev {
                             AsrEvent::Partial { text, full } => {
+                                #[cfg(not(all(feature = "rockchip", not(feature = "sherpa-asr-tts"))))]
+                                let _ = &full;
                                 #[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
                                 if asr_echo_cooldown_until
                                     .is_some_and(|t| Instant::now() < t)
@@ -2187,6 +2189,7 @@ async fn rockchip_open_utterance(
 }
 
 /// Block until RK streaming ASR emits Final after `finish_utterance`.
+#[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
 async fn wait_rockchip_asr_final(
     asr_rx: &mut mpsc::Receiver<AsrEvent>,
     timeout_ms: u64,
@@ -2498,6 +2501,7 @@ fn is_output_busy(
 }
 
 /// Rockchip: utterance flush produced text but LLM has not started yet.
+#[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
 fn has_pending_utterance_trigger(
     last_final: &Option<String>,
     asr_final_at: &Option<Instant>,
@@ -2506,11 +2510,7 @@ fn has_pending_utterance_trigger(
     last_final.is_some() && asr_final_at.is_some() && active_turn.is_none()
 }
 
-fn barge_in_ack_reply<'a>(
-    wake_enabled: bool,
-    ack: &'a str,
-    llm_turn_busy: bool,
-) -> Option<&'a str> {
+fn barge_in_ack_reply(wake_enabled: bool, ack: &str, llm_turn_busy: bool) -> Option<&str> {
     if wake_enabled && llm_turn_busy && !ack.trim().is_empty() {
         Some(ack)
     } else {
@@ -2678,9 +2678,9 @@ async fn do_barge_in(
     }
 
     // 6. Reopen mic/ASR immediately (echo cooldown only when barge-in ack will play).
-    let echo_cooldown = ack_reply.is_some();
     #[cfg(all(feature = "rockchip", not(feature = "sherpa-asr-tts")))]
     {
+        let echo_cooldown = ack_reply.is_some();
         rockchip_reopen_asr_after_barge_in(asr.clone(), wake_enabled, echo_cooldown, rk).await;
     }
     #[cfg(not(all(feature = "rockchip", not(feature = "sherpa-asr-tts"))))]

@@ -13,15 +13,6 @@ const REDACTED_THINKING_OPEN_PREFIX: &str = concat!("<", "redacted_", "thinking"
 pub(crate) const THINK_CLOSE_TAG: &str = concat!("</", "think>");
 const THINK_OPEN_PREFIX: &str = concat!("<", "think");
 
-fn closed_block_re(open: &str, close: &str) -> Regex {
-    Regex::new(&format!(
-        r"(?is){}.*?{}",
-        regex::escape(open),
-        regex::escape(close),
-    ))
-    .unwrap()
-}
-
 fn closed_block_capture_re(open: &str, close: &str) -> Regex {
     Regex::new(&format!(
         r"(?is){}(.*?){}",

@@ -1,5 +1,11 @@
 mod bailian;
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+mod kokoro_server;
+#[cfg(all(
+    feature = "rockchip",
+    target_arch = "aarch64",
+    not(feature = "sherpa-asr-tts")
+))]
 pub mod rk_tts;
 #[cfg(feature = "sherpa-asr-tts")]
 mod sherpa_tts;
@@ -16,7 +22,13 @@ use crate::error::Result;
 pub use bailian::BailianTts;
 pub use bailian::TtsAudio;
 
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+pub use kokoro_server::KokoroServerTts;
+#[cfg(all(
+    feature = "rockchip",
+    target_arch = "aarch64",
+    not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
+))]
 pub use rk_tts::RockchipTts;
 #[cfg(feature = "sherpa-asr-tts")]
 pub use sherpa_tts::SherpaTts;
@@ -34,7 +46,13 @@ pub enum TtsBackend {
     Bailian,
     #[cfg(feature = "sherpa-asr-tts")]
     Sherpa,
-    #[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
+    #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+    KokoroServer,
+    #[cfg(all(
+        feature = "rockchip",
+        target_arch = "aarch64",
+        not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
+    ))]
     Rockchip,
 }
 
@@ -42,52 +60,38 @@ impl TtsBackend {
     pub fn from_config(tts_cfg: &TtsConfig) -> Self {
         match classify_talk_backend(&tts_cfg.backend) {
             TalkBackendKind::Cloud => TtsBackend::Bailian,
-            TalkBackendKind::Sherpa => resolve_sherpa_named_tts(),
-            TalkBackendKind::LocalHardware => resolve_local_tts(),
+            TalkBackendKind::Sherpa | TalkBackendKind::LocalHardware => resolve_local_sherpa_tts(),
         }
     }
 }
 
-#[cfg(feature = "sherpa-asr-tts")]
-fn resolve_sherpa_named_tts() -> TtsBackend {
-    TtsBackend::Sherpa
-}
-
-#[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    feature = "rockchip",
-    target_arch = "aarch64"
-))]
-fn resolve_sherpa_named_tts() -> TtsBackend {
-    TtsBackend::Rockchip
-}
-
-#[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    not(all(feature = "rockchip", target_arch = "aarch64"))
-))]
-fn resolve_sherpa_named_tts() -> TtsBackend {
-    TtsBackend::Bailian
-}
-
-#[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
-fn resolve_local_tts() -> TtsBackend {
-    TtsBackend::Rockchip
+#[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+fn resolve_local_sherpa_tts() -> TtsBackend {
+    TtsBackend::KokoroServer
 }
 
 #[cfg(all(
     feature = "sherpa-asr-tts",
-    not(all(feature = "rockchip", target_arch = "aarch64"))
+    not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
 ))]
-fn resolve_local_tts() -> TtsBackend {
+fn resolve_local_sherpa_tts() -> TtsBackend {
     TtsBackend::Sherpa
 }
 
 #[cfg(all(
-    not(feature = "sherpa-asr-tts"),
-    not(all(feature = "rockchip", target_arch = "aarch64"))
+    feature = "rockchip",
+    target_arch = "aarch64",
+    not(feature = "sherpa-asr-tts")
 ))]
-fn resolve_local_tts() -> TtsBackend {
+fn resolve_local_sherpa_tts() -> TtsBackend {
+    TtsBackend::Rockchip
+}
+
+#[cfg(not(any(
+    feature = "sherpa-asr-tts",
+    all(feature = "rockchip", target_arch = "aarch64")
+)))]
+fn resolve_local_sherpa_tts() -> TtsBackend {
     TtsBackend::Bailian
 }
 
@@ -107,7 +111,17 @@ pub async fn create_tts(
             let (client, rx) = SherpaTts::connect(&sherpa_cfg).await?;
             Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
         }
-        #[cfg(all(feature = "rockchip", target_arch = "aarch64"))]
+        #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
+        TtsBackend::KokoroServer => {
+            let cfg = tts_cfg.effective_kokoro_server();
+            let (client, rx) = KokoroServerTts::connect(&cfg).await?;
+            Ok((Arc::new(client) as Arc<dyn TtsEngine>, rx))
+        }
+        #[cfg(all(
+            feature = "rockchip",
+            target_arch = "aarch64",
+            not(all(feature = "rockchip", feature = "sherpa-asr-tts"))
+        ))]
         TtsBackend::Rockchip => {
             let rockchip_cfg = tts_cfg
                 .local
