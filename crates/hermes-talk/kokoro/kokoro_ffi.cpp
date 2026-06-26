@@ -188,6 +188,14 @@ class RknnRunner {
     }
   }
 
+  std::vector<int64_t> output_shape() const {
+    if (out_attrs_.empty()) return {};
+    std::vector<int64_t> shape;
+    const auto& a = out_attrs_[0];
+    for (uint32_t i = 0; i < a.n_dims; ++i) shape.push_back(static_cast<int64_t>(a.dims[i]));
+    return shape;
+  }
+
   std::vector<float> infer(const std::vector<const float*>& inputs,
                            const std::vector<size_t>& elem_counts) {
     if (inputs.size() != in_attrs_.size())
@@ -286,6 +294,28 @@ static std::vector<float> tensor_to_float_vector(const Ort::Value& v) {
   const float* p = v.GetTensorData<float>();
   std::memcpy(out.data(), p, n * sizeof(float));
   return out;
+}
+
+static std::vector<int64_t> resolve_tensor_shape(const std::vector<int64_t>& shape,
+                                                 size_t elem_count) {
+  if (shape.empty()) return {static_cast<int64_t>(elem_count)};
+  std::vector<int64_t> out = shape;
+  int64_t known = 1;
+  int dyn = -1;
+  for (size_t i = 0; i < out.size(); ++i) {
+    if (out[i] <= 0) {
+      dyn = static_cast<int>(i);
+      continue;
+    }
+    known *= out[i];
+  }
+  if (dyn >= 0 && known > 0)
+    out[static_cast<size_t>(dyn)] = static_cast<int64_t>(elem_count / static_cast<size_t>(known));
+  return out;
+}
+
+static std::vector<int64_t> ort_input_shape(Ort::Session& sess, size_t idx) {
+  return sess.GetInputTypeInfo(idx).GetTensorTypeAndShapeInfo().GetShape();
 }
 
 static std::vector<int16_t> float_to_pcm16(const std::vector<float>& audio) {
@@ -444,10 +474,12 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
     std::vector<const float*> rk_in{decoder_input.data(), style_slice.data()};
     std::vector<size_t> rk_counts{decoder_input.size(), style_slice.size()};
     auto hidden = impl->front_rknn.infer(rk_in, rk_counts);
+    auto hidden_shape = impl->front_rknn.output_shape();
 
     rk_in = {hidden.data(), style_slice.data()};
     rk_counts = {hidden.size(), style_slice.size()};
     auto voc_add = impl->vocoder_front_rknn.infer(rk_in, rk_counts);
+    auto voc_shape = impl->vocoder_front_rknn.output_shape();
 
     std::array<int64_t, 1> tail_speed_shape{1};
     Ort::Value tail_speed =
@@ -455,26 +487,19 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
 
     auto make_tail_tensor = [&](const std::vector<float>& data,
                                 const std::vector<int64_t>& shape) -> Ort::Value {
+      auto resolved = resolve_tensor_shape(shape, data.size());
       return Ort::Value::CreateTensor<float>(mem, const_cast<float*>(data.data()), data.size(),
-                                             shape.data(), shape.size());
+                                             resolved.data(), resolved.size());
     };
 
-    std::vector<int64_t> voc_shape{static_cast<int64_t>(voc_add.size())};
-    std::vector<int64_t> hidden_shape{static_cast<int64_t>(hidden.size())};
-    std::vector<int64_t> slice_shape{static_cast<int64_t>(style_slice.size())};
-
-    // Re-query actual shapes from ORT output tensors when possible.
+    std::vector<int64_t> slice_shape;
     {
-      auto ti = decoder_val->GetTensorTypeAndShapeInfo();
-      hidden_shape = ti.GetShape();
-      ti = style_slice_val->GetTensorTypeAndShapeInfo();
+      auto ti = style_slice_val->GetTensorTypeAndShapeInfo();
       slice_shape = ti.GetShape();
     }
-
-    std::vector<Ort::Value> tail_inputs;
-    tail_inputs.push_back(make_tail_tensor(voc_add, {static_cast<int64_t>(voc_add.size())}));
-    tail_inputs.push_back(make_tail_tensor(hidden, hidden_shape));
-    tail_inputs.push_back(make_tail_tensor(style_slice, slice_shape));
+    hidden_shape = resolve_tensor_shape(hidden_shape, hidden.size());
+    voc_shape = resolve_tensor_shape(voc_shape, voc_add.size());
+    slice_shape = resolve_tensor_shape(slice_shape, style_slice.size());
 
     // Map by input names on tail_rest session.
     size_t tail_in_count = impl->tail_rest_sess->GetInputCount();
@@ -484,12 +509,13 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
     for (size_t i = 0; i < tail_in_count; ++i) {
       auto name = impl->tail_rest_sess->GetInputNameAllocated(i, alloc);
       std::string n = name.get();
+      auto expected = ort_input_shape(*impl->tail_rest_sess, i);
       if (n == kVocoderFrontOutput || n.find("Add_5") != std::string::npos)
-        ordered.push_back(make_tail_tensor(voc_add, hidden_shape));
+        ordered.push_back(make_tail_tensor(voc_add, expected));
       else if (n == kFrontOutput || n.find("Mul_output_0") != std::string::npos)
-        ordered.push_back(make_tail_tensor(hidden, hidden_shape));
+        ordered.push_back(make_tail_tensor(hidden, expected));
       else if (n == kStyleSlice || n.find("Slice_2") != std::string::npos)
-        ordered.push_back(make_tail_tensor(style_slice, slice_shape));
+        ordered.push_back(make_tail_tensor(style_slice, expected));
       else
         ordered.push_back(std::move(tail_speed));
       tail_name_storage.push_back(n);
@@ -499,7 +525,7 @@ int kokoro_engine_synthesize_text(KokoroEngine* engine, const char* text, const 
       ordered.clear();
       tail_name_storage.clear();
       tail_names.clear();
-      ordered.push_back(make_tail_tensor(voc_add, hidden_shape));
+      ordered.push_back(make_tail_tensor(voc_add, voc_shape));
       ordered.push_back(make_tail_tensor(hidden, hidden_shape));
       ordered.push_back(make_tail_tensor(style_slice, slice_shape));
       tail_name_storage = {kVocoderFrontOutput, kFrontOutput, kStyleSlice};
