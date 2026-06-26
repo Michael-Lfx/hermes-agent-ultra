@@ -245,16 +245,14 @@ fn print_rockchip_sensevoice_init_notes(talk_home: &Path) {
         talk_home.display()
     );
     println!(
-        "  5. TTS primary: Kokoro RKNN (libkokoro); fallback: sherpa kokoro-multi-lang-v1_1 CPU."
+        "  5. TTS primary: Kokoro hybrid-v1 RKNN (HF seeed-local-voice-rk-artifacts); fallback: sherpa kokoro-multi-lang-v1_1 CPU."
     );
-    println!(
-        "     RKNN split models: make ensure-kokoro-rockchip (copy prebuilt into .models/models/kokoro/)."
-    );
+    println!("     NPU models: make ensure-kokoro-rockchip (downloads models/kokoro-hybrid-v1/).");
     println!(
         "  6. CPU fallback models: make ensure-talk-models-rockchip (kokoro-multi-lang-v1_1 tarball)."
     );
     println!(
-        "  7. make package-talk-rockchip bundles ASR + both TTS paths; link libkokoro for NPU TTS."
+        "  7. make package-talk-rockchip bundles ASR + hybrid-v1 + CPU fallback; set KOKORO_BUILD=1 for NPU TTS."
     );
     println!("  8. Run `hermes talk list-devices` to verify audio devices.");
     println!("  9. Run `hermes talk` to start the voice dialog loop.");

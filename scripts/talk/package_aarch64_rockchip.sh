@@ -3,16 +3,13 @@
 #
 # Bundled stack:
 #   ASR: SenseVoice RKNN (NPU)
-#   TTS: Kokoro RKNN in-process (optional) + sherpa kokoro-multi-lang-v1_1 CPU fallback
+#   TTS: Kokoro hybrid-v1 RKNN (NPU) + sherpa kokoro-multi-lang-v1_1 CPU fallback
 #
 # Prepare under repo-root `.models/`:
 #   models/sensevoice-rk3588/
-#   models/kokoro/  — sherpa v1_1 (fallback) + optional RKNN split models
+#   models/kokoro/           — sherpa v1_1 CPU fallback
+#   models/kokoro-hybrid-v1/ — HF hybrid v1 NPU TTS
 #   models/kws-zh-en/ vad/ denoise/ speaker/
-#
-# Optional RKNN TTS from KOKORO_SERVER_DIR or .models/models/kokoro/:
-#   kokoro_encoder.onnx, har_generator.onnx, kokoro_decoder.rknn,
-#   config.json, voices_npy/, misaki-data/, espeak-ng-data/
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -22,8 +19,6 @@ GCC="${ROOT}/.cross-cache/gcc-aarch64/aarch64-none-linux-gnu"
 OUT="${DIST}/${OUT_NAME:-hermes-talk-rk3588}"
 MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
 
-KOKORO_SERVER_DIR="${KOKORO_SERVER_DIR:-/home/leeyang/kokoro-server}"
-KOKORO_CACHE="${KOKORO_CACHE:-${ROOT}/.cross-cache/kokoro-server}"
 RK_TTS_SDK_DIR="${RK_TTS_SDK_DIR:-/home/leeyang/Rockchip_RKTTS_SDK_Release}"
 RK_NPU_LIB_DIR="${RK_NPU_LIB_DIR:-${RK_TTS_SDK_DIR}/lib/Linux/aarch64}"
 
@@ -71,58 +66,14 @@ done
 mkdir -p "${OUT}/models/kokoro"
 cp -a "${MODELS_ROOT}/models/kokoro/." "${OUT}/models/kokoro/"
 
-# Optional Kokoro RKNN split models + G2P aux
-resolve_kokoro_onnx_dir() {
-  if [[ -d "${KOKORO_SERVER_DIR}/onnx" ]] \
-    && [[ -f "${KOKORO_SERVER_DIR}/onnx/kokoro_decoder.rknn" ]]; then
-    echo "${KOKORO_SERVER_DIR}/onnx"
-  elif [[ -d "${KOKORO_CACHE}/onnx" ]] \
-    && [[ -f "${KOKORO_CACHE}/onnx/kokoro_decoder.rknn" ]]; then
-    echo "${KOKORO_CACHE}/onnx"
-  elif [[ -f "${OUT}/models/kokoro/kokoro_decoder.rknn" ]]; then
-    echo "${OUT}/models/kokoro"
-  else
-    return 1
-  fi
-}
-
-if KOKORO_ONNX="$(resolve_kokoro_onnx_dir)"; then
-  for f in kokoro_encoder.onnx har_generator.onnx kokoro_decoder.rknn; do
-    if [[ -f "${KOKORO_ONNX}/${f}" ]]; then
-      cp -f "${KOKORO_ONNX}/${f}" "${OUT}/models/kokoro/"
-    fi
-  done
-  KOKORO_CONFIG="${KOKORO_SERVER_DIR}/Kokoro-82M/config.json"
-  if [[ ! -f "${KOKORO_CONFIG}" && -f "${KOKORO_CACHE}/Kokoro-82M/config.json" ]]; then
-    KOKORO_CONFIG="${KOKORO_CACHE}/Kokoro-82M/config.json"
-  elif [[ ! -f "${KOKORO_CONFIG}" && -f "${OUT}/models/kokoro/config.json" ]]; then
-    KOKORO_CONFIG="${OUT}/models/kokoro/config.json"
-  fi
-  if [[ -f "${KOKORO_CONFIG}" ]]; then
-    cp -f "${KOKORO_CONFIG}" "${OUT}/models/kokoro/config.json"
-  fi
-  VOICES_SRC="${KOKORO_SERVER_DIR}/voices_npy"
-  if [[ ! -d "${VOICES_SRC}" && -d "${KOKORO_CACHE}/voices_npy" ]]; then
-    VOICES_SRC="${KOKORO_CACHE}/voices_npy"
-  elif [[ ! -d "${VOICES_SRC}" && -d "${OUT}/models/kokoro/voices_npy" ]]; then
-    VOICES_SRC="${OUT}/models/kokoro/voices_npy"
-  fi
-  if [[ -d "${VOICES_SRC}" ]]; then
-    mkdir -p "${OUT}/models/kokoro/voices_npy"
-    cp -a "${VOICES_SRC}/." "${OUT}/models/kokoro/voices_npy/"
-  fi
-  for aux in misaki-data espeak-ng-data; do
-    if [[ -d "${KOKORO_SERVER_DIR}/${aux}" ]]; then
-      cp -a "${KOKORO_SERVER_DIR}/${aux}" "${OUT}/${aux}"
-    elif [[ -d "${KOKORO_SERVER_DIR}/build/${aux}" ]]; then
-      cp -a "${KOKORO_SERVER_DIR}/build/${aux}" "${OUT}/${aux}"
-    elif [[ -d "${KOKORO_CACHE}/${aux}" ]]; then
-      cp -a "${KOKORO_CACHE}/${aux}" "${OUT}/${aux}"
-    fi
-  done
-  echo "Bundled Kokoro RKNN split models from ${KOKORO_ONNX}"
+# Kokoro hybrid-v1 NPU TTS (optional; falls back to sherpa CPU when libkokoro unavailable)
+if [[ -d "${MODELS_ROOT}/models/kokoro-hybrid-v1" ]]; then
+  mkdir -p "${OUT}/models/kokoro-hybrid-v1"
+  cp -a "${MODELS_ROOT}/models/kokoro-hybrid-v1/." "${OUT}/models/kokoro-hybrid-v1/"
+  echo "Bundled Kokoro hybrid-v1 from ${MODELS_ROOT}/models/kokoro-hybrid-v1"
 else
-  echo "warn: missing Kokoro RKNN split models; board will use sherpa CPU kokoro fallback" >&2
+  echo "warn: missing ${MODELS_ROOT}/models/kokoro-hybrid-v1; run: make ensure-kokoro-rockchip" >&2
+  echo "warn: board will use sherpa CPU kokoro fallback for TTS" >&2
 fi
 
 # SenseVoice RKNN ASR (required)

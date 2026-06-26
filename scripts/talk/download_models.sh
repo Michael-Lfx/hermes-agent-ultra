@@ -155,6 +155,42 @@ install_kokoro() {
   echo "  -> ${dest}"
 }
 
+install_kokoro_hybrid_v1() {
+  local name="kokoro-hybrid-v1"
+  local dest="${DEST}/${name}"
+  local repo="harvestsu/seeed-local-voice-rk-artifacts"
+  local base="rk3588/kokoro-hybrid-v1"
+  local marker="${dest}/rk3588/kokoro-decoder-front.int8.rknn"
+  if [[ -f "${marker}" \
+    && -f "${dest}/kokoro-prefix-cpu.onnx" \
+    && -f "${dest}/kokoro-vocoder-tail-rest-cpu.onnx" \
+    && -f "${dest}/tokens.txt" \
+    && -f "${dest}/default.npy" ]]; then
+    echo "=== ${name}: already present ==="
+    return 0
+  fi
+  echo "=== ${name} (Kokoro hybrid v1 RK3588 NPU TTS, via ${HF_BASE}) ==="
+  echo "    ref: https://huggingface.co/${repo}/tree/main/${base}"
+  mkdir -p "${dest}/rk3588"
+  local files=(
+    "${base}/kokoro-prefix-cpu.onnx"
+    "${base}/kokoro-generator-tail-cpu.onnx"
+    "${base}/kokoro-vocoder-tail-rest-cpu.onnx"
+    "${base}/tokens.txt"
+    "${base}/default.npy"
+    "${base}/style.npy"
+    "${base}/rk3588/kokoro-decoder-front.int8.rknn"
+    "${base}/rk3588/kokoro-vocoder-front-half.native.fp16.rknn"
+  )
+  local rel out_dir
+  for rel in "${files[@]}"; do
+    out_dir="${dest}/$(dirname "${rel#${base}/}")"
+    mkdir -p "${out_dir}"
+    fetch_hf "${repo}" "${rel}" "${dest}/${rel#${base}/}"
+  done
+  echo "  -> ${dest}"
+}
+
 install_zipvoice() {
   local name="zipvoice"
   local dest="${DEST}/${name}"
@@ -261,7 +297,7 @@ install_to_talk_home() {
     return 0
   fi
   echo "=== install to talk home: ${talk_home} ==="
-  for sub in sensevoice sensevoice-rk3588 kokoro zipvoice kws-zh-en vad denoise speaker; do
+  for sub in sensevoice sensevoice-rk3588 kokoro kokoro-hybrid-v1 zipvoice kws-zh-en vad denoise speaker; do
     if [[ -d "${DEST}/${sub}" ]]; then
       mkdir -p "${talk_home}/${sub}"
       cp -a "${DEST}/${sub}/." "${talk_home}/${sub}/"
@@ -283,6 +319,7 @@ mkdir -p "${DEST}"
 if [[ "${ROCKCHIP_ONLY:-0}" == "1" ]]; then
   install_sensevoice_rk3588
   install_kokoro
+  install_kokoro_hybrid_v1
   install_kws
   install_vad
   install_denoise
@@ -291,6 +328,7 @@ else
   install_sensevoice
   install_sensevoice_rk3588
   install_kokoro
+  install_kokoro_hybrid_v1
   install_zipvoice
   install_kws
   install_vad

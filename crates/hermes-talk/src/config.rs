@@ -192,13 +192,7 @@ impl Default for TtsConfig {
 
 impl TtsConfig {
     pub fn effective_kokoro_rknn(&self) -> KokoroRknnTtsConfig {
-        let mut cfg = self.kokoro_rknn.clone().unwrap_or_default();
-        if cfg.voice.is_empty() || cfg.voice == default_kokoro_rknn_voice() {
-            if !self.voice.is_empty() && self.voice != default_voice() {
-                cfg.voice = self.voice.clone();
-            }
-        }
-        cfg
+        self.kokoro_rknn.clone().unwrap_or_default()
     }
 
     pub fn effective_sherpa_fallback(&self) -> SherpaTtsRuntime {
@@ -254,45 +248,46 @@ impl Default for RockchipTtsConfig {
 pub struct KokoroRknnTtsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_kokoro_rknn_encoder")]
-    pub encoder: String,
-    #[serde(default = "default_kokoro_rknn_har")]
-    pub har_gen: String,
-    #[serde(default = "default_kokoro_rknn_decoder")]
-    pub decoder: String,
-    #[serde(default = "default_kokoro_rknn_vocab")]
-    pub vocab: String,
-    #[serde(default = "default_kokoro_rknn_voices_dir")]
-    pub voices_dir: String,
-    #[serde(default = "default_kokoro_rknn_espeak_data")]
-    pub espeak_data: String,
-    #[serde(default = "default_kokoro_rknn_lexicon_dir")]
-    pub lexicon_dir: String,
-    #[serde(default = "default_kokoro_rknn_voice")]
+    /// Base directory for hybrid-v1 artefacts (HF: rk3588/kokoro-hybrid-v1).
+    #[serde(default = "default_kokoro_hybrid_model_dir")]
+    pub model_dir: String,
+    #[serde(default = "default_kokoro_hybrid_prefix")]
+    pub prefix_onnx: String,
+    #[serde(default = "default_kokoro_hybrid_front_rknn")]
+    pub front_rknn: String,
+    #[serde(default = "default_kokoro_hybrid_tail_onnx")]
+    pub tail_onnx: String,
+    #[serde(default = "default_kokoro_hybrid_vocoder_front")]
+    pub vocoder_front_rknn: String,
+    #[serde(default = "default_kokoro_hybrid_tail_rest")]
+    pub tail_rest_onnx: String,
+    #[serde(default = "default_kokoro_hybrid_tokens")]
+    pub tokens: String,
+    #[serde(default = "default_kokoro_hybrid_style")]
+    pub style_npy: String,
+    #[serde(default = "default_kokoro_hybrid_seq_len")]
+    pub seq_len: i32,
+    #[serde(default = "default_kokoro_hybrid_voice")]
     pub voice: String,
     #[serde(default = "default_kokoro_speed")]
     pub speed: f32,
-    #[serde(default)]
-    pub british: bool,
-    #[serde(default = "default_kokoro_rknn_t_fix")]
-    pub t_fix: i32,
 }
 
 impl Default for KokoroRknnTtsConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            encoder: default_kokoro_rknn_encoder(),
-            har_gen: default_kokoro_rknn_har(),
-            decoder: default_kokoro_rknn_decoder(),
-            vocab: default_kokoro_rknn_vocab(),
-            voices_dir: default_kokoro_rknn_voices_dir(),
-            espeak_data: default_kokoro_rknn_espeak_data(),
-            lexicon_dir: default_kokoro_rknn_lexicon_dir(),
-            voice: default_kokoro_rknn_voice(),
+            model_dir: default_kokoro_hybrid_model_dir(),
+            prefix_onnx: default_kokoro_hybrid_prefix(),
+            front_rknn: default_kokoro_hybrid_front_rknn(),
+            tail_onnx: default_kokoro_hybrid_tail_onnx(),
+            vocoder_front_rknn: default_kokoro_hybrid_vocoder_front(),
+            tail_rest_onnx: default_kokoro_hybrid_tail_rest(),
+            tokens: default_kokoro_hybrid_tokens(),
+            style_npy: default_kokoro_hybrid_style(),
+            seq_len: default_kokoro_hybrid_seq_len(),
+            voice: default_kokoro_hybrid_voice(),
             speed: default_kokoro_speed(),
-            british: false,
-            t_fix: default_kokoro_rknn_t_fix(),
         }
     }
 }
@@ -1037,32 +1032,35 @@ fn default_kokoro_length_scale() -> f32 {
 fn default_kokoro_speed() -> f32 {
     1.0
 }
-fn default_kokoro_rknn_encoder() -> String {
-    "models/kokoro/kokoro_encoder.onnx".to_string()
+fn default_kokoro_hybrid_model_dir() -> String {
+    "models/kokoro-hybrid-v1".to_string()
 }
-fn default_kokoro_rknn_har() -> String {
-    "models/kokoro/har_generator.onnx".to_string()
+fn default_kokoro_hybrid_prefix() -> String {
+    "models/kokoro-hybrid-v1/kokoro-prefix-cpu.onnx".to_string()
 }
-fn default_kokoro_rknn_decoder() -> String {
-    "models/kokoro/kokoro_decoder.rknn".to_string()
+fn default_kokoro_hybrid_front_rknn() -> String {
+    "models/kokoro-hybrid-v1/rk3588/kokoro-decoder-front.int8.rknn".to_string()
 }
-fn default_kokoro_rknn_vocab() -> String {
-    "models/kokoro/config.json".to_string()
+fn default_kokoro_hybrid_tail_onnx() -> String {
+    "models/kokoro-hybrid-v1/kokoro-generator-tail-cpu.onnx".to_string()
 }
-fn default_kokoro_rknn_voices_dir() -> String {
-    "models/kokoro/voices_npy".to_string()
+fn default_kokoro_hybrid_vocoder_front() -> String {
+    "models/kokoro-hybrid-v1/rk3588/kokoro-vocoder-front-half.native.fp16.rknn".to_string()
 }
-fn default_kokoro_rknn_espeak_data() -> String {
-    "espeak-ng-data".to_string()
+fn default_kokoro_hybrid_tail_rest() -> String {
+    "models/kokoro-hybrid-v1/kokoro-vocoder-tail-rest-cpu.onnx".to_string()
 }
-fn default_kokoro_rknn_lexicon_dir() -> String {
-    "misaki-data".to_string()
+fn default_kokoro_hybrid_tokens() -> String {
+    "models/kokoro-hybrid-v1/tokens.txt".to_string()
 }
-fn default_kokoro_rknn_voice() -> String {
-    "af_heart".to_string()
+fn default_kokoro_hybrid_style() -> String {
+    "models/kokoro-hybrid-v1/default.npy".to_string()
 }
-fn default_kokoro_rknn_t_fix() -> i32 {
-    50
+fn default_kokoro_hybrid_seq_len() -> i32 {
+    32
+}
+fn default_kokoro_hybrid_voice() -> String {
+    "default".to_string()
 }
 fn default_tts_sherpa_provider() -> String {
     #[cfg(all(feature = "rockchip", feature = "sherpa-asr-tts"))]
@@ -1608,13 +1606,14 @@ impl Config {
             rockchip.auth_config = resolve_auth_license_paths(&rockchip.auth_config, base);
         }
         if let Some(ref mut rk) = self.tts.kokoro_rknn {
-            rk.encoder = join_if_relative(base, &rk.encoder);
-            rk.har_gen = join_if_relative(base, &rk.har_gen);
-            rk.decoder = join_if_relative(base, &rk.decoder);
-            rk.vocab = join_if_relative(base, &rk.vocab);
-            rk.voices_dir = join_if_relative(base, &rk.voices_dir);
-            rk.espeak_data = join_if_relative(base, &rk.espeak_data);
-            rk.lexicon_dir = join_if_relative(base, &rk.lexicon_dir);
+            rk.model_dir = join_if_relative(base, &rk.model_dir);
+            rk.prefix_onnx = join_if_relative(base, &rk.prefix_onnx);
+            rk.front_rknn = join_if_relative(base, &rk.front_rknn);
+            rk.tail_onnx = join_if_relative(base, &rk.tail_onnx);
+            rk.vocoder_front_rknn = join_if_relative(base, &rk.vocoder_front_rknn);
+            rk.tail_rest_onnx = join_if_relative(base, &rk.tail_rest_onnx);
+            rk.tokens = join_if_relative(base, &rk.tokens);
+            rk.style_npy = join_if_relative(base, &rk.style_npy);
         }
         if let Some(ref mut sherpa) = self.asr.sherpa {
             sherpa.model = join_if_relative(base, &sherpa.model);

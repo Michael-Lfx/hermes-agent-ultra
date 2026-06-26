@@ -175,7 +175,7 @@ help:
 	@echo "  package-talk-rockchip        Bundle ASR + Kokoro RKNN/sherpa TTS + models"
 	@echo "  package-talk-rockchip-dev    Same bundle using debug cross-build (faster)"
 	@echo "  ensure-talk-models-rockchip  SenseVoice RKNN + sherpa kokoro v1_1 CPU fallback"
-	@echo "  ensure-kokoro-rockchip       Verify/copy Kokoro RKNN split models (optional NPU TTS)"
+	@echo "  ensure-kokoro-rockchip       Download/verify Kokoro hybrid-v1 RKNN models (HF)"
 	@echo "  ensure-talk-models         Verify talk models; download missing (auto OS)"
 	@echo "  check-talk-models          Verify talk models only; fail if missing (auto OS)"
 	@echo "  download-talk-models       Download sherpa-onnx models into .models/ (auto OS)"

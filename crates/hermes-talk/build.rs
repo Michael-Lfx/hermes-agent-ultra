@@ -18,7 +18,7 @@ fn main() {
         .ok()
         .map(PathBuf::from)
         .or_else(|| {
-            let cache = root.join(".cross-cache/kokoro-server/libkokoro_ffi.a");
+            let cache = root.join(".cross-cache/kokoro-hybrid/libkokoro_ffi.a");
             cache.exists().then_some(cache)
         });
 
@@ -30,22 +30,11 @@ fn main() {
 
     if env::var("KOKORO_BUILD").ok().as_deref() != Some("1") {
         println!(
-            "cargo:warning=Kokoro RKNN FFI not linked (set KOKORO_BUILD=1 + deps, or KOKORO_PREBUILT_LIB); TTS falls back to sherpa CPU kokoro"
+            "cargo:warning=Kokoro hybrid RKNN FFI not linked (set KOKORO_BUILD=1 + deps, or KOKORO_PREBUILT_LIB); TTS falls back to sherpa CPU kokoro"
         );
         return;
     }
 
-    let kokoro_server =
-        env::var("KOKORO_SERVER_DIR").unwrap_or_else(|_| "/home/leeyang/kokoro-server".to_string());
-    let kokoro_src = PathBuf::from(&kokoro_server);
-    if !kokoro_src.join("src/kokoro.cpp").exists() {
-        println!(
-            "cargo:warning=KOKORO_SERVER_DIR={kokoro_server} missing sources; skipping Kokoro FFI build"
-        );
-        return;
-    }
-
-    let misaki = kokoro_src.join("misaki-cpp");
     let sysroot = env::var("KOKORO_SYSROOT").unwrap_or_default();
     let target = env::var("TARGET").unwrap_or_default();
 
@@ -53,22 +42,8 @@ fn main() {
     build
         .cpp(true)
         .std("c++20")
-        .define("USE_RKNN", None)
-        .include(kokoro_src.join("src"))
-        .include(misaki.join("include"))
         .include(manifest_dir.join("kokoro"))
-        .file(manifest_dir.join("kokoro/kokoro_ffi.cpp"))
-        .file(kokoro_src.join("src/kokoro.cpp"))
-        .file(kokoro_src.join("src/onnx-decoder.cpp"))
-        .file(kokoro_src.join("src/rknn-decoder.cpp"))
-        .file(kokoro_src.join("src/istft.cpp"))
-        .file(kokoro_src.join("src/g2p.cpp"))
-        .file(kokoro_src.join("src/phonemizer.cpp"))
-        .file(misaki.join("src/g2p.cpp"))
-        .file(misaki.join("src/fallback.cpp"))
-        .file(misaki.join("src/lexicon.cpp"))
-        .file(misaki.join("src/tagger.cpp"))
-        .file(misaki.join("src/num2words_en.cpp"));
+        .file(manifest_dir.join("kokoro/kokoro_ffi.cpp"));
 
     if !sysroot.is_empty() {
         let sys = PathBuf::from(&sysroot);
@@ -78,6 +53,7 @@ fn main() {
             if p.exists() {
                 build.include(&p);
                 build.include(p.join("onnxruntime"));
+                build.include(p.join("rknpu"));
             }
         }
     } else {
@@ -98,10 +74,6 @@ fn main() {
     println!("cargo:rustc-cfg=kokoro_rknn_ffi");
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
     println!("cargo:rustc-link-lib=dylib=rknnrt");
-    println!("cargo:rustc-link-lib=dylib=espeak-ng");
-    println!("cargo:rustc-link-lib=dylib=openblas");
-    println!("cargo:rustc-link-lib=dylib=fmt");
-    println!("cargo:rustc-link-lib=dylib=spdlog");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=dylib=m");
     println!("cargo:rustc-link-lib=dylib=pthread");
@@ -121,10 +93,6 @@ fn link_prebuilt(lib: &Path) {
     println!("cargo:rustc-link-lib=static=kokoro_ffi");
     println!("cargo:rustc-link-lib=dylib=onnxruntime");
     println!("cargo:rustc-link-lib=dylib=rknnrt");
-    println!("cargo:rustc-link-lib=dylib=espeak-ng");
-    println!("cargo:rustc-link-lib=dylib=openblas");
-    println!("cargo:rustc-link-lib=dylib=fmt");
-    println!("cargo:rustc-link-lib=dylib=spdlog");
     println!("cargo:rustc-link-lib=dylib=stdc++");
     println!("cargo:rustc-link-lib=dylib=m");
     println!("cargo:rustc-link-lib=dylib=pthread");

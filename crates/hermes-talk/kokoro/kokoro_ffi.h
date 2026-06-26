@@ -12,14 +12,16 @@ typedef void (*KokoroPcmCallback)(const int16_t* samples, size_t count, void* us
 typedef struct KokoroEngine KokoroEngine;
 
 typedef struct {
-  const char* vocab_json;
-  const char* encoder_onnx;
-  const char* har_onnx;
-  const char* decoder_path;
-  const char* voices_dir;
-  const char* espeak_data;
-  const char* lexicon_dir;
-  int t_fix;
+  const char* model_dir;
+  const char* prefix_onnx;
+  const char* front_rknn;
+  const char* tail_onnx;
+  const char* vocoder_front_rknn;
+  const char* tail_rest_onnx;
+  const char* tokens;
+  const char* style_npy;
+  const char* voice;
+  int seq_len;
 } KokoroEngineConfig;
 
 /// Returns opaque engine or NULL on failure (message in err_buf if non-null).

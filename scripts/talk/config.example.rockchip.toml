@@ -1,7 +1,7 @@
 # ============================================================
 # hermes-talk Rockchip 板端配置
 # ASR: SenseVoice RKNN (NPU)
-# TTS: Kokoro RKNN in-process (NPU decoder) + sherpa kokoro-multi-lang-v1_1 CPU fallback
+# TTS: Kokoro hybrid-v1 RKNN in-process (NPU) + sherpa kokoro-multi-lang-v1_1 CPU fallback
 # ============================================================
 
 # ============================================================
@@ -36,20 +36,20 @@ format = "pcm"
 voice = "zf_048"
 
 [tts.kokoro_rknn]
-encoder = "models/kokoro/kokoro_encoder.onnx"
-har_gen = "models/kokoro/har_generator.onnx"
-decoder = "models/kokoro/kokoro_decoder.rknn"
-vocab = "models/kokoro/config.json"
-voices_dir = "models/kokoro/voices_npy"
-espeak_data = "espeak-ng-data"
-lexicon_dir = "misaki-data"
-voice = "af_heart"
+model_dir = "models/kokoro-hybrid-v1"
+prefix_onnx = "models/kokoro-hybrid-v1/kokoro-prefix-cpu.onnx"
+front_rknn = "models/kokoro-hybrid-v1/rk3588/kokoro-decoder-front.int8.rknn"
+tail_onnx = "models/kokoro-hybrid-v1/kokoro-generator-tail-cpu.onnx"
+vocoder_front_rknn = "models/kokoro-hybrid-v1/rk3588/kokoro-vocoder-front-half.native.fp16.rknn"
+tail_rest_onnx = "models/kokoro-hybrid-v1/kokoro-vocoder-tail-rest-cpu.onnx"
+tokens = "models/kokoro-hybrid-v1/tokens.txt"
+style_npy = "models/kokoro-hybrid-v1/default.npy"
+seq_len = 32
+voice = "default"
 speed = 1.0
-british = false
 enabled = true
-t_fix = 50
 
-# sherpa CPU fallback (required when RKNN/libkokoro unavailable)
+# sherpa CPU fallback (required when hybrid RKNN FFI unavailable)
 [tts.sherpa]
 engine = "kokoro"
 provider = "cpu"

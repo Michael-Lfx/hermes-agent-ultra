@@ -1,4 +1,4 @@
-//! C FFI to libkokoro (RK3588 NPU TTS). Enabled when build.rs sets `kokoro_rknn_ffi`.
+//! C FFI to Kokoro hybrid-v1 RKNN TTS (ORT prefix/tail + RKNN front). Enabled when build.rs sets `kokoro_rknn_ffi`.
 
 #![allow(unsafe_code)]
 
@@ -12,14 +12,16 @@ use crate::error::{DemoError, Result};
 #[repr(C)]
 #[cfg_attr(not(kokoro_rknn_ffi), allow(dead_code))]
 struct KokoroEngineConfig {
-    vocab_json: *const c_char,
-    encoder_onnx: *const c_char,
-    har_onnx: *const c_char,
-    decoder_path: *const c_char,
-    voices_dir: *const c_char,
-    espeak_data: *const c_char,
-    lexicon_dir: *const c_char,
-    t_fix: c_int,
+    model_dir: *const c_char,
+    prefix_onnx: *const c_char,
+    front_rknn: *const c_char,
+    tail_onnx: *const c_char,
+    vocoder_front_rknn: *const c_char,
+    tail_rest_onnx: *const c_char,
+    tokens: *const c_char,
+    style_npy: *const c_char,
+    voice: *const c_char,
+    seq_len: c_int,
 }
 
 #[cfg_attr(not(kokoro_rknn_ffi), allow(dead_code))]
@@ -62,28 +64,32 @@ impl KokoroEngineHandle {
         {
             let _ = cfg;
             Err(DemoError::Tts(
-                "Kokoro RKNN FFI not linked (build with KOKORO_PREBUILT_LIB or KOKORO_BUILD=1)"
+                "Kokoro hybrid RKNN FFI not linked (build with KOKORO_PREBUILT_LIB or KOKORO_BUILD=1)"
                     .into(),
             ))
         }
         #[cfg(kokoro_rknn_ffi)]
         {
-            let vocab = cstr(&cfg.vocab)?;
-            let encoder = cstr(&cfg.encoder)?;
-            let har = cstr(&cfg.har_gen)?;
-            let decoder = cstr(&cfg.decoder)?;
-            let voices = cstr(&cfg.voices_dir)?;
-            let espeak = cstr(&cfg.espeak_data)?;
-            let lexicon = cstr(&cfg.lexicon_dir)?;
+            let model_dir = cstr(&cfg.model_dir)?;
+            let prefix = cstr(&cfg.prefix_onnx)?;
+            let front = cstr(&cfg.front_rknn)?;
+            let tail = cstr(&cfg.tail_onnx)?;
+            let vocoder_front = cstr(&cfg.vocoder_front_rknn)?;
+            let tail_rest = cstr(&cfg.tail_rest_onnx)?;
+            let tokens = cstr(&cfg.tokens)?;
+            let style = cstr(&cfg.style_npy)?;
+            let voice = cstr(&cfg.voice)?;
             let c_cfg = KokoroEngineConfig {
-                vocab_json: vocab.as_ptr(),
-                encoder_onnx: encoder.as_ptr(),
-                har_onnx: har.as_ptr(),
-                decoder_path: decoder.as_ptr(),
-                voices_dir: voices.as_ptr(),
-                espeak_data: espeak.as_ptr(),
-                lexicon_dir: lexicon.as_ptr(),
-                t_fix: cfg.t_fix,
+                model_dir: model_dir.as_ptr(),
+                prefix_onnx: prefix.as_ptr(),
+                front_rknn: front.as_ptr(),
+                tail_onnx: tail.as_ptr(),
+                vocoder_front_rknn: vocoder_front.as_ptr(),
+                tail_rest_onnx: tail_rest.as_ptr(),
+                tokens: tokens.as_ptr(),
+                style_npy: style.as_ptr(),
+                voice: voice.as_ptr(),
+                seq_len: cfg.seq_len,
             };
             let mut err = vec![0i8; 512];
             let ptr = unsafe { ffi::kokoro_engine_create(&c_cfg, err.as_mut_ptr(), err.len()) };
@@ -102,13 +108,12 @@ impl KokoroEngineHandle {
         text: &str,
         voice: &str,
         speed: f32,
-        british: bool,
         on_pcm: impl FnMut(&[i16]),
     ) -> Result<()> {
         #[cfg(not(kokoro_rknn_ffi))]
         {
-            let _ = (text, voice, speed, british, on_pcm);
-            Err(DemoError::Tts("Kokoro RKNN FFI not linked".into()))
+            let _ = (text, voice, speed, on_pcm);
+            Err(DemoError::Tts("Kokoro hybrid RKNN FFI not linked".into()))
         }
         #[cfg(kokoro_rknn_ffi)]
         {
@@ -133,7 +138,7 @@ impl KokoroEngineHandle {
                     c_text.as_ptr(),
                     c_voice.as_ptr(),
                     speed,
-                    i32::from(british),
+                    0,
                     trampoline,
                     &mut ctx as *mut Ctx<'_> as *mut c_void,
                     err.as_mut_ptr(),
@@ -165,16 +170,19 @@ pub fn validate_model_paths(cfg: &KokoroRknnTtsConfig) -> Result<()> {
     if !cfg.enabled {
         return Err(DemoError::Tts("kokoro RKNN disabled in config".into()));
     }
-    for path in [&cfg.encoder, &cfg.har_gen, &cfg.decoder, &cfg.vocab] {
+    for path in [
+        &cfg.prefix_onnx,
+        &cfg.front_rknn,
+        &cfg.vocoder_front_rknn,
+        &cfg.tail_rest_onnx,
+        &cfg.tokens,
+        &cfg.style_npy,
+    ] {
         if !Path::new(path).exists() {
-            return Err(DemoError::Tts(format!("missing kokoro RKNN model: {path}")));
+            return Err(DemoError::Tts(format!(
+                "missing kokoro hybrid model: {path}"
+            )));
         }
-    }
-    if !Path::new(&cfg.voices_dir).is_dir() {
-        return Err(DemoError::Tts(format!(
-            "missing kokoro voices_dir: {}",
-            cfg.voices_dir
-        )));
     }
     Ok(())
 }

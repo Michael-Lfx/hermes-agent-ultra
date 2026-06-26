@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-# Verify Kokoro RKNN split-model artefacts (optional; copy prebuilt, no build.py).
+# Verify Kokoro hybrid-v1 RK3588 artefacts (HF prebuilt, no build.py).
 #
-# Searches:
-#   ${KOKORO_SERVER_DIR}/onnx/
-#   ${KOKORO_CACHE}/onnx/
-#   ${MODELS_ROOT}/models/kokoro/
+# Source: harvestsu/seeed-local-voice-rk-artifacts rk3588/kokoro-hybrid-v1
+#   https://huggingface.co/harvestsu/seeed-local-voice-rk-artifacts/tree/main/rk3588/kokoro-hybrid-v1
 #
 # Usage:
 #   bash scripts/talk/ensure_kokoro_rockchip.sh
@@ -13,93 +11,54 @@ set -euo pipefail
 
 ROOT="${HERMES_ULTRA_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 MODELS_ROOT="${MODELS_ROOT:-${ROOT}/.models}"
-KOKORO_SERVER_DIR="${KOKORO_SERVER_DIR:-/home/leeyang/kokoro-server}"
-KOKORO_CACHE="${KOKORO_CACHE:-${ROOT}/.cross-cache/kokoro-server}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEST="${MODELS_ROOT}/models/kokoro-hybrid-v1"
 
-RKNN_FILES=(kokoro_encoder.onnx har_generator.onnx kokoro_decoder.rknn)
+REQUIRED=(
+  "kokoro-prefix-cpu.onnx"
+  "kokoro-generator-tail-cpu.onnx"
+  "kokoro-vocoder-tail-rest-cpu.onnx"
+  "tokens.txt"
+  "default.npy"
+  "rk3588/kokoro-decoder-front.int8.rknn"
+  "rk3588/kokoro-vocoder-front-half.native.fp16.rknn"
+)
 
-resolve_kokoro_rknn_root() {
-  local base onnx_dir
-  for base in "${KOKORO_SERVER_DIR}" "${KOKORO_CACHE}" "${MODELS_ROOT}/models/kokoro"; do
-    onnx_dir="${base}/onnx"
-    if [[ -f "${onnx_dir}/kokoro_decoder.rknn" ]]; then
-      echo "${base}"
-      return 0
-    fi
-    if [[ -f "${base}/kokoro_decoder.rknn" ]]; then
-      echo "${base}"
-      return 0
-    fi
-  done
-  return 1
-}
-
-resolve_kokoro_aux() {
-  local kind="$1"
-  case "${kind}" in
-    voices)
-      for d in \
-        "${KOKORO_SERVER_DIR}/voices_npy" \
-        "${KOKORO_CACHE}/voices_npy" \
-        "${MODELS_ROOT}/models/kokoro/voices_npy"; do
-        [[ -d "${d}" ]] && echo "${d}" && return 0
-      done
-      ;;
-    config)
-      for f in \
-        "${KOKORO_SERVER_DIR}/Kokoro-82M/config.json" \
-        "${KOKORO_CACHE}/Kokoro-82M/config.json" \
-        "${MODELS_ROOT}/models/kokoro/config.json"; do
-        [[ -f "${f}" ]] && echo "${f}" && return 0
-      done
-      ;;
-    misaki)
-      for d in \
-        "${KOKORO_SERVER_DIR}/misaki-data" \
-        "${KOKORO_SERVER_DIR}/build/misaki-data" \
-        "${KOKORO_CACHE}/misaki-data"; do
-        [[ -d "${d}" ]] && echo "${d}" && return 0
-      done
-      ;;
-    espeak)
-      for d in \
-        "${KOKORO_SERVER_DIR}/espeak-ng-data" \
-        "${KOKORO_SERVER_DIR}/build/espeak-ng-data" \
-        "${KOKORO_CACHE}/espeak-ng-data"; do
-        [[ -d "${d}" ]] && echo "${d}" && return 0
-      done
-      ;;
-  esac
-  return 1
-}
-
-if root="$(resolve_kokoro_rknn_root)"; then
-  voices="$(resolve_kokoro_aux voices || true)"
-  config="$(resolve_kokoro_aux config || true)"
-  misaki="$(resolve_kokoro_aux misaki || true)"
-  espeak="$(resolve_kokoro_aux espeak || true)"
-  if [[ -n "${voices}" && -n "${config}" && -n "${misaki}" && -n "${espeak}" ]]; then
-    echo "=== kokoro RKNN models OK (${root}) ==="
-    exit 0
+missing=()
+for rel in "${REQUIRED[@]}"; do
+  if [[ ! -f "${DEST}/${rel}" ]]; then
+    missing+=("${rel}")
   fi
-  echo "=== kokoro RKNN split models found under ${root}, but aux data incomplete ==="
-  [[ -z "${voices}" ]] && echo "  missing voices_npy/"
-  [[ -z "${config}" ]] && echo "  missing config.json"
-  [[ -z "${misaki}" ]] && echo "  missing misaki-data/"
-  [[ -z "${espeak}" ]] && echo "  missing espeak-ng-data/"
-else
-  echo "=== kokoro RKNN models missing (optional; sherpa CPU fallback still works) ==="
-  for f in "${RKNN_FILES[@]}"; do
-    echo "  missing */onnx/${f} (or models/kokoro/${f})"
-  done
+done
+
+if [[ ${#missing[@]} -eq 0 ]]; then
+  echo "=== kokoro hybrid-v1 RKNN models OK (${DEST}) ==="
+  exit 0
 fi
 
+echo "=== kokoro hybrid-v1 models missing under ${DEST} ==="
+printf '  %s\n' "${missing[@]}"
+
 if [[ "${CHECK_ONLY:-0}" == "1" ]]; then
-  echo "Copy prebuilt RKNN artefacts into .models/models/kokoro/ or set KOKORO_SERVER_DIR" >&2
-  echo "  need: kokoro_encoder.onnx, har_generator.onnx, kokoro_decoder.rknn," >&2
-  echo "        config.json, voices_npy/, misaki-data/, espeak-ng-data/" >&2
+  echo "Run: make ensure-kokoro-rockchip" >&2
   exit 1
 fi
 
-echo "warn: kokoro RKNN TTS unavailable until split models are installed; will use sherpa CPU fallback" >&2
-exit 0
+echo "=== downloading kokoro-hybrid-v1 from HuggingFace ==="
+ROCKCHIP_ONLY=1 HERMES_ULTRA_ROOT="${ROOT}" MODELS_ROOT="${MODELS_ROOT}" \
+  bash "${SCRIPT_DIR}/download_models.sh"
+
+missing=()
+for rel in "${REQUIRED[@]}"; do
+  if [[ ! -f "${DEST}/${rel}" ]]; then
+    missing+=("${rel}")
+  fi
+done
+if [[ ${#missing[@]} -eq 0 ]]; then
+  echo "=== kokoro hybrid-v1 RKNN models OK (${DEST}) ==="
+  exit 0
+fi
+
+echo "error: kokoro hybrid-v1 still incomplete after download" >&2
+printf '  %s\n' "${missing[@]}" >&2
+exit 1

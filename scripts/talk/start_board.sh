@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rockchip board launcher: SenseVoice RKNN ASR + Kokoro RKNN TTS (sherpa CPU fallback).
+# Rockchip board launcher: SenseVoice RKNN ASR + Kokoro hybrid-v1 RKNN TTS (sherpa CPU fallback).
 set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -93,10 +93,9 @@ preflight() {
         echo "warn: missing ${DIR}/models/kokoro/espeak-ng-data" >&2
         missing=1
     fi
-    if [ ! -f "${DIR}/models/kokoro/kokoro_decoder.rknn" ]; then
-        echo "warn: missing RKNN TTS decoder; will use sherpa CPU kokoro fallback" >&2
-    elif [ ! -d "${DIR}/misaki-data" ] || [ ! -d "${DIR}/espeak-ng-data" ]; then
-        echo "warn: missing misaki-data/ or espeak-ng-data/ for RKNN TTS; may fall back to CPU" >&2
+    if [ ! -f "${DIR}/models/kokoro-hybrid-v1/rk3588/kokoro-decoder-front.int8.rknn" ]; then
+        echo "warn: missing kokoro-hybrid-v1 RKNN models; will use sherpa CPU kokoro fallback" >&2
+        echo "warn: run make ensure-kokoro-rockchip on dev machine before packaging" >&2
     fi
     if [ "${missing}" -eq 1 ]; then
         echo "warn: bundle incomplete; run make ensure-talk-models-rockchip" >&2

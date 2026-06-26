@@ -86,11 +86,12 @@ fn run_driver(
 ) -> Result<()> {
     let engine = KokoroEngineHandle::create(&cfg)?;
     info!(
-        engine = "kokoro_rknn",
-        encoder = %cfg.encoder,
-        decoder = %cfg.decoder,
+        engine = "kokoro_hybrid_v1",
+        model_dir = %cfg.model_dir,
+        front = %cfg.front_rknn,
         voice = %cfg.voice,
-        "Kokoro RKNN TTS ready"
+        seq_len = cfg.seq_len,
+        "Kokoro hybrid-v1 RKNN TTS ready"
     );
 
     let mut text_buf = String::new();
@@ -124,7 +125,7 @@ fn synthesize_turn(
     text: &str,
     audio_tx: &mpsc::Sender<TtsAudio>,
 ) -> Result<()> {
-    engine.synthesize_text(text, &cfg.voice, cfg.speed, cfg.british, |chunk| {
+    engine.synthesize_text(text, &cfg.voice, cfg.speed, |chunk| {
         let pcm = i16_to_le_bytes(chunk);
         if !pcm.is_empty() {
             let _ = audio_tx.blocking_send(TtsAudio { pcm });
