@@ -49,6 +49,18 @@ pub struct ExternalBlock {
     pub policy_bullets: Vec<String>,
     pub sentiment_bullets: Vec<String>,
     pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub futures_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub governance_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moat_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contests_bullets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -87,6 +99,19 @@ pub struct ExternalContextOverlay {
     pub geo_risk: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commodity: Option<String>,
+    /// Industry / company qualitative web fill (DEEP SCAN + external section).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chain_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub futures_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub governance_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moat_bullets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contests_bullets: Vec<String>,
 }
 
 /// Build deterministic content from collected dims + models.
@@ -127,13 +152,25 @@ pub fn build_report_content(
 pub fn merge_external_overlay(content: &mut ReportContent, overlay: &ExternalContextOverlay) {
     let has_content = !overlay.macro_bullets.is_empty()
         || !overlay.policy_bullets.is_empty()
-        || !overlay.sentiment_bullets.is_empty();
+        || !overlay.sentiment_bullets.is_empty()
+        || !overlay.chain_bullets.is_empty()
+        || !overlay.materials_bullets.is_empty()
+        || !overlay.futures_bullets.is_empty()
+        || !overlay.governance_bullets.is_empty()
+        || !overlay.moat_bullets.is_empty()
+        || !overlay.contests_bullets.is_empty();
     if !has_content {
         return;
     }
     content.external.macro_bullets = overlay.macro_bullets.clone();
     content.external.policy_bullets = overlay.policy_bullets.clone();
     content.external.sentiment_bullets = overlay.sentiment_bullets.clone();
+    content.external.chain_bullets = overlay.chain_bullets.clone();
+    content.external.materials_bullets = overlay.materials_bullets.clone();
+    content.external.futures_bullets = overlay.futures_bullets.clone();
+    content.external.governance_bullets = overlay.governance_bullets.clone();
+    content.external.moat_bullets = overlay.moat_bullets.clone();
+    content.external.contests_bullets = overlay.contests_bullets.clone();
     content.external.sources = overlay
         .sources
         .iter()
@@ -178,6 +215,111 @@ pub fn merge_macro_dim_from_overlay(raw_dims: &mut Value, overlay: &ExternalCont
         .or_insert_with(|| serde_json::json!({}));
     if let Some(entry_obj) = entry.as_object_mut() {
         entry_obj.insert("data".into(), data);
+    }
+}
+
+/// Patch web-only dim payloads from overlay bullets (DEEP SCAN cards + labels).
+pub fn merge_web_dims_from_overlay(raw_dims: &mut Value, overlay: &ExternalContextOverlay) {
+    let pairs = [
+        ("5_chain", &overlay.chain_bullets),
+        ("8_materials", &overlay.materials_bullets),
+        ("9_futures", &overlay.futures_bullets),
+        ("11_governance", &overlay.governance_bullets),
+        ("14_moat", &overlay.moat_bullets),
+        ("19_contests", &overlay.contests_bullets),
+    ];
+    let Some(obj) = raw_dims.as_object_mut() else {
+        return;
+    };
+    for (key, bullets) in pairs {
+        if bullets.is_empty() {
+            continue;
+        }
+        let summary = bullets
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "web 补数".into());
+        let data = serde_json::json!({
+            "bullets": bullets,
+            "summary": summary,
+            "source": "web",
+        });
+        let entry = obj
+            .entry(key.to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(entry_obj) = entry.as_object_mut() {
+            entry_obj.insert("data".into(), data);
+        }
+    }
+}
+
+/// Whether a web-only dim has overlay fill in raw_dims.
+#[must_use]
+pub fn web_dim_has_fill(raw_dims: &Value, key: &str) -> bool {
+    web_dim_summary(raw_dims, key).is_some()
+}
+
+#[must_use]
+pub fn web_dim_summary(raw_dims: &Value, key: &str) -> Option<String> {
+    let data = raw_dims.get(key)?.get("data")?;
+    if let Some(s) = data.get("summary").and_then(|v| v.as_str())
+        && !s.trim().is_empty()
+    {
+        return Some(truncate_web_summary(s));
+    }
+    data.get("bullets")?
+        .as_array()?
+        .first()?
+        .as_str()
+        .map(truncate_web_summary)
+}
+
+fn truncate_web_summary(s: &str) -> String {
+    let t = s.trim();
+    if t.chars().count() <= 48 {
+        t.to_string()
+    } else {
+        format!("{}…", t.chars().take(48).collect::<String>())
+    }
+}
+
+/// Refresh scored dim labels after web merge (visual parity; no full re-score).
+pub fn refresh_web_dim_labels(result: &mut crate::research::analyze::AnalyzeStockResult) {
+    use crate::research::report_filter::WEB_ONLY_DIMS;
+    use crate::research::scoring::ScoreDimensionsResult;
+
+    let Ok(mut scored) = serde_json::from_value::<ScoreDimensionsResult>(result.scores.clone())
+    else {
+        return;
+    };
+    for key in WEB_ONLY_DIMS {
+        if let Some(summary) = web_dim_summary(&result.raw_dims, key)
+            && let Some(dim) = scored.dimensions.get_mut(*key)
+        {
+            dim.label = summary;
+            if dim.score == 5 {
+                dim.score = 6;
+            }
+        }
+    }
+    if result.content.external.coverage == ExternalCoverage::WebFilled {
+        for (key, bullets) in [
+            ("3_macro", &result.content.external.macro_bullets),
+            ("13_policy", &result.content.external.policy_bullets),
+            ("17_sentiment", &result.content.external.sentiment_bullets),
+        ] {
+            if let Some(first) = bullets.first()
+                && let Some(dim) = scored.dimensions.get_mut(key)
+            {
+                dim.label = truncate_web_summary(first);
+                if dim.score == 5 {
+                    dim.score = 6;
+                }
+            }
+        }
+    }
+    if let Ok(v) = serde_json::to_value(&scored) {
+        result.scores = v;
     }
 }
 
@@ -476,5 +618,85 @@ mod tests {
         let content = ReportContent::default();
         assert!(needs_external_web_fill(&content, 0.40));
         assert!(!needs_external_web_fill(&content, 0.75));
+    }
+
+    #[test]
+    fn merge_web_dims_from_overlay_sets_raw_and_labels() {
+        use crate::research::analyze::apply_external_context;
+
+        let mut raw = json!({});
+        merge_web_dims_from_overlay(
+            &mut raw,
+            &ExternalContextOverlay {
+                moat_bullets: vec!["品牌与渠道双护城河".into()],
+                chain_bullets: vec!["白酒上游包材稳定".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(raw["14_moat"]["data"]["summary"], "品牌与渠道双护城河");
+
+        let mut result = crate::research::analyze::AnalyzeStockResult {
+            symbol: "600519.SH".into(),
+            depth: "medium".into(),
+            dcf: json!({}),
+            comps: json!({}),
+            three_statement: json!({}),
+            lbo: json!({}),
+            scores: json!({
+                "ticker": "600519.SH",
+                "fundamental_score": 60.0,
+                "dimensions": {
+                    "14_moat": { "score": 5, "weight": 3, "display_name": "", "label": "护城河需定性评估", "missing": [], "reasons_pass": [], "reasons_fail": [] },
+                    "5_chain": { "score": 5, "weight": 3, "display_name": "", "label": "产业链 · 待 web 补数", "missing": [], "reasons_pass": [], "reasons_fail": [] }
+                }
+            }),
+            personas: json!({}),
+            data_confidence: crate::research::types::DataConfidence {
+                score: 0.7,
+                present: vec![],
+                missing: vec![],
+            },
+            missing_dims: vec![],
+            dim_summary: vec![],
+            used_fallback: vec![],
+            summary_markdown: String::new(),
+            synthesis: crate::research::synthesis::SynthesisReport {
+                headline: "test".into(),
+                verdict: "hold".into(),
+                confidence_tier: "medium".into(),
+                key_metrics: vec![],
+                risks: vec![],
+                missing_highlights: vec![],
+                panel_summary: crate::research::synthesis::PanelSummary {
+                    consensus: 7.0,
+                    vote_buy: 1,
+                    vote_avoid: 0,
+                    investor_count: 66,
+                },
+                dcf_one_liner: "dcf".into(),
+            },
+            content: ReportContent::default(),
+            raw_dims: raw.clone(),
+        };
+        apply_external_context(
+            &mut result,
+            &ExternalContextOverlay {
+                policy_bullets: vec!["消费税政策稳定".into()],
+                moat_bullets: vec!["品牌与渠道双护城河".into()],
+                chain_bullets: vec!["白酒上游包材稳定".into()],
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            result.content.external.coverage,
+            ExternalCoverage::WebFilled
+        );
+        let scored: crate::research::scoring::ScoreDimensionsResult =
+            serde_json::from_value(result.scores.clone()).unwrap();
+        assert_eq!(scored.dimensions["14_moat"].label, "品牌与渠道双护城河");
+        let html = crate::research::report::institutional::render_institutional_html(&result, None);
+        assert!(html.contains("政策影响"));
+        assert!(html.contains("护城河"));
+        assert!(!html.contains("待 web 补数 · 见上方"));
     }
 }

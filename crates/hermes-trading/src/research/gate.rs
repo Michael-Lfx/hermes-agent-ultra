@@ -108,6 +108,7 @@ mod tests {
         assert!(html.contains("01 / CORE"));
         assert!(html.contains("05 / DEEP SCAN"));
         assert!(html.contains("06 / VALUATION"));
+        assert!(html.contains("07 / COMPS"));
         assert!(html.contains("已展示 19 维"));
         assert!(html.contains(&result.synthesis.headline));
         assert!(html.len() > 200);

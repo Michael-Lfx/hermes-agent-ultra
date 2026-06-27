@@ -1,8 +1,10 @@
 //! User-facing report scrubbing — hide internal gap keys and web-deferred dims.
 
+use serde_json::Value;
+
 use crate::research::analyze::AnalyzeStockResult;
 use crate::research::fetchers::dim_keys;
-use crate::research::report::content::{ExternalBlock, ExternalCoverage};
+use crate::research::report::content::{ExternalBlock, ExternalCoverage, web_dim_has_fill};
 use crate::research::scoring::DimScore;
 
 /// Dimensions not collected over HTTP (web/LLM path); never show as user-visible gaps.
@@ -69,8 +71,11 @@ pub fn scrub_dim_label(label: &str) -> String {
 
 /// Web-only dims with HTTP-collected signal (events/trap cross-read) stay visible.
 #[must_use]
-pub fn is_placeholder_web_dim(key: &str, dim: &DimScore) -> bool {
+pub fn is_placeholder_web_dim(key: &str, dim: &DimScore, raw_dims: Option<&Value>) -> bool {
     if !is_web_only_dim(key) {
+        return false;
+    }
+    if raw_dims.is_some_and(|raw| web_dim_has_fill(raw, key)) {
         return false;
     }
     if dim.score >= 7 || dim.score <= 4 {
@@ -97,7 +102,7 @@ pub fn show_dim_in_user_report(key: &str, dim: &DimScore, coverage: ExternalCove
     if !is_web_only_dim(key) {
         return true;
     }
-    if is_placeholder_web_dim(key, dim) {
+    if is_placeholder_web_dim(key, dim, None) {
         return false;
     }
     if coverage == ExternalCoverage::WebFilled {
@@ -107,7 +112,17 @@ pub fn show_dim_in_user_report(key: &str, dim: &DimScore, coverage: ExternalCove
 }
 
 #[must_use]
-pub fn user_dim_label(key: &str, dim: &DimScore, external: &ExternalBlock) -> String {
+pub fn user_dim_label(
+    key: &str,
+    dim: &DimScore,
+    external: &ExternalBlock,
+    raw_dims: Option<&Value>,
+) -> String {
+    if let Some(raw) = raw_dims
+        && let Some(summary) = crate::research::report::content::web_dim_summary(raw, key)
+    {
+        return summary;
+    }
     let base = scrub_dim_label(&dim.label);
     if external.coverage != ExternalCoverage::WebFilled {
         return base;
@@ -116,6 +131,12 @@ pub fn user_dim_label(key: &str, dim: &DimScore, external: &ExternalBlock) -> St
         "3_macro" => &external.macro_bullets,
         "13_policy" => &external.policy_bullets,
         "17_sentiment" => &external.sentiment_bullets,
+        "5_chain" => &external.chain_bullets,
+        "8_materials" => &external.materials_bullets,
+        "9_futures" => &external.futures_bullets,
+        "11_governance" => &external.governance_bullets,
+        "14_moat" => &external.moat_bullets,
+        "19_contests" => &external.contests_bullets,
         _ => return base,
     };
     bullets
@@ -126,15 +147,20 @@ pub fn user_dim_label(key: &str, dim: &DimScore, external: &ExternalBlock) -> St
 
 /// Label for DEEP SCAN cards; stub web-only dims note pending web fill.
 #[must_use]
-pub fn deep_scan_dim_label(key: &str, dim: &DimScore, external: &ExternalBlock) -> String {
+pub fn deep_scan_dim_label(
+    key: &str,
+    dim: &DimScore,
+    external: &ExternalBlock,
+    raw_dims: &Value,
+) -> String {
     if is_web_only_dim(key)
-        && is_placeholder_web_dim(key, dim)
+        && is_placeholder_web_dim(key, dim, Some(raw_dims))
         && external.coverage != ExternalCoverage::WebFilled
     {
         let base = scrub_dim_label(&dim.label);
         return format!("{base} · 待 web 补数 · 见上方「政策 / 宏观 / 舆情」");
     }
-    user_dim_label(key, dim, external)
+    user_dim_label(key, dim, external, Some(raw_dims))
 }
 
 #[must_use]
@@ -228,7 +254,7 @@ mod tests {
             reasons_pass: vec![],
             reasons_fail: vec![],
         };
-        assert!(is_placeholder_web_dim("3_macro", &dim));
+        assert!(is_placeholder_web_dim("3_macro", &dim, None));
     }
 
     #[test]
@@ -254,7 +280,12 @@ mod tests {
             &dim,
             ExternalCoverage::NotRetrieved
         ));
-        let label = deep_scan_dim_label("3_macro", &dim, &ExternalBlock::default());
+        let label = deep_scan_dim_label(
+            "3_macro",
+            &dim,
+            &ExternalBlock::default(),
+            &serde_json::json!({}),
+        );
         assert!(label.contains("待 web 补数"));
     }
 

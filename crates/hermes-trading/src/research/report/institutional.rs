@@ -3,7 +3,7 @@
 use crate::research::analyze::AnalyzeStockResult;
 use crate::research::report::sections::escape_html;
 use crate::research::report::sections::{
-    render_appendix, render_core_section, render_dcf_section,
+    render_appendix, render_comps_section, render_core_section, render_dcf_section,
     render_dimensions_section_with_raw_limit, render_external_section, render_flows_section,
     render_fundamentals_section, render_panel_section, render_sector_section, render_shell_start,
     render_warn_banner,
@@ -184,6 +184,7 @@ fn render_institutional_html_inner(
     ));
     html.push_str(&render_fundamentals_section(&result.content.fundamentals));
     html.push_str(&render_sector_section(&result.content.sector));
+    html.push_str(&render_comps_section(&result.comps));
     html.push_str(&render_external_section(&result.content.external));
     html.push_str(&render_flows_section(&result.content.flows_events));
     html.push_str(&render_dimensions_section_with_raw_limit(
@@ -350,7 +351,9 @@ mod tests {
             ("01 / CORE", html.contains("01 / CORE")),
             ("05 / DEEP SCAN", html.contains("05 / DEEP SCAN")),
             ("06 / VALUATION", html.contains("06 / VALUATION")),
+            ("07 / COMPS", html.contains("07 / COMPS")),
             ("DCF VALUATION", html.contains("DCF VALUATION")),
+            ("COMPS VALUATION", html.contains("COMPS VALUATION")),
             ("sens-heatmap", html.contains("sens-heatmap")),
             ("dim-card", html.contains("dim-card")),
             ("查看原始数据", html.contains("查看原始数据")),
@@ -381,6 +384,8 @@ mod tests {
         assert!(html.contains("核心结论"));
         assert!(html.contains("公司基本面"));
         assert!(html.contains("板块与同业"));
+        assert!(html.contains("07 / COMPS"));
+        assert!(html.contains("COMPS VALUATION"));
         assert!(html.contains("政策 / 宏观 / 舆情"));
         assert!(html.contains("全维深度透视"));
         assert!(html.contains("dim-card"));

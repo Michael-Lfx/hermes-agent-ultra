@@ -135,5 +135,19 @@ table.sens-heatmap td { font-weight:700; }
 .core-metric { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:.45rem .55rem; text-align:center; }
 .core-metric .k { font-size:.62rem; color:var(--muted); }
 .core-metric .v { font-size:.78rem; font-weight:700; margin-top:.1rem; }
+.comps-block { background:#fff; border:1px solid var(--line); border-radius:12px; padding:1.1rem 1.25rem; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+.comps-head { display:flex; justify-content:space-between; align-items:baseline; border-bottom:2px solid #d97706; padding-bottom:.55rem; margin-bottom:.9rem; }
+.comps-badge { background:#d97706; color:#fff; padding:.2rem .55rem; border-radius:4px; font-size:.68rem; font-weight:700; letter-spacing:.08em; }
+.comps-subtitle { margin-left:.65rem; font-size:.85rem; color:var(--muted); }
+.comps-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin-bottom:.9rem; }
+.comps-kpi .k { font-size:.68rem; color:var(--muted); }
+.comps-kpi .v { font-size:1.25rem; font-weight:800; margin-top:.1rem; }
+.comps-kpi .hint { font-size:.62rem; color:var(--muted); margin-top:.15rem; line-height:1.35; }
+.comps-sens-title { font-size:.75rem; color:var(--muted); margin:.75rem 0 .35rem; }
+table.comps-stats, table.comps-peers { font-size:.82rem; margin-bottom:.5rem; }
+table.comps-peers tr.comps-target { background:#fffbeb; }
+.comps-methodology { margin-top:.75rem; }
+.comps-methodology summary { cursor:pointer; color:#b45309; font-weight:600; font-size:.82rem; }
+.comps-methodology ol { margin:.5rem 0 0 1.25rem; color:#374151; font-size:.82rem; line-height:1.65; }
 "#
 }

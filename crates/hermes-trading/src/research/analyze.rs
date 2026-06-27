@@ -197,6 +197,8 @@ pub fn apply_external_context(
 ) {
     crate::research::report::merge_external_overlay(&mut result.content, overlay);
     crate::research::report::merge_macro_dim_from_overlay(&mut result.raw_dims, overlay);
+    crate::research::report::merge_web_dims_from_overlay(&mut result.raw_dims, overlay);
+    crate::research::report::refresh_web_dim_labels(result);
 }
 
 /// Build snapshot from quote + optional JSON fundamentals.

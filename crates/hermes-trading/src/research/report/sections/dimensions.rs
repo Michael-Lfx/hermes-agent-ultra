@@ -41,7 +41,7 @@ pub fn render_dimensions_section_with_raw_limit(
                 continue;
             }
             if is_web_only_dim(key)
-                && is_placeholder_web_dim(key, d)
+                && is_placeholder_web_dim(key, d, Some(raw_dims))
                 && external.coverage
                     != crate::research::report::content::ExternalCoverage::WebFilled
             {
@@ -109,7 +109,7 @@ fn render_dim_card(
     } else {
         dim.display_name.clone()
     };
-    let label = deep_scan_dim_label(key, dim, external);
+    let label = deep_scan_dim_label(key, dim, external, raw_dims);
     let tier = score_tier_class(dim.score);
     let dim_idx = dimension_dim_index(key);
     let stars = render_weight_stars(dim.weight);

@@ -34,6 +34,7 @@ pub fn render_chat_brief_markdown(result: &AnalyzeStockResult) -> String {
         &result.synthesis.headline,
         &result.synthesis.dcf_one_liner,
         &result.content,
+        &result.raw_dims,
         &scored,
         &panel,
         result.synthesis.panel_summary.investor_count,
@@ -49,6 +50,7 @@ fn render_chat_brief_parts(
     headline: &str,
     dcf_one_liner: &str,
     content: &crate::research::report::ReportContent,
+    raw_dims: &serde_json::Value,
     scored: &ScoreDimensionsResult,
     panel: &PanelResult,
     investor_count: u32,
@@ -128,7 +130,7 @@ fn render_chat_brief_parts(
             continue;
         }
         if crate::research::report_filter::is_web_only_dim(key)
-            && crate::research::report_filter::is_placeholder_web_dim(key, d)
+            && crate::research::report_filter::is_placeholder_web_dim(key, d, Some(raw_dims))
             && coverage != crate::research::report::content::ExternalCoverage::WebFilled
         {
             stub_count += 1;
@@ -139,7 +141,7 @@ fn render_chat_brief_parts(
             d.display_name.clone()
         };
         let badge = score_badge(d.score);
-        let label = deep_scan_dim_label(key, d, &content.external);
+        let label = deep_scan_dim_label(key, d, &content.external, raw_dims);
         out.push_str(&format!(
             "| {name} | {}/{}{} | {label} |\n",
             d.score, 10, badge,

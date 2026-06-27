@@ -32,11 +32,20 @@ pub fn render_dim_chart(key: &str, raw_dims: &Value, external: &ExternalBlock) -
         "3_macro" if external.coverage == ExternalCoverage::WebFilled => {
             chart_macro_panel(&dim_data(raw_dims, "3_macro"), external)
         }
-        "13_policy" if external.coverage == ExternalCoverage::WebFilled => {
-            chart_external_bullets("政策", &external.policy_bullets)
-        }
-        "17_sentiment" if external.coverage == ExternalCoverage::WebFilled => {
-            chart_external_bullets("舆情", &external.sentiment_bullets)
+        "13_policy" if external.coverage == ExternalCoverage::WebFilled => chart_web_dim(
+            "政策",
+            &dim_data(raw_dims, "13_policy"),
+            &external.policy_bullets,
+        ),
+        "17_sentiment" if external.coverage == ExternalCoverage::WebFilled => chart_web_dim(
+            "舆情",
+            &dim_data(raw_dims, "17_sentiment"),
+            &external.sentiment_bullets,
+        ),
+        "5_chain" | "8_materials" | "9_futures" | "11_governance" | "14_moat" | "19_contests"
+            if external.coverage == ExternalCoverage::WebFilled =>
+        {
+            chart_web_dim_by_key(key, raw_dims, external)
         }
         _ if is_web_only_dim(key) => chart_neutral_grid(key),
         _ => String::new(),
@@ -359,6 +368,40 @@ fn chart_external_bullets(title: &str, bullets: &[String]) -> String {
         })
         .collect();
     render_kpi_grid(&items)
+}
+
+fn chart_web_dim(title: &str, data: &Value, fallback: &[String]) -> String {
+    let from_raw: Vec<String> = data
+        .get("bullets")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !from_raw.is_empty() {
+        return chart_external_bullets(title, &from_raw);
+    }
+    chart_external_bullets(title, fallback)
+}
+
+fn chart_web_dim_by_key(key: &str, raw_dims: &Value, external: &ExternalBlock) -> String {
+    let (title, fallback) = match key {
+        "5_chain" => ("产业链", external.chain_bullets.as_slice()),
+        "8_materials" => ("原材料", external.materials_bullets.as_slice()),
+        "9_futures" => ("期货", external.futures_bullets.as_slice()),
+        "11_governance" => ("治理", external.governance_bullets.as_slice()),
+        "14_moat" => ("护城河", external.moat_bullets.as_slice()),
+        "19_contests" => ("实盘", external.contests_bullets.as_slice()),
+        _ => return chart_neutral_grid(key),
+    };
+    let inner = chart_web_dim(title, &dim_data(raw_dims, key), fallback);
+    if inner.is_empty() {
+        chart_neutral_grid(key)
+    } else {
+        inner
+    }
 }
 
 fn chart_neutral_grid(key: &str) -> String {

@@ -18,7 +18,8 @@ pub mod svg;
 pub use chat_brief::render_chat_brief_markdown;
 pub use content::{
     ExternalContextOverlay, ReportContent, build_report_content, merge_external_overlay,
-    merge_macro_dim_from_overlay, needs_external_web_fill,
+    merge_macro_dim_from_overlay, merge_web_dims_from_overlay, needs_external_web_fill,
+    refresh_web_dim_labels, web_dim_has_fill, web_dim_summary,
 };
 pub use disk::{WrittenReportPaths, write_equity_report};
 pub use html::render_html_report;

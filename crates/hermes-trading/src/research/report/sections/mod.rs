@@ -1,6 +1,7 @@
 //! HTML section renderers for institutional report.
 
 mod appendix;
+mod comps_block;
 mod core;
 mod dcf_block;
 mod dimensions;
@@ -13,6 +14,7 @@ mod sector;
 mod util;
 
 pub use appendix::render_appendix;
+pub use comps_block::render_comps_section;
 pub use core::render_core_section;
 pub use dcf_block::render_dcf_section;
 pub use dimensions::{render_dimensions_section, render_dimensions_section_with_raw_limit};
