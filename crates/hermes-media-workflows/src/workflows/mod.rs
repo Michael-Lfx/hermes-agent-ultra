@@ -1,5 +1,6 @@
 //! Workflow definition, templates, execution, and persistence.
 
+pub mod control;
 pub mod definition;
 pub mod executor;
 pub mod manifest;

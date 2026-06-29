@@ -1,6 +1,9 @@
 //! Flowy image generation (sync) and Seedance video task (async) APIs.
 
+use std::sync::Arc;
 use std::time::Duration;
+
+use reqwest::Method;
 
 use serde_json::{Map, Value, json};
 use tracing::debug;
@@ -89,6 +92,34 @@ impl FlowyApiClient {
         self.get_data(&path, Some(session)).await
     }
 
+    /// `DELETE {业务根}/video/generations/tasks/:id` — cancel an in-flight video task.
+    pub async fn cancel_video_task(
+        &self,
+        session: &ServerSession,
+        local_id: i64,
+    ) -> Result<(), ServerClientError> {
+        let path = format!("/video/generations/tasks/{local_id}");
+        let resp = self
+            .transport
+            .request(Method::DELETE, &path, Some(session), None)
+            .await?;
+        let status = resp.status().as_u16();
+        if status == 200 {
+            return Ok(());
+        }
+        let text = resp
+            .text()
+            .await
+            .map_err(|e| ServerClientError::Http(e.to_string()))?;
+        if let Ok(env) = FlowyEnvelope::parse_body(&text) {
+            return Err(ServerClientError::Api {
+                code: env.code,
+                msg: env.msg,
+            });
+        }
+        Err(ServerClientError::Http(format!("HTTP {status}: {text}")))
+    }
+
     /// Poll until the video task reaches a terminal status.
     pub async fn poll_video_task(
         &self,
@@ -103,6 +134,7 @@ impl FlowyApiClient {
             poll_interval_secs,
             timeout_secs,
             None,
+            None,
         )
         .await
     }
@@ -115,6 +147,7 @@ impl FlowyApiClient {
         poll_interval_secs: u64,
         timeout_secs: u64,
         mut on_progress: Option<VideoTaskProgressFn>,
+        should_cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     ) -> Result<VideoTaskRecord, ServerClientError> {
         let interval = Duration::from_secs(poll_interval_secs.max(1));
         let timeout = Duration::from_secs(timeout_secs.max(30));
@@ -123,6 +156,12 @@ impl FlowyApiClient {
         let mut last_report = std::time::Instant::now() - Duration::from_secs(60);
 
         loop {
+            if should_cancel.as_ref().is_some_and(|f| f()) {
+                let _ = self.cancel_video_task(session, local_id).await;
+                return Err(ServerClientError::InvalidResponse(format!(
+                    "video task {local_id} cancelled by client"
+                )));
+            }
             let record = self.get_video_task(session, local_id).await?;
             let elapsed = started.elapsed().as_secs();
             let status_changed = last_status != Some(record.status);
@@ -178,13 +217,38 @@ impl FlowyApiClient {
         timeout_secs: u64,
         on_progress: Option<VideoTaskProgressFn>,
     ) -> Result<VideoTaskRecord, ServerClientError> {
+        self.generate_video_with_timeout_and_progress_cancellable(
+            session,
+            body,
+            timeout_secs,
+            on_progress,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Create a Seedance video task and poll with optional progress + cancellation hooks.
+    pub async fn generate_video_with_timeout_and_progress_cancellable(
+        &self,
+        session: &ServerSession,
+        body: Value,
+        timeout_secs: u64,
+        on_progress: Option<VideoTaskProgressFn>,
+        should_cancel: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+        on_task_created: Option<Box<dyn FnMut(i64) + Send>>,
+    ) -> Result<VideoTaskRecord, ServerClientError> {
         let created: CreateVideoTaskResponse = self.create_video_task(session, body).await?;
+        if let Some(mut cb) = on_task_created {
+            cb(created.id);
+        }
         self.poll_video_task_with_progress(
             session,
             created.id,
             DEFAULT_VIDEO_POLL_INTERVAL_SECS,
             timeout_secs.max(30),
             on_progress,
+            should_cancel,
         )
         .await
     }

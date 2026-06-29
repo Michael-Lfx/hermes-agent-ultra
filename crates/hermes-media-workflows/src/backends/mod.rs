@@ -203,3 +203,4 @@ pub fn map_server_err(err: hermes_server_client::ServerClientError) -> hermes_co
 
 pub mod flowy_image;
 pub mod flowy_video;
+pub mod traits;

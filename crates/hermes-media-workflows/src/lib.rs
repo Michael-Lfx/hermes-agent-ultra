@@ -2,9 +2,12 @@
 
 pub mod assets;
 pub mod backends;
+pub mod credits;
 pub mod delivery;
 pub mod flowy_params;
 pub mod llm_refine;
+pub mod platform;
+pub mod preview;
 pub mod progress;
 pub mod prompt_guidance;
 pub mod prompt_refine;

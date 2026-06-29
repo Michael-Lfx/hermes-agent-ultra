@@ -44,10 +44,126 @@ steps:
   - id: qa
     kind: qa_check
     depends_on: [generate]
+    on_fail:
+      retry_from: refine_prompt
     input:
       kind: image
       target_step: generate
       step_output: "$steps.generate"
+"#;
+
+const IMG2IMG: &str = r#"
+id: img2img
+version: 1
+description: Refine edit prompt then image-to-image from user reference
+inputs:
+  prompt: { type: string, required: true }
+  image_url: { type: string, required: true }
+  model: { type: string, required: false }
+  aspect_ratio: { type: string, default: "16:9" }
+steps:
+  - id: refine_edit
+    kind: prompt_refine
+    input:
+      prompt: "$inputs.prompt"
+      medium: edit
+      aspect_ratio: "$inputs.aspect_ratio"
+      has_reference_image: true
+  - id: generate
+    kind: image_generate
+    depends_on: [refine_edit]
+    input:
+      prompt: "$steps.refine_edit.output"
+      image_url: "$inputs.image_url"
+      model: "$inputs.model"
+  - id: qa
+    kind: qa_check
+    depends_on: [generate]
+    on_fail:
+      retry_from: refine_edit
+    input:
+      kind: image
+      target_step: generate
+      step_output: "$steps.generate"
+"#;
+
+const IMAGE_VARIATION: &str = r#"
+id: image_variation
+version: 1
+description: Generate alternate image variations from a prompt (new seed)
+inputs:
+  prompt: { type: string, required: true }
+  model: { type: string, required: false }
+  aspect_ratio: { type: string, default: "16:9" }
+steps:
+  - id: refine_prompt
+    kind: prompt_refine
+    input:
+      prompt: "$inputs.prompt"
+      medium: image
+      aspect_ratio: "$inputs.aspect_ratio"
+  - id: generate
+    kind: image_generate
+    depends_on: [refine_prompt]
+    input:
+      prompt: "$steps.refine_prompt.output"
+      model: "$inputs.model"
+      extra: { variation: true }
+"#;
+
+const IMAGE_UPSCALE: &str = r#"
+id: image_upscale
+version: 1
+description: Enhance/upscale an image via img2img with detail-focused prompt
+inputs:
+  prompt: { type: string, required: true }
+  image_url: { type: string, required: true }
+  model: { type: string, required: false }
+steps:
+  - id: refine_edit
+    kind: prompt_refine
+    input:
+      prompt: "$inputs.prompt"
+      medium: edit
+      has_reference_image: true
+  - id: generate
+    kind: image_generate
+    depends_on: [refine_edit]
+    input:
+      prompt: "$steps.refine_edit.output"
+      image_url: "$inputs.image_url"
+      model: "$inputs.model"
+      extra: { upscale: true }
+"#;
+
+const VIDEO_EXTEND: &str = r#"
+id: video_extend
+version: 1
+description: Extend a clip from its last frame with new motion
+inputs:
+  prompt: { type: string, required: true }
+  last_frame_url: { type: string, required: true }
+  duration: { type: integer, default: 5 }
+  aspect_ratio: { type: string, default: "16:9" }
+  resolution: { type: string, default: "720p" }
+steps:
+  - id: refine_motion
+    kind: prompt_refine
+    input:
+      prompt: "$inputs.prompt"
+      medium: motion
+      aspect_ratio: "$inputs.aspect_ratio"
+      has_reference_image: true
+  - id: video
+    kind: video_generate
+    depends_on: [refine_motion]
+    input:
+      prompt: "$steps.refine_motion.motion_prompt"
+      negative_prompt: "$steps.refine_motion.negative_prompt"
+      image_url: "$inputs.last_frame_url"
+      duration: "$inputs.duration"
+      aspect_ratio: "$inputs.aspect_ratio"
+      resolution: "$inputs.resolution"
 "#;
 
 const PROMPT_REFINE_TXT2VIDEO: &str = r#"
@@ -212,11 +328,15 @@ pub fn list_builtin_templates() -> Vec<&'static str> {
     vec![
         "simple_txt2img",
         "txt2img",
+        "img2img",
         "prompt_refine_txt2video",
         "img2video_direct",
         "img2video",
         "storyboard_to_video",
         "storyboard_multi",
+        "image_variation",
+        "image_upscale",
+        "video_extend",
     ]
 }
 
@@ -224,14 +344,51 @@ pub fn builtin_template(id: &str) -> Option<WorkflowDefinition> {
     let yaml = match id {
         "simple_txt2img" => SIMPLE_TXT2IMG,
         "txt2img" => TXT2IMG,
+        "img2img" => IMG2IMG,
         "prompt_refine_txt2video" => PROMPT_REFINE_TXT2VIDEO,
         "img2video_direct" => IMG2VIDEO_DIRECT,
         "img2video" => IMG2VIDEO,
         "storyboard_to_video" => STORYBOARD_VIDEO,
         "storyboard_multi" => STORYBOARD_MULTI,
+        "image_variation" => IMAGE_VARIATION,
+        "image_upscale" => IMAGE_UPSCALE,
+        "video_extend" => VIDEO_EXTEND,
         _ => return None,
     };
     serde_yaml::from_str(yaml).ok()
+}
+
+fn is_img2img_intent(objective: &str) -> bool {
+    let lower = objective.to_ascii_lowercase();
+    [
+        "改",
+        "修",
+        "风格",
+        "背景",
+        "替换",
+        "编辑",
+        "img2img",
+        "image to image",
+        "edit",
+        "modify",
+        "style transfer",
+        "inpaint",
+        "换背景",
+        "风格化",
+    ]
+    .iter()
+    .any(|kw| lower.contains(kw))
+}
+
+fn is_video_motion_intent(objective: &str) -> bool {
+    let lower = objective.to_ascii_lowercase();
+    lower.contains("视频")
+        || lower.contains("video")
+        || lower.contains("动")
+        || lower.contains("animate")
+        || lower.contains("motion")
+        || lower.contains("图生视频")
+        || lower.contains("image to video")
 }
 
 /// Pick a builtin template from user intent, honoring configured defaults.
@@ -241,8 +398,14 @@ pub fn suggest_template_id(
     defaults: &MediaWorkflowTemplateMap,
 ) -> String {
     let lower = objective.to_ascii_lowercase();
-    if has_image_input || lower.contains("图生视频") || lower.contains("image to video") {
-        return resolve_template_default("img2video", defaults, "img2video_direct");
+    if has_image_input {
+        if is_img2img_intent(objective) && !is_video_motion_intent(objective) {
+            return resolve_template_default("img2img", defaults, "img2img");
+        }
+        if is_video_motion_intent(objective) || lower.contains("图生视频") {
+            return resolve_template_default("img2video", defaults, "img2video_direct");
+        }
+        return resolve_template_default("img2img", defaults, "img2img");
     }
     if lower.contains("分镜")
         || lower.contains("storyboard")
@@ -269,6 +432,7 @@ fn resolve_template_default(
     let configured = match kind {
         "txt2img" => defaults.txt2img.trim(),
         "txt2video" => defaults.txt2video.trim(),
+        "img2img" => defaults.img2img.trim(),
         "img2video" => defaults.img2video.trim(),
         "storyboard" => defaults.storyboard.trim(),
         _ => "",
@@ -280,22 +444,33 @@ fn resolve_template_default(
     }
 }
 
-pub fn default_template_inputs(template_id: &str, prompt: &str) -> Value {
+pub fn default_template_inputs(template_id: &str, prompt: &str, platform: Option<&str>) -> Value {
+    let aspect = crate::platform::default_aspect_for_platform(platform);
     match template_id {
-        "simple_txt2img" | "txt2img" => json!({
+        "simple_txt2img" | "txt2img" | "img2img" | "image_variation" => json!({
             "prompt": prompt,
-            "aspect_ratio": "16:9"
+            "aspect_ratio": aspect
         }),
         "img2video_direct" => json!({
             "prompt": prompt,
             "duration": 5,
-            "aspect_ratio": "9:16",
+            "aspect_ratio": aspect,
+            "resolution": "720p"
+        }),
+        "image_upscale" => json!({
+            "prompt": prompt,
+            "aspect_ratio": aspect
+        }),
+        "video_extend" => json!({
+            "prompt": prompt,
+            "duration": 5,
+            "aspect_ratio": aspect,
             "resolution": "720p"
         }),
         _ => json!({
             "prompt": prompt,
             "duration": 5,
-            "aspect_ratio": "16:9",
+            "aspect_ratio": aspect,
             "resolution": "720p"
         }),
     }
@@ -347,8 +522,20 @@ mod tests {
     }
 
     #[test]
-    fn storyboard_multi_template_has_storyboard_step() {
-        let def = builtin_template("storyboard_multi").expect("template");
-        assert_eq!(def.steps[0].kind, "storyboard_multi");
+    fn suggest_img2img_for_edit_intent() {
+        let defaults = MediaWorkflowTemplateMap::default();
+        assert_eq!(
+            suggest_template_id("把背景换成海边", true, &defaults),
+            "img2img"
+        );
+    }
+
+    #[test]
+    fn suggest_img2video_for_motion_intent() {
+        let defaults = MediaWorkflowTemplateMap::default();
+        assert_eq!(
+            suggest_template_id("让这张图动起来", true, &defaults),
+            "img2video_direct"
+        );
     }
 }

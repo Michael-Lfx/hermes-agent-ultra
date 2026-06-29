@@ -4,7 +4,7 @@
 #[derive(Debug, Clone)]
 pub struct RefineInput<'a> {
     pub prompt: &'a str,
-    /// `image`, `video`, or `motion` (image-to-video motion-only).
+    /// `image`, `video`, `motion` (image-to-video motion-only), or `edit` (img2img).
     pub medium: &'a str,
     pub aspect_ratio: Option<&'a str>,
     pub has_reference_image: bool,
@@ -29,7 +29,34 @@ pub fn refine_prompt(input: &RefineInput<'_>) -> RefineResult {
     match input.medium {
         "motion" | "video_motion" => refine_motion_only(base, chinese),
         "video" => refine_video(base, chinese, input.has_reference_image, input.aspect_ratio),
+        "edit" => refine_edit(base, chinese, input.aspect_ratio),
         _ => refine_image(base, chinese, input.aspect_ratio),
+    }
+}
+
+fn refine_edit(prompt: &str, chinese: bool, aspect_ratio: Option<&str>) -> RefineResult {
+    let composition = composition_hint(aspect_ratio, chinese);
+    let enriched = enrich_scene_detail(prompt, chinese);
+    let edit_prompt = if chinese {
+        format!(
+            "{enriched}，{composition}，保留参考图主体结构与构图，仅按描述修改指定区域或整体风格，细节清晰，无变形"
+        )
+    } else {
+        format!(
+            "{enriched}, {composition}, preserve subject structure from reference while applying the described edit only, sharp detail, no distortion"
+        )
+    };
+    let negative = if chinese {
+        "模糊，低清晰度，变形，水印，文字，噪点，主体漂移，构图大幅改变".to_string()
+    } else {
+        "blurry, low resolution, distorted, watermark, text overlay, subject drift, major composition change".to_string()
+    };
+    RefineResult {
+        output: edit_prompt.clone(),
+        image_prompt: edit_prompt,
+        video_prompt: String::new(),
+        motion_prompt: String::new(),
+        negative_prompt: negative,
     }
 }
 

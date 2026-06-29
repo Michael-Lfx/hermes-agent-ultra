@@ -42,7 +42,7 @@ impl ToolHandler for MediaWorkflowRunHandler {
             let def = builtin_template(workflow_id).ok_or_else(|| {
                 ToolError::InvalidParams(format!("unknown workflow_id: {workflow_id}"))
             })?;
-            let inputs = default_template_inputs(workflow_id, prompt);
+            let inputs = default_template_inputs(workflow_id, prompt, None);
             WorkflowPlan::from_definition(&def, inputs)
         };
 

@@ -47,6 +47,7 @@ pub const TOOLSET_MEDIA_WORKFLOW: &[&str] = &[
     "media_workflow_plan",
     "media_workflow_run",
     "media_workflow_status",
+    "media_workflow_cancel",
 ];
 /// Creative bundle: generation + vision + workflows.
 pub const TOOLSET_CREATIVE: &[&str] = &[
@@ -57,6 +58,7 @@ pub const TOOLSET_CREATIVE: &[&str] = &[
     "media_workflow_plan",
     "media_workflow_run",
     "media_workflow_status",
+    "media_workflow_cancel",
 ];
 /// Spotify Web API tools.
 pub const TOOLSET_SPOTIFY: &[&str] = &[
@@ -387,6 +389,7 @@ impl ToolsetManager {
                 "vision",
                 "image_gen",
                 "video_gen",
+                "media_workflow",
                 "spotify",
                 "skills",
                 "memory",
