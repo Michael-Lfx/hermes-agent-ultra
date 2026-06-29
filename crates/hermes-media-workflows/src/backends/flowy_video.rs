@@ -16,6 +16,7 @@ use crate::assets::persist_from_url;
 use crate::delivery::{MediaProvenance, VideoTaskMeta, video_generation_response};
 use crate::flowy_params::{normalize_video_duration, normalize_video_resolution};
 use crate::progress::{report_media_progress, video_generate_started};
+use crate::workflows::control::WorkflowRunControl;
 
 pub struct FlowyVideoGenBackend {
     services: FlowyMediaServices,
@@ -29,11 +30,32 @@ impl FlowyVideoGenBackend {
     pub async fn is_configured(services: &FlowyMediaServices) -> bool {
         services.is_authenticated().await
     }
+
+    /// Workflow-aware generation with optional cancellation hooks.
+    pub async fn generate_for_workflow(
+        &self,
+        request: VideoGenerateRequest,
+        run_id: Option<&str>,
+        control: Option<&WorkflowRunControl>,
+    ) -> Result<String, ToolError> {
+        self.generate_video_inner(request, run_id, control).await
+    }
 }
 
 #[async_trait]
 impl VideoGenerateBackend for FlowyVideoGenBackend {
     async fn generate_video(&self, request: VideoGenerateRequest) -> Result<String, ToolError> {
+        self.generate_video_inner(request, None, None).await
+    }
+}
+
+impl FlowyVideoGenBackend {
+    async fn generate_video_inner(
+        &self,
+        request: VideoGenerateRequest,
+        run_id: Option<&str>,
+        control: Option<&WorkflowRunControl>,
+    ) -> Result<String, ToolError> {
         self.services.require_token().await?;
 
         let model = self
@@ -115,10 +137,25 @@ impl VideoGenerateBackend for FlowyVideoGenBackend {
         report_media_progress(video_generate_started(has_image, duration_for_credits));
 
         let poll_timeout = self.services.media.video.poll_timeout_seconds.max(30);
+        let cancel_ctx = match (run_id, control) {
+            (Some(id), Some(ctl)) => Some((id.to_string(), ctl.clone())),
+            _ => None,
+        };
+        let should_cancel = cancel_ctx.as_ref().map(|(id, ctl)| {
+            let id = id.clone();
+            let ctl = ctl.clone();
+            std::sync::Arc::new(move || ctl.is_cancelled(&id))
+                as std::sync::Arc<dyn Fn() -> bool + Send + Sync>
+        });
+        let on_task_created = cancel_ctx.map(|(id, ctl)| {
+            Box::new(move |local_id: i64| {
+                ctl.set_active_video_task(&id, local_id);
+            }) as Box<dyn FnMut(i64) + Send>
+        });
         let record = self
             .services
             .api
-            .generate_video_with_timeout_and_progress(
+            .generate_video_with_timeout_and_progress_cancellable(
                 &self.services.session,
                 body,
                 poll_timeout,
@@ -130,9 +167,15 @@ impl VideoGenerateBackend for FlowyVideoGenBackend {
                         ));
                     },
                 )),
+                should_cancel,
+                on_task_created,
             )
             .await
             .map_err(map_server_err)?;
+
+        if let (Some(id), Some(ctl)) = (run_id, control) {
+            ctl.clear_active_video_task(id);
+        }
 
         if record.is_success() {
             report_media_progress("视频已生成，正在保存到本地…");

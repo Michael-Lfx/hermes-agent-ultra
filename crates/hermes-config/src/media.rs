@@ -112,6 +112,14 @@ pub struct MediaWorkflowSettings {
     #[serde(default = "default_storyboard_max_shots")]
     pub storyboard_max_shots: u32,
 
+    /// When true, `media_workflow_plan` returns refined prompt preview; run only after user confirms.
+    #[serde(default)]
+    pub confirm_before_run: bool,
+
+    /// Active generation backend for workflow steps (`flowy` or `comfyui` stub).
+    #[serde(default = "default_media_backend")]
+    pub backend: String,
+
     #[serde(default)]
     pub default_templates: MediaWorkflowTemplateMap,
 }
@@ -127,6 +135,8 @@ impl Default for MediaWorkflowSettings {
             image_min_credits: default_image_min_credits(),
             video_credits_per_second: default_video_credits_per_second(),
             storyboard_max_shots: default_storyboard_max_shots(),
+            confirm_before_run: false,
+            backend: default_media_backend(),
             default_templates: MediaWorkflowTemplateMap::default(),
         }
     }
@@ -139,6 +149,9 @@ pub struct MediaWorkflowTemplateMap {
 
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub txt2video: String,
+
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub img2img: String,
 
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub img2video: String,
@@ -168,7 +181,11 @@ fn default_video_poll_timeout() -> u64 {
 }
 
 fn default_workflow_max_retries() -> u32 {
-    1
+    3
+}
+
+fn default_media_backend() -> String {
+    "flowy".to_string()
 }
 
 fn default_image_min_credits() -> u64 {
@@ -204,6 +221,12 @@ pub fn flowy_media_exposed_from_disk() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_max_retries_is_three() {
+        let cfg = MediaGenConfig::default();
+        assert_eq!(cfg.workflows.max_retries, 3);
+    }
 
     #[test]
     fn media_gen_defaults() {

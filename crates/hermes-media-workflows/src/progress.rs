@@ -5,10 +5,107 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use hermes_core::tool_progress::report_tool_progress;
+use serde::{Deserialize, Serialize};
 use tokio::task::JoinHandle;
+
+/// Structured progress payload for gateway/UI consumers (also rendered as human text).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaProgressEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    pub step_no: usize,
+    pub step_total: usize,
+    pub phase: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artifact_preview: Option<String>,
+}
+
+impl MediaProgressEvent {
+    pub fn display_line(&self) -> String {
+        let bar = self
+            .pct
+            .map(|p| format!(" [{}]", progress_bar(p)))
+            .unwrap_or_default();
+        if let Some(path) = &self.artifact_preview {
+            format!("{}{} · 预览 MEDIA:{path}", self.message, bar)
+        } else {
+            format!("{}{}", self.message, bar)
+        }
+    }
+}
+
+fn progress_bar(pct: u8) -> String {
+    let filled = (pct as usize).min(100) / 10;
+    format!(
+        "{}{} {pct}%",
+        "█".repeat(filled),
+        "░".repeat(10usize.saturating_sub(filled))
+    )
+}
 
 pub fn report_media_progress(message: impl Into<String>) {
     report_tool_progress(message);
+}
+
+pub fn report_structured_media_progress(event: &MediaProgressEvent) {
+    report_tool_progress(event.display_line());
+}
+
+/// Inputs for structured workflow step progress reporting.
+pub struct WorkflowStepProgress<'a> {
+    pub run_id: &'a str,
+    pub workflow_id: &'a str,
+    pub step_no: usize,
+    pub step_total: usize,
+    pub phase: &'a str,
+    pub message: String,
+    pub pct: Option<u8>,
+    pub artifact_preview: Option<String>,
+}
+
+pub fn report_workflow_step_event(event: WorkflowStepProgress<'_>) {
+    let payload = MediaProgressEvent {
+        run_id: Some(event.run_id.to_string()),
+        workflow_id: Some(event.workflow_id.to_string()),
+        step_no: event.step_no,
+        step_total: event.step_total,
+        phase: event.phase.to_string(),
+        message: event.message,
+        pct: event.pct,
+        artifact_preview: event.artifact_preview,
+    };
+    report_structured_media_progress(&payload);
+}
+
+pub fn report_intermediate_artifact(
+    run_id: &str,
+    workflow_id: &str,
+    step_no: usize,
+    step_total: usize,
+    kind: &str,
+    local_path: &str,
+) {
+    let label = match kind {
+        "keyframe" | "image" => "关键帧已生成",
+        "video" => "视频片段已生成",
+        _ => "中间产物已就绪",
+    };
+    let pct = ((step_no * 100) / step_total.max(1)).min(99) as u8;
+    report_workflow_step_event(WorkflowStepProgress {
+        run_id,
+        workflow_id,
+        step_no,
+        step_total,
+        phase: "artifact",
+        message: label.to_string(),
+        pct: Some(pct),
+        artifact_preview: Some(local_path.to_string()),
+    });
 }
 
 /// Periodic progress while a long-running media operation blocks.
@@ -63,6 +160,7 @@ pub fn workflow_step_progress(
             let what = match medium {
                 Some("video") => "视频场景与运动描述",
                 Some("motion") => "图生视频运动描述",
+                Some("edit") => "图片编辑描述",
                 _ => "图片描述",
             };
             format!("{prefix}：正在用 AI 优化{what}（{step_id}）")
@@ -92,6 +190,7 @@ pub fn prompt_refine_working(medium: &str) -> &'static str {
     match medium {
         "video" => "正在用 AI 细化视频画面与镜头运动…",
         "motion" => "正在用 AI 细化图生视频的运动描述…",
+        "edit" => "正在用 AI 细化图片编辑与修改描述…",
         _ => "正在用 AI 细化图片描述与画面细节…",
     }
 }

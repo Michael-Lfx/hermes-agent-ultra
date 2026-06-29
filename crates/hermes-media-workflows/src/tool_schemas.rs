@@ -181,11 +181,47 @@ pub fn media_workflow_plan_schema() -> ToolSchema {
     );
     props.insert(
         "aspect_ratio".into(),
-        json!({"type": "string", "description": "16:9 or 9:16", "default": "16:9"}),
+        json!({"type": "string", "description": "16:9 or 9:16 (defaults from platform when set)", "default": "16:9"}),
+    );
+    props.insert(
+        "platform".into(),
+        json!({
+            "type": "string",
+            "description": "Chat platform hint (wecom, telegram, discord) for default aspect ratio."
+        }),
+    );
+    props.insert(
+        "preview".into(),
+        json!({
+            "type": "boolean",
+            "description": "When true, return refined prompt preview without running generation. Defaults to media.workflows.confirm_before_run."
+        }),
+    );
+    props.insert(
+        "preview_only".into(),
+        json!({
+            "type": "boolean",
+            "description": "For storyboard_multi — plan shots only, no render."
+        }),
+    );
+    props.insert(
+        "shots_to_render".into(),
+        json!({
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": "For storyboard_multi — render only these shot numbers (1-based)."
+        }),
+    );
+    props.insert(
+        "last_frame_url".into(),
+        json!({
+            "type": "string",
+            "description": "Last frame URL for video_extend post-action workflow."
+        }),
     );
     tool_schema(
         "media_workflow_plan",
-        "Plan a multi-step image/video workflow with automatic prompt refinement.",
+        "Plan a multi-step image/video workflow with automatic prompt refinement, credit estimate, and optional prompt preview.",
         JsonSchema::object(props, vec!["objective".into()]),
     )
 }

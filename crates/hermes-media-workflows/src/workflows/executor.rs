@@ -4,27 +4,29 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use hermes_core::{ToolError, ToolHandler};
-use hermes_tools::{
-    ImageGenBackend, ImageGenerateHandler, VideoGenerateBackend, VideoGenerateHandler,
-};
+use hermes_core::ToolError;
 
+use super::control::WorkflowRunControl;
 use super::definition::{WorkflowDefinition, WorkflowPlan, WorkflowStep};
 use super::store::{WorkflowRunRecord, WorkflowRunStatus, WorkflowRunStore};
 use crate::backends::FlowyMediaServices;
+use crate::backends::flowy_video::FlowyVideoGenBackend;
+use crate::backends::traits::{FlowyMediaBackend, MediaGenerationBackend, MediaImageRequest};
 use crate::llm_refine::{plan_storyboard, refine_with_llm_or_template};
 use crate::progress::{
-    prompt_refine_working, report_media_progress, storyboard_planning, storyboard_shot_image,
-    storyboard_shot_video, workflow_started, workflow_step_progress,
+    prompt_refine_working, report_intermediate_artifact, report_media_progress,
+    report_workflow_step_event, storyboard_planning, storyboard_shot_image, storyboard_shot_video,
+    workflow_started, workflow_step_progress, WorkflowStepProgress,
 };
 use crate::prompt_refine::RefineInput;
 use crate::qa::{qa_check_image, qa_check_video};
 
 pub struct WorkflowExecutor {
-    services: FlowyMediaServices,
-    image_backend: Arc<dyn ImageGenBackend>,
-    video_backend: Arc<dyn VideoGenerateBackend>,
+    pub(crate) services: FlowyMediaServices,
+    media_backend: Arc<dyn MediaGenerationBackend>,
+    flowy_video: Arc<FlowyVideoGenBackend>,
     store: Arc<WorkflowRunStore>,
+    control: WorkflowRunControl,
     max_retries: u32,
 }
 
@@ -32,21 +34,29 @@ impl WorkflowExecutor {
     pub fn new(
         services: FlowyMediaServices,
         store: Arc<WorkflowRunStore>,
+        control: WorkflowRunControl,
         max_retries: u32,
     ) -> Self {
         let image_backend = Arc::new(crate::backends::flowy_image::FlowyImageGenBackend::new(
             services.clone(),
         ));
-        let video_backend = Arc::new(crate::backends::flowy_video::FlowyVideoGenBackend::new(
-            services.clone(),
+        let flowy_video = Arc::new(FlowyVideoGenBackend::new(services.clone()));
+        let media_backend = Arc::new(FlowyMediaBackend::new(
+            image_backend,
+            video_backend_trait(Arc::clone(&flowy_video)),
         ));
         Self {
             services,
-            image_backend,
-            video_backend,
+            media_backend,
+            flowy_video,
             store,
+            control,
             max_retries: max_retries.clamp(1, 5),
         }
+    }
+
+    pub fn control(&self) -> &WorkflowRunControl {
+        &self.control
     }
 
     pub async fn run_plan(&self, plan: &WorkflowPlan) -> Result<WorkflowRunRecord, ToolError> {
@@ -91,11 +101,24 @@ impl WorkflowExecutor {
         let mut ctx: HashMap<String, Value> = HashMap::new();
         ctx.insert("inputs".into(), def.inputs.clone());
 
-        for (step_idx, step_id) in order.iter().enumerate() {
+        let mut step_idx = 0usize;
+        let mut workflow_retries = 0u32;
+        const MAX_WORKFLOW_RESTARTS: u32 = 2;
+
+        while step_idx < order.len() {
+            if self.control.is_cancelled(run_id) {
+                record.status = WorkflowRunStatus::Cancelled;
+                record.error = Some("workflow cancelled by user".into());
+                record.current_step = None;
+                self.store.save(&record);
+                return Err(ToolError::ExecutionFailed("workflow cancelled".into()));
+            }
+
+            let step_id = order[step_idx].clone();
             let step = def
                 .steps
                 .iter()
-                .find(|s| s.id == *step_id)
+                .find(|s| s.id == step_id)
                 .ok_or_else(|| ToolError::ExecutionFailed(format!("missing step {step_id}")))?;
 
             record.current_step = Some(step_id.clone());
@@ -103,18 +126,54 @@ impl WorkflowExecutor {
 
             let resolved_input = resolve_value(&step.input, &ctx);
             let medium = resolved_input.get("medium").and_then(|v| v.as_str());
-            report_media_progress(workflow_step_progress(
-                &def.id,
-                step_idx + 1,
+            let pct = Some(((step_idx + 1) * 100 / step_total.max(1)).min(99) as u8);
+            report_workflow_step_event(WorkflowStepProgress {
+                run_id,
+                workflow_id: &def.id,
+                step_no: step_idx + 1,
                 step_total,
-                &step.kind,
-                step_id,
-                medium,
-            ));
+                phase: &step.kind,
+                message: workflow_step_progress(
+                    &def.id,
+                    step_idx + 1,
+                    step_total,
+                    &step.kind,
+                    &step_id,
+                    medium,
+                ),
+                pct,
+                artifact_preview: None,
+            });
 
-            let output = match self.run_step_with_retry(step, &resolved_input).await {
+            let output = match self
+                .run_step_with_retry(
+                    run_id,
+                    &def.id,
+                    step_idx + 1,
+                    step_total,
+                    step,
+                    &resolved_input,
+                )
+                .await
+            {
                 Ok(output) => output,
                 Err(err) => {
+                    if let Some(retry_from) =
+                        step.on_fail.as_ref().and_then(|a| a.retry_from.clone())
+                        && let Some(restart_idx) = order.iter().position(|s| s == &retry_from)
+                        && workflow_retries < MAX_WORKFLOW_RESTARTS
+                    {
+                        workflow_retries += 1;
+                        tracing::warn!(
+                            step = %step_id,
+                            retry_from = %retry_from,
+                            attempt = workflow_retries,
+                            "workflow restarting from earlier step after failure"
+                        );
+                        clear_outputs_from(&mut ctx, &mut record, &order, restart_idx);
+                        step_idx = restart_idx;
+                        continue;
+                    }
                     record.status = WorkflowRunStatus::Failed;
                     record.error = Some(err.to_string());
                     record.current_step = None;
@@ -123,9 +182,28 @@ impl WorkflowExecutor {
                 }
             };
 
+            if step.kind == "image_generate"
+                && let Some(path) = local_path_from_step_output(&output)
+            {
+                let kind = if step_id.contains("keyframe") {
+                    "keyframe"
+                } else {
+                    "image"
+                };
+                report_intermediate_artifact(
+                    run_id,
+                    &def.id,
+                    step_idx + 1,
+                    step_total,
+                    kind,
+                    &path,
+                );
+            }
+
             ctx.insert(format!("steps.{step_id}"), output.clone());
             record.step_outputs.insert(step_id.clone(), output);
             self.store.save(&record);
+            step_idx += 1;
         }
 
         record.status = WorkflowRunStatus::Succeeded;
@@ -137,12 +215,22 @@ impl WorkflowExecutor {
 
     async fn run_step_with_retry(
         &self,
+        run_id: &str,
+        workflow_id: &str,
+        step_no: usize,
+        step_total: usize,
         step: &WorkflowStep,
         input: &Value,
     ) -> Result<Value, ToolError> {
         let mut last_err = None;
         for attempt in 0..self.max_retries {
-            match self.run_step(step, input).await {
+            if self.control.is_cancelled(run_id) {
+                return Err(ToolError::ExecutionFailed("workflow cancelled".into()));
+            }
+            match self
+                .run_step(run_id, workflow_id, step_no, step_total, step, input)
+                .await
+            {
                 Ok(v) => return Ok(v),
                 Err(err) => {
                     let retryable = is_retryable_error(&err);
@@ -166,12 +254,23 @@ impl WorkflowExecutor {
         }))
     }
 
-    async fn run_step(&self, step: &WorkflowStep, input: &Value) -> Result<Value, ToolError> {
+    async fn run_step(
+        &self,
+        run_id: &str,
+        workflow_id: &str,
+        step_no: usize,
+        step_total: usize,
+        step: &WorkflowStep,
+        input: &Value,
+    ) -> Result<Value, ToolError> {
         match step.kind.as_str() {
             "image_generate" => self.run_image_step(input).await,
-            "video_generate" => self.run_video_step(input).await,
+            "video_generate" => self.run_video_step(run_id, input).await,
             "prompt_refine" => self.run_prompt_refine(input).await,
-            "storyboard_multi" => self.run_storyboard_multi(input).await,
+            "storyboard_multi" => {
+                self.run_storyboard_multi(run_id, workflow_id, step_no, step_total, input)
+                    .await
+            }
             "qa_check" => self.run_qa_check(input).await,
             other => Err(ToolError::ExecutionFailed(format!(
                 "unsupported workflow step kind: {other}"
@@ -184,18 +283,20 @@ impl WorkflowExecutor {
             .get("prompt")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError::InvalidParams("image step missing prompt".into()))?;
-        let handler = ImageGenerateHandler::new(self.image_backend.clone());
-        let mut body = json!({
-            "prompt": prompt,
-            "model": input.get("model"),
-            "image_url": input.get("image_url"),
-            "size": input.get("size"),
-            "n": input.get("n"),
-        });
-        if let Some(extra) = input.get("extra") {
-            body["extra"] = extra.clone();
-        }
-        let raw = handler.execute(body).await?;
+        let raw = self
+            .media_backend
+            .generate_image(MediaImageRequest {
+                prompt: prompt.to_string(),
+                model: input
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                image_url: input
+                    .get("image_url")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            })
+            .await?;
         let parsed: Value = serde_json::from_str(&raw)
             .map_err(|e| ToolError::ExecutionFailed(format!("image step JSON: {e}")))?;
         let best_url = parsed
@@ -221,7 +322,9 @@ impl WorkflowExecutor {
         }))
     }
 
-    async fn run_video_step(&self, input: &Value) -> Result<Value, ToolError> {
+    async fn run_video_step(&self, run_id: &str, input: &Value) -> Result<Value, ToolError> {
+        use hermes_tools::tools::video::VideoGenerateRequest;
+
         let prompt = input
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -236,29 +339,56 @@ impl WorkflowExecutor {
             })
             .unwrap_or_default();
 
-        let handler = VideoGenerateHandler::new(self.video_backend.clone());
-        let raw = handler
-            .execute(json!({
-                "prompt": prompt,
-                "model": input.get("model"),
-                "image_url": input.get("image_url"),
-                "reference_image_urls": reference_image_urls,
-                "duration": input.get("duration"),
-                "aspect_ratio": input
-                    .get("aspect_ratio")
-                    .cloned()
-                    .unwrap_or(json!("16:9")),
-                "resolution": input
-                    .get("resolution")
-                    .cloned()
-                    .unwrap_or(json!("720p")),
-                "negative_prompt": input.get("negative_prompt"),
-                "seed": input.get("seed"),
-                "last_frame_url": input.get("last_frame_url"),
-                "reference_video_url": input.get("reference_video_url"),
-                "reference_audio_url": input.get("reference_audio_url"),
-                "generate_audio": input.get("generate_audio"),
-            }))
+        let request = VideoGenerateRequest {
+            prompt: prompt.to_string(),
+            model: input
+                .get("model")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            model_explicit: input.get("model").is_some(),
+            image_url: input
+                .get("image_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            reference_image_urls,
+            duration: input
+                .get("duration")
+                .and_then(|v| v.as_u64())
+                .map(|d| d as u32),
+            aspect_ratio: input
+                .get("aspect_ratio")
+                .and_then(|v| v.as_str())
+                .unwrap_or("16:9")
+                .to_string(),
+            resolution: input
+                .get("resolution")
+                .and_then(|v| v.as_str())
+                .unwrap_or("720p")
+                .to_string(),
+            negative_prompt: input
+                .get("negative_prompt")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            seed: input.get("seed").and_then(|v| v.as_i64()),
+            last_frame_url: input
+                .get("last_frame_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            reference_video_url: input
+                .get("reference_video_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            reference_audio_url: input
+                .get("reference_audio_url")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            generate_audio: input.get("generate_audio").and_then(|v| v.as_bool()),
+            audio: None,
+        };
+
+        let raw = self
+            .flowy_video
+            .generate_for_workflow(request, Some(run_id), Some(&self.control))
             .await?;
         let parsed: Value = serde_json::from_str(&raw)
             .map_err(|e| ToolError::ExecutionFailed(format!("video step JSON: {e}")))?;
@@ -313,7 +443,14 @@ impl WorkflowExecutor {
         }))
     }
 
-    async fn run_storyboard_multi(&self, input: &Value) -> Result<Value, ToolError> {
+    async fn run_storyboard_multi(
+        &self,
+        run_id: &str,
+        workflow_id: &str,
+        step_no: usize,
+        step_total: usize,
+        input: &Value,
+    ) -> Result<Value, ToolError> {
         let prompt = input
             .get("prompt")
             .and_then(|v| v.as_str())
@@ -332,62 +469,168 @@ impl WorkflowExecutor {
             .map(|n| n as u32)
             .unwrap_or(self.services.media.workflows.storyboard_max_shots)
             .clamp(1, 5);
+        let preview_only = input
+            .get("preview_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let shots_to_render: Vec<usize> = input
+            .get("shots_to_render")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_u64().map(|n| n as usize))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let plan = {
             report_media_progress(storyboard_planning());
             plan_storyboard(&self.services, prompt, max_shots).await
         };
+
+        let storyboard_preview: Vec<Value> = plan
+            .shots
+            .iter()
+            .enumerate()
+            .map(|(idx, shot)| {
+                json!({
+                    "shot": idx + 1,
+                    "scene_prompt": shot.scene_prompt,
+                    "motion_prompt": shot.motion_prompt,
+                    "duration_secs": shot.duration_secs,
+                })
+            })
+            .collect();
+
+        report_workflow_step_event(WorkflowStepProgress {
+            run_id,
+            workflow_id,
+            step_no,
+            step_total,
+            phase: "storyboard_preview",
+            message: format!("分镜规划完成，共 {} 个镜头", plan.shots.len()),
+            pct: Some(10),
+            artifact_preview: None,
+        });
+
+        if preview_only {
+            return Ok(json!({
+                "preview_only": true,
+                "storyboard_preview": storyboard_preview,
+                "negative_prompt": plan.negative_prompt,
+                "hint": "Show storyboard_preview to the user; call media_workflow_run with shots_to_render when confirmed."
+            }));
+        }
+
         let shot_total = plan.shots.len();
         let mut shot_outputs = Vec::new();
         let mut artifacts = Vec::new();
 
         for (idx, shot) in plan.shots.iter().enumerate() {
             let shot_no = idx + 1;
-            report_media_progress(storyboard_shot_image(shot_no, shot_total));
-            let image_out = self
-                .run_image_step(&json!({
-                    "prompt": shot.scene_prompt,
-                }))
-                .await?;
-            let best_url = image_out.get("best_url").cloned().unwrap_or(Value::Null);
-            report_media_progress(storyboard_shot_video(
-                shot_no,
-                shot_total,
-                shot.duration_secs,
-            ));
-            let video_out = self
-                .run_video_step(&json!({
-                    "prompt": shot.motion_prompt,
-                    "image_url": best_url,
-                    "duration": shot.duration_secs,
-                    "aspect_ratio": aspect_ratio,
-                    "resolution": resolution,
-                    "negative_prompt": plan.negative_prompt,
-                }))
-                .await?;
-            if let Some(path) = video_out
-                .pointer("/raw/assets/0/local_path")
-                .or_else(|| video_out.get("local_path"))
-                .and_then(|p| p.as_str())
-            {
-                artifacts.push(json!({
-                    "shot": idx + 1,
-                    "local_path": path,
-                    "kind": "video",
-                }));
+            if !shots_to_render.is_empty() && !shots_to_render.contains(&shot_no) {
+                continue;
             }
-            shot_outputs.push(json!({
-                "shot": idx + 1,
-                "image": image_out,
-                "video": video_out,
-            }));
+
+            let mut shot_err = None;
+            for attempt in 0..self.max_retries {
+                if self.control.is_cancelled(run_id) {
+                    return Err(ToolError::ExecutionFailed("workflow cancelled".into()));
+                }
+                report_media_progress(storyboard_shot_image(shot_no, shot_total));
+                match self
+                    .run_image_step(&json!({
+                        "prompt": shot.scene_prompt,
+                    }))
+                    .await
+                {
+                    Ok(image_out) => {
+                        if let Some(path) = local_path_from_step_output(&image_out) {
+                            report_intermediate_artifact(
+                                run_id,
+                                workflow_id,
+                                step_no,
+                                step_total,
+                                "keyframe",
+                                &path,
+                            );
+                        }
+                        report_media_progress(storyboard_shot_video(
+                            shot_no,
+                            shot_total,
+                            shot.duration_secs,
+                        ));
+                        match self
+                            .run_video_step(
+                                run_id,
+                                &json!({
+                                    "prompt": shot.motion_prompt,
+                                    "image_url": image_out.get("best_url"),
+                                    "duration": shot.duration_secs,
+                                    "aspect_ratio": aspect_ratio,
+                                    "resolution": resolution,
+                                    "negative_prompt": plan.negative_prompt,
+                                }),
+                            )
+                            .await
+                        {
+                            Ok(video_out) => {
+                                if let Some(path) = local_path_from_step_output(&video_out) {
+                                    artifacts.push(json!({
+                                        "shot": shot_no,
+                                        "local_path": path,
+                                        "kind": "video",
+                                    }));
+                                }
+                                shot_outputs.push(json!({
+                                    "shot": shot_no,
+                                    "image": image_out,
+                                    "video": video_out,
+                                }));
+                                shot_err = None;
+                                break;
+                            }
+                            Err(err) => {
+                                shot_err = Some(err);
+                                if attempt + 1 < self.max_retries {
+                                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                                        2_u64.pow(attempt),
+                                    ))
+                                    .await;
+                                }
+                            }
+                        }
+                        if shot_err.is_none() {
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        shot_err = Some(err);
+                        if attempt + 1 < self.max_retries {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(
+                                2_u64.pow(attempt),
+                            ))
+                            .await;
+                        }
+                    }
+                }
+            }
+            if let Some(err) = shot_err {
+                return Err(err);
+            }
         }
 
         Ok(json!({
             "output": shot_outputs,
             "shots": shot_outputs,
+            "storyboard_preview": storyboard_preview,
             "artifacts": artifacts,
             "negative_prompt": plan.negative_prompt,
+            "suggested_next_actions": [
+                "image_variation — alternate keyframe takes",
+                "video_extend — continue from last frame",
+                "storyboard_multi with shots_to_render — re-render selected shots only"
+            ],
         }))
     }
 
@@ -445,6 +688,12 @@ impl WorkflowExecutor {
     }
 }
 
+fn video_backend_trait(
+    v: Arc<FlowyVideoGenBackend>,
+) -> Arc<dyn hermes_tools::VideoGenerateBackend> {
+    v
+}
+
 fn is_retryable_error(err: &ToolError) -> bool {
     let msg = err.to_string().to_ascii_lowercase();
     msg.contains("timeout")
@@ -454,6 +703,28 @@ fn is_retryable_error(err: &ToolError) -> bool {
         || msg.contains("503")
         || msg.contains("504")
         || msg.contains("temporarily")
+        || msg.contains("qa failed")
+}
+
+fn local_path_from_step_output(output: &Value) -> Option<String> {
+    output
+        .pointer("/raw/assets/0/local_path")
+        .or_else(|| output.pointer("/assets/0/local_path"))
+        .or_else(|| output.get("local_path"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+}
+
+fn clear_outputs_from(
+    ctx: &mut HashMap<String, Value>,
+    record: &mut WorkflowRunRecord,
+    order: &[String],
+    from_idx: usize,
+) {
+    for step_id in order.iter().skip(from_idx) {
+        ctx.remove(&format!("steps.{step_id}"));
+        record.step_outputs.remove(step_id);
+    }
 }
 
 fn topo_sort(steps: &[WorkflowStep]) -> Result<Vec<String>, ToolError> {

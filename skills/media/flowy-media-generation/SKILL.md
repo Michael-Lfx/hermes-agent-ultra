@@ -1,7 +1,7 @@
 ---
 name: flowy-media-generation
 description: "Generate images and videos via Flowy cloud APIs (Hermes media tools). Covers prompt writing, workflow selection, async polling, and MEDIA: delivery."
-version: 1.1.0
+version: 1.2.0
 metadata:
   hermes:
     tags:
@@ -24,16 +24,34 @@ Use Hermes Flowy-backed tools (`image_generate`, `video_generate`, `media_workfl
 |-------------|------|
 | Single image, quick | `image_generate` |
 | Video or best quality | `media_workflow_plan` → `media_workflow_run` |
-| User provided an image URL | `media_workflow_plan` with `image_url` (`img2video_direct`) |
+| Edit / style / change background (user image) | `media_workflow_plan` with `image_url` → `img2img` |
+| Animate user image | `media_workflow_plan` with `image_url` → `img2video_direct` |
 | Storyboard / multi-shot narrative / 很多场景 / 分镜 | `media_workflow_plan` → `storyboard_multi` (**not** `video_generate`) |
+| Variations / upscale / extend clip | `image_variation`, `image_upscale`, `video_extend` workflows |
+| Cancel long run | `media_workflow_cancel` with `run_id` |
 | Seedance multimodal (first/last frame, ref video/audio) | `video_generate` or workflow with `last_frame_url`, `reference_*` |
+
+## Plan before run (recommended)
+
+`media_workflow_plan` supports:
+
+- `preview: true` — returns `prompt_preview.user_prompt_block` without spending generation credits
+- `credits` — estimated cost + balance + `user_decision_hint`
+- `routing_rationale` — why a template was auto-selected
+- `platform: wecom` — mobile 9:16 defaults
+
+Set `media.workflows.confirm_before_run: true` in config to default preview on every plan.
+
+## Cancel
+
+Async runs: `media_workflow_cancel` aborts the local task and calls `DELETE /video/generations/tasks/:id` when a video is in flight.
 
 ## Async workflows (default)
 
 Workflows run **in the background** by default (`media.workflows.async_execution=true`).
 
 1. `media_workflow_run` returns `{ "run_id", "status": "running", "async": true }`
-2. Poll `media_workflow_status` with `run_id` until `succeeded` or `failed`
+2. Poll `media_workflow_status` with `run_id` until `succeeded`, `failed`, or `cancelled`
 3. Set `wait: true` on `media_workflow_run` to block until complete (CLI / debugging)
 
 Each run writes `manifest.json` under the workflow run directory for provenance and artifacts.

@@ -13,7 +13,10 @@ use crate::backends::flowy_video::FlowyVideoGenBackend;
 use crate::tool_schemas::{
     flowy_image_generate_schema, flowy_video_generate_schema, media_workflow_plan_schema,
 };
-use crate::tools::{MediaWorkflowPlanHandler, MediaWorkflowRunHandler, MediaWorkflowStatusHandler};
+use crate::tools::{
+    MediaWorkflowCancelHandler, MediaWorkflowPlanHandler, MediaWorkflowRunHandler,
+    MediaWorkflowStatusHandler,
+};
 use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStore;
 
@@ -71,7 +74,10 @@ pub fn wire_flowy_media(
 
     let store = Arc::new(WorkflowRunStore::new());
     let runner = Arc::new(WorkflowRunner::new(services.clone(), Arc::clone(&store)));
-    let plan_handler = Arc::new(MediaWorkflowPlanHandler::new(config.media.clone()));
+    let plan_handler = Arc::new(MediaWorkflowPlanHandler::new(
+        config.media.clone(),
+        Some(services.clone()),
+    ));
     register_overwrite(
         registry,
         "media_workflow",
@@ -80,7 +86,7 @@ pub fn wire_flowy_media(
         "🎬",
         Arc::clone(&check),
     );
-    let run_handler = Arc::new(MediaWorkflowRunHandler::new(runner));
+    let run_handler = Arc::new(MediaWorkflowRunHandler::new(Arc::clone(&runner)));
     register_overwrite(
         registry,
         "media_workflow",
@@ -95,6 +101,15 @@ pub fn wire_flowy_media(
         "media_workflow",
         status_handler.clone(),
         status_handler.schema(),
+        "🎬",
+        Arc::clone(&check),
+    );
+    let cancel_handler = Arc::new(MediaWorkflowCancelHandler::new(Arc::clone(&runner)));
+    register_overwrite(
+        registry,
+        "media_workflow",
+        cancel_handler.clone(),
+        cancel_handler.schema(),
         "🎬",
         Arc::clone(&check),
     );

@@ -65,7 +65,7 @@ async fn spawn_plan_returns_run_id_immediately() {
     let runner = Arc::new(WorkflowRunner::new(harness.services, store.clone()));
 
     let def = builtin_template("simple_txt2img").expect("template");
-    let inputs = default_template_inputs("simple_txt2img", "a red balloon");
+    let inputs = default_template_inputs("simple_txt2img", "a red balloon", None);
     let plan = WorkflowPlan::from_definition(&def, inputs);
 
     let run_id = runner.spawn_plan(plan).expect("spawn");

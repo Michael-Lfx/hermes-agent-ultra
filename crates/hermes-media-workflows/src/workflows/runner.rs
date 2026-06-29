@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use hermes_core::{DetachedToolProgressGuard, ToolError};
 
+use super::control::WorkflowRunControl;
 use super::definition::WorkflowDefinition;
 use super::definition::WorkflowPlan;
 use super::executor::WorkflowExecutor;
@@ -14,6 +15,7 @@ use crate::backends::FlowyMediaServices;
 pub struct WorkflowRunner {
     executor: Arc<WorkflowExecutor>,
     store: Arc<WorkflowRunStore>,
+    control: WorkflowRunControl,
     async_execution: bool,
 }
 
@@ -21,14 +23,17 @@ impl WorkflowRunner {
     pub fn new(services: FlowyMediaServices, store: Arc<WorkflowRunStore>) -> Self {
         let async_execution = services.media.workflows.async_execution;
         let max_retries = services.media.workflows.max_retries;
+        let control = WorkflowRunControl::default();
         let executor = Arc::new(WorkflowExecutor::new(
             services,
             Arc::clone(&store),
+            control.clone(),
             max_retries,
         ));
         Self {
             executor,
             store,
+            control,
             async_execution,
         }
     }
@@ -43,6 +48,10 @@ impl WorkflowRunner {
 
     pub fn store(&self) -> Arc<WorkflowRunStore> {
         Arc::clone(&self.store)
+    }
+
+    pub fn control(&self) -> &WorkflowRunControl {
+        &self.control
     }
 
     /// Run synchronously (blocks until complete).
@@ -71,16 +80,65 @@ impl WorkflowRunner {
         let runner = Arc::clone(self);
         let def = def.clone();
         let detached = DetachedToolProgressGuard::attach(&run_id);
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let _detached = detached;
             if let Err(err) = runner
                 .executor
                 .run_definition_existing(&spawn_id, &def)
                 .await
             {
-                tracing::error!(run_id = %spawn_id, error = %err, "async workflow run failed");
+                if err.to_string().contains("cancelled") {
+                    tracing::info!(run_id = %spawn_id, "async workflow run cancelled");
+                } else {
+                    tracing::error!(run_id = %spawn_id, error = %err, "async workflow run failed");
+                }
             }
+            runner.control.unregister(&spawn_id);
         });
+        self.control.register(&run_id, handle.abort_handle());
         Ok(run_id)
+    }
+
+    /// Cancel a running workflow by `run_id`.
+    pub async fn cancel_run(&self, run_id: &str) -> Result<(), ToolError> {
+        let video_id = self.control.cancel(run_id);
+        if let Some(local_id) = video_id
+            && let Ok(token) = self.executor.services.require_token().await
+        {
+            let session = &self.executor.services.session;
+            if let Err(err) = self
+                .executor
+                .services
+                .api
+                .cancel_video_task(session, local_id)
+                .await
+            {
+                tracing::warn!(
+                    run_id = %run_id,
+                    local_id,
+                    error = %err,
+                    "server video cancel failed (local task aborted)"
+                );
+            }
+            let _ = token;
+        }
+
+        if let Some(mut record) = self.store.get(run_id) {
+            if record.status == WorkflowRunStatus::Running {
+                record.status = WorkflowRunStatus::Cancelled;
+                record.error = Some("cancelled by user".into());
+                record.current_step = None;
+                self.store.save(&record);
+            }
+            return Ok(());
+        }
+
+        if self.control.contains(run_id) {
+            return Ok(());
+        }
+
+        Err(ToolError::ExecutionFailed(format!(
+            "workflow run not found or already finished: {run_id}"
+        )))
     }
 }
