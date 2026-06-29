@@ -41,8 +41,11 @@ pub fn apply_gateway_runtime_defaults() {
     set_var_if_unset("HERMES_DDGS_REGION", "cn-zh");
     set_var_if_unset("HERMES_TOOL_PROGRESS_INITIAL_DELAY_MS", "4000");
     set_var_if_unset("HERMES_TOOL_PROGRESS_INTERVAL_MS", "15000");
-    // Per-tool run budgets default in hermes-agent `web_tool_budget` (browser=2, extract=5, search=2).
-    // Optional aggregate backstop: set HERMES_WEB_TOOL_BUDGET_MAX_CALLS explicitly if needed.
+    // Align Global-mode fallback with `agent.web_research.message_caps` so multi-intent messages
+    // are not truncated by the legacy search=2 default before task fair-share runs.
+    set_var_if_unset("HERMES_WEB_SEARCH_BUDGET_MAX_CALLS", "10");
+    set_var_if_unset("HERMES_WEB_EXTRACT_BUDGET_MAX_CALLS", "5");
+    set_var_if_unset("HERMES_WEB_TOOL_BUDGET_MAX_ATTEMPTS", "16");
 }
 
 #[cfg(test)]
@@ -67,6 +70,24 @@ mod tests {
             std::env::var(key).ok().as_deref(),
             Some("1"),
             "expected browser auto-start default"
+        );
+        unsafe { std::env::remove_var(key) };
+        if let Some(v) = prior {
+            unsafe { std::env::set_var(key, v) };
+        }
+    }
+
+    #[test]
+    fn apply_sets_web_search_budget_when_unset() {
+        let _guard = env_test_lock();
+        let key = "HERMES_WEB_SEARCH_BUDGET_MAX_CALLS";
+        let prior = std::env::var_os(key);
+        unsafe { std::env::remove_var(key) };
+        apply_gateway_runtime_defaults();
+        assert_eq!(
+            std::env::var(key).ok().as_deref(),
+            Some("10"),
+            "expected gateway web search budget default"
         );
         unsafe { std::env::remove_var(key) };
         if let Some(v) = prior {

@@ -276,6 +276,7 @@ impl WebResearchController {
                         "web_research llm decomposer applied"
                     );
                     self.tasks = tasks;
+                    allocate_task_budgets(&mut self.tasks, &self.config);
                 }
             }
         }
@@ -1345,6 +1346,31 @@ struct SearchItem {
     text: String,
 }
 
+/// Split message-level caps across decomposed tasks (`max_total / N` per task).
+///
+/// Operators set one ceiling per user message; intent count is discovered at runtime.
+fn allocate_task_budgets(tasks: &mut [ResearchTask], config: &WebResearchConfig) {
+    if tasks.is_empty() {
+        return;
+    }
+    let n = tasks.len() as u32;
+    let search_per = per_task_message_cap(config.message_caps.max_total_search, n, 2);
+    let extract_per = per_task_message_cap(config.message_caps.max_total_extract, n, 1);
+    for task in tasks.iter_mut() {
+        task.max_search = search_per;
+        task.max_extract = extract_per;
+    }
+}
+
+fn per_task_message_cap(message_total: u32, task_count: u32, floor: u32) -> u32 {
+    let n = task_count.max(1);
+    if message_total == 0 {
+        return floor;
+    }
+    let fair = message_total / n;
+    fair.max(floor).min(message_total)
+}
+
 fn decompose_research_tasks(user_message: &str, config: &WebResearchConfig) -> Vec<ResearchTask> {
     let segments = split_intent_segments(user_message);
     let specs: Vec<(ResearchTaskType, String)> = if segments.len() > 1 {
@@ -1358,12 +1384,14 @@ fn decompose_research_tasks(user_message: &str, config: &WebResearchConfig) -> V
             user_message.to_string(),
         )]
     };
-    specs
+    let mut tasks: Vec<ResearchTask> = specs
         .into_iter()
         .take(3)
         .enumerate()
         .map(|(id, (task_type, focus))| new_research_task(id, task_type, &focus, config))
-        .collect()
+        .collect();
+    allocate_task_budgets(&mut tasks, config);
+    tasks
 }
 
 fn split_intent_segments(text: &str) -> Vec<String> {
@@ -1880,9 +1908,36 @@ mod tests {
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[0].task_type, ResearchTaskType::RealtimeWeather);
         assert_eq!(tasks[0].time_scope.as_deref(), Some("today"));
-        assert_eq!(tasks[0].max_search, 2);
+        assert_eq!(tasks[0].max_search, 5);
         assert_eq!(tasks[1].task_type, ResearchTaskType::SimpleLookup);
-        assert_eq!(tasks[1].max_search, 2);
+        assert_eq!(tasks[1].max_search, 5);
+    }
+
+    #[test]
+    fn allocate_task_budgets_single_intent_gets_full_message_cap() {
+        let cfg = test_config();
+        let tasks = decompose_research_tasks("深圳今天天气怎么样", &cfg);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].max_search, cfg.message_caps.max_total_search);
+        assert_eq!(tasks[0].max_extract, cfg.message_caps.max_total_extract);
+    }
+
+    #[test]
+    fn allocate_task_budgets_splits_cap_across_three_intents() {
+        let cfg = test_config();
+        let tasks = decompose_research_tasks(
+            "深圳今天天气怎么样，北京到上海航班，2026年深圳高考人数",
+            &cfg,
+        );
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].max_search, 3);
+        assert_eq!(tasks[1].max_search, 3);
+        assert_eq!(tasks[2].max_search, 3);
+        assert_eq!(
+            tasks.iter().map(|t| t.max_search).sum::<u32>(),
+            9,
+            "sum must stay within message cap"
+        );
     }
 
     #[test]

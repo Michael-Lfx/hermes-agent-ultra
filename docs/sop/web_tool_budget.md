@@ -18,7 +18,7 @@ When `agent.web_research` is enabled and the user message decomposes into multip
 | **Message fuse (secondary)** | `apply_web_tool_budget` runs in `BudgetMode::TaskPrimary`: skips per-pool `search_max` / `extract_max` caps and only enforces `max_attempt_total`, optional `aggregate_max`, and `max_consecutive_errors`. |
 | **Global pools (no tasks)** | When web_research does not decompose tasks, `BudgetMode::Global` applies full per-tool pools as before. |
 
-Dynamic limits: when tasks are present, `limits.search_max` / `limits.extract_max` = `sum(task.max_*)` clamped to `message_caps.max_total_search` / `max_total_extract` (defaults **10** / **5**), not the small env default alone.
+Dynamic limits: when tasks are present, each task receives **`message_caps.max_total_* / task_count`** (floor search **2**, extract **1**; single-intent gets the full message cap). `limits.search_max` / `limits.extract_max` = sum of per-task caps, clamped to `message_caps` (defaults **10** / **5**). Intent count is not configured upfront — decomposition discovers it at runtime.
 
 Web tools stop only when all tasks are `Verified` or `Exhausted`, or a message fuse triggers — not when the evaluator is satisfied on one sub-question while others remain pending.
 
