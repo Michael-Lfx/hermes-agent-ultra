@@ -136,6 +136,15 @@ pub fn run() {
             select_paths,
             // Microphone
             request_microphone_access,
+            // Account / billing
+            sign_in_oauth,
+            sign_in_email,
+            sign_out,
+            get_account,
+            refresh_account_token,
+            create_alipay_order,
+            create_wechat_order,
+            query_payment_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

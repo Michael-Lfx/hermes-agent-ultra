@@ -1982,19 +1982,29 @@ fn generate_token() -> String {
         .collect()
 }
 
+mod account;
 mod backend;
 mod clipboard;
 mod images;
+mod menu;
+mod oauth;
+mod payment;
 mod preview;
 mod settings;
 mod terminal;
+mod window;
 
+pub use account::*;
 pub use backend::*;
 pub use clipboard::*;
 pub use images::*;
+pub use menu::*;
+pub use oauth::*;
+pub use payment::*;
 pub use preview::*;
 pub use settings::*;
 pub use terminal::*;
+pub use window::*;
 
 #[cfg(test)]
 mod tests {
