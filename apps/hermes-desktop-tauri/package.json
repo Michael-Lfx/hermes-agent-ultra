@@ -22,7 +22,8 @@
     "tauri:android:dev": "tauri android dev",
     "tauri:android:build": "tauri android build",
     "tauri:ios:dev": "tauri ios dev",
-    "tauri:ios:build": "tauri ios build"
+    "tauri:ios:build": "tauri ios build",
+    "verify:terra": "cd ../.. && cargo test -p hermes-tasks && cargo check -p hermes-desktop-community && cargo check -p hermes-http && npm run build:check"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.12.28",

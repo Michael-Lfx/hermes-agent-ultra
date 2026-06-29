@@ -98,10 +98,37 @@ pub async fn get_device(
     Ok(Json(device))
 }
 
+pub async fn mdns_discover() -> Json<Value> {
+    Json(json!({
+        "peers": [],
+        "service": "_terra._tcp.local",
+        "note": "mDNS discovery stub — primary desktop advertises on LAN"
+    }))
+}
+
+pub async fn mdns_broadcast() -> Json<Value> {
+    Json(json!({
+        "advertising": true,
+        "service": "_terra._tcp.local",
+        "port": 8787
+    }))
+}
+
+pub async fn relay_status() -> Json<Value> {
+    Json(json!({
+        "relay": "stub",
+        "connected": false,
+        "primary_url": null
+    }))
+}
+
 pub fn routes() -> Router<HttpServerState> {
     Router::new()
         .route("/api/devices", post(register_device).get(list_devices))
         .route("/api/devices/{id}", get(get_device))
+        .route("/api/devices/mdns/discover", get(mdns_discover))
+        .route("/api/devices/mdns/broadcast", post(mdns_broadcast))
+        .route("/api/devices/relay/status", get(relay_status))
 }
 
 #[cfg(test)]

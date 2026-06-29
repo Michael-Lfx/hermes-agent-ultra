@@ -5248,6 +5248,17 @@ pub async fn subscribe_task_stream(
     let conn = start_hermes_impl(&app, &state, None).await?;
     let sid = StreamId::new(stream_id.unwrap_or_else(|| format!("task:{task_id}")));
     let bridge = ensure_ws_bridge(&state, conn.ws_url).await?;
+    let router = state.ws_router.clone();
+    let listen_id = sid.clone();
+    let app_emit = app.clone();
+    tokio::spawn(async move {
+        let mut rx = router.subscribe(listen_id);
+        while let Ok(frame) = rx.recv().await {
+            if let Some(payload) = frame.payload {
+                let _ = app_emit.emit("terra:task-stream", payload);
+            }
+        }
+    });
     bridge.subscribe_task(sid, task_id).await
 }
 

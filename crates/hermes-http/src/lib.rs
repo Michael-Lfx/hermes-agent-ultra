@@ -5,6 +5,7 @@
 //! Policy HTTP routes are intentionally omitted (Hermes Python does not expose them).
 
 mod billing;
+mod cron_spawn;
 mod devices;
 mod mcp;
 mod otel;
@@ -373,7 +374,7 @@ impl HttpServerState {
             .await
             .map_err(|e| AgentError::Io(e.to_string()))?;
 
-        Ok(Self {
+        let built = Self {
             config: config_arc,
             tool_registry,
             tasks: task_api,
@@ -381,7 +382,21 @@ impl HttpServerState {
             cron: CronRuntime::new(),
             gateway,
             outbound,
-        })
+        };
+
+        let cron_bg = built.cron.clone();
+        let http_bg = built.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                for job in cron_bg.take_due_jobs().await {
+                    cron_spawn::spawn_due_cron_job(http_bg.clone(), job).await;
+                }
+            }
+        });
+
+        Ok(built)
     }
 }
 

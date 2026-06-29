@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hermes_gateway::gateway::IncomingMessage;
 use hermes_tasks::types::{Actor, EventKind, Task, TaskEvent, TaskStatus, TurnId};
-use hermes_tasks::{TaskRuntime, types::TaskId};
+use hermes_tasks::{TaskCancellationRegistry, TaskRuntime, types::TaskId};
 use serde_json::json;
 use tracing::{debug, warn};
 
@@ -14,9 +14,10 @@ pub fn spawn_task_agent_run(
     task: Task,
     instruction: String,
     turn_id: Option<TurnId>,
+    cancellation: Arc<TaskCancellationRegistry>,
 ) {
     tokio::spawn(async move {
-        if let Err(err) = run_task_agent(&state, &task, &instruction, turn_id).await {
+        if let Err(err) = run_task_agent(&state, &task, &instruction, turn_id, cancellation).await {
             warn!(task_id = %task.id, error = %err, "task agent run failed");
         }
     });
@@ -27,7 +28,12 @@ async fn run_task_agent(
     task: &Task,
     instruction: &str,
     turn_id: Option<TurnId>,
+    cancellation: Arc<TaskCancellationRegistry>,
 ) -> Result<(), String> {
+    let cancel_token = cancellation.register(task.id);
+    if cancel_token.is_cancelled() {
+        return Err("task cancelled before start".into());
+    }
     let Some(tasks) = state.tasks.as_ref() else {
         return Err("task api unavailable".into());
     };
@@ -72,6 +78,11 @@ async fn run_task_agent(
         .await
         .map_err(|e| e.to_string())?;
 
+    if cancel_token.is_cancelled() {
+        cancellation.remove(task.id).await;
+        return Err("task cancelled during run".into());
+    }
+
     let parts = state.outbound.drain_chat(&task.id.to_string());
     let reply = if parts.is_empty() {
         "(no agent output — configure LLM provider in hermes config)".to_string()
@@ -104,6 +115,9 @@ async fn run_task_agent(
         .tasks()
         .update(&updated)
         .map_err(|e| e.to_string())?;
+
+    cancellation.remove(task.id).await;
+    let _ = crate::push::trigger::notify_task_done(&task.id.to_string(), 0).await;
 
     Ok(())
 }

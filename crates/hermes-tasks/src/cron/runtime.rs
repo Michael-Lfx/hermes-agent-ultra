@@ -46,20 +46,23 @@ impl CronRuntime {
         self.jobs.lock().await.remove(id).is_some()
     }
 
-    pub async fn tick(&self) {
+    pub async fn take_due_jobs(&self) -> Vec<CronJob> {
         let mut due: Vec<CronJob> = Vec::new();
-        {
-            let mut guard = self.jobs.lock().await;
-            for job in guard.values_mut() {
-                if !job.enabled {
-                    continue;
-                }
-                if schedule_due(&job.schedule) {
-                    job.schedule.last_run = Some(Utc::now());
-                    due.push(job.clone());
-                }
+        let mut guard = self.jobs.lock().await;
+        for job in guard.values_mut() {
+            if !job.enabled {
+                continue;
+            }
+            if schedule_due(&job.schedule) {
+                job.schedule.last_run = Some(Utc::now());
+                due.push(job.clone());
             }
         }
+        due
+    }
+
+    pub async fn tick(&self) {
+        let due = self.take_due_jobs().await;
         for job in due {
             info!(job_id = %job.id, title = %job.title, "cron job due");
         }
@@ -67,10 +70,10 @@ impl CronRuntime {
 }
 
 fn schedule_due(schedule: &CronSchedule) -> bool {
-    schedule
-        .next_run
-        .map(|next| next <= Utc::now())
-        .unwrap_or(false)
+    if let Some(next) = schedule.next_run {
+        return next <= Utc::now();
+    }
+    schedule.last_run.is_none()
 }
 
 #[cfg(test)]

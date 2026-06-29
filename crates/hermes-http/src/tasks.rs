@@ -10,8 +10,8 @@ use hermes_datasources::{
     UserCustomDataSource, UserCustomDataSourceConfig,
 };
 use hermes_tasks::{
-    ArtifactStore, DeviceId, ForkRequest, SignedUrlConfig, Task, TaskId, TaskListQuery,
-    TaskRuntime, UserId, VerticalId, generate_signed_url,
+    ArtifactStore, DeviceId, ForkRequest, SignedUrlConfig, Task, TaskCancellationRegistry, TaskId,
+    TaskListQuery, TaskRuntime, UserId, VerticalId, generate_signed_url,
 };
 use hermes_verticals::VerticalLoader;
 use serde::Deserialize;
@@ -28,6 +28,7 @@ pub struct TaskApiState {
     pub artifacts: Arc<ArtifactStore>,
     pub signed_url: Arc<SignedUrlConfig>,
     pub stream_hub: crate::task_ws::TaskStreamHub,
+    pub cancellation: Arc<TaskCancellationRegistry>,
 }
 
 impl TaskApiState {
@@ -44,6 +45,7 @@ impl TaskApiState {
             artifacts: Arc::new(ArtifactStore::open(db)?),
             signed_url: Arc::new(SignedUrlConfig::from_env()),
             stream_hub: crate::task_ws::TaskStreamHub::default(),
+            cancellation: Arc::new(TaskCancellationRegistry::default()),
         })
     }
 }
@@ -115,6 +117,7 @@ pub async fn create_task(
         task.clone(),
         instruction,
         event.turn_id,
+        tasks.cancellation.clone(),
     );
     Ok(Json(json!({ "task": task, "event": event })))
 }
@@ -278,6 +281,7 @@ pub async fn continue_task(
         task,
         req.instruction.clone(),
         Some(turn.id),
+        tasks.cancellation.clone(),
     );
     Ok(Json(json!({ "event": event, "turn": turn })))
 }
@@ -288,10 +292,9 @@ pub async fn cancel_task(
 ) -> Result<Json<Value>, StatusCode> {
     let tasks = task_state(&state)?;
     let task_id: TaskId = id.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-    let registry = hermes_tasks::TaskCancellationRegistry::default();
     let cancelled = tasks
         .runtime
-        .cancel_task(&registry, task_id)
+        .cancel_task(tasks.cancellation.as_ref(), task_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(json!({ "cancelled": cancelled })))
@@ -343,6 +346,7 @@ pub async fn fork_task(
         .get(parent_task_id)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    let instruction = req.instruction.clone();
     let (subtask, event, turn) = tasks
         .runtime
         .fork_subtask(ForkRequest {
@@ -352,7 +356,7 @@ pub async fn fork_task(
             device_id: parent.primary_device_id,
             vertical: VerticalId::from(req.vertical),
             title: req.title,
-            instruction: req.instruction,
+            instruction,
             persona: hermes_tasks::AgentPersona {
                 vertical_id: Some(VerticalId::from("fork")),
                 system_prompt: String::new(),
@@ -361,6 +365,13 @@ pub async fn fork_task(
             },
         })
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::task_agent::spawn_task_agent_run(
+        state.clone(),
+        subtask.clone(),
+        req.instruction.clone(),
+        Some(turn.id),
+        tasks.cancellation.clone(),
+    );
     Ok(Json(
         json!({ "task": subtask, "event": event, "turn": turn }),
     ))

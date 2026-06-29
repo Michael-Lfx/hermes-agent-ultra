@@ -23,6 +23,7 @@ import {
   useTasksQuery,
   useVerticalsQuery
 } from '@/hooks/use-task-queries'
+import { useTaskStream } from '@/hooks/use-task-stream'
 import {
   branchIdsFromEvents,
   minimapColorForKind,
@@ -45,6 +46,7 @@ export default function TerraApp() {
   const taskQuery = useTaskQuery(activeTaskId)
   const eventsQuery = useTaskEventsQuery(activeTaskId)
   const verticalsQuery = useVerticalsQuery(verticalQuery)
+  useTaskStream(activeTaskId)
 
   const createTaskMutation = useCreateTaskMutation()
   const continueTaskMutation = useContinueTaskMutation(activeTaskId)
