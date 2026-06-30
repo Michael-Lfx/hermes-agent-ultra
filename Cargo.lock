@@ -4037,6 +4037,7 @@ dependencies = [
  "hermes-tools",
  "hermes-verticals",
  "http-body-util",
+ "libc",
  "reqwest 0.13.4",
  "serde",
  "serde_json",

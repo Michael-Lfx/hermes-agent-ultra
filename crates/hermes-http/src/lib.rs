@@ -6,6 +6,7 @@
 
 mod billing;
 mod cron_spawn;
+mod desktop_rpc;
 mod devices;
 mod mcp;
 mod otel;
@@ -161,8 +162,9 @@ pub struct HttpServerState {
     pub tasks: Option<Arc<tasks::TaskApiState>>,
     pub devices: devices::DeviceRegistry,
     pub cron: CronRuntime,
-    gateway: Arc<Gateway>,
-    outbound: ChatOutboundBuffer,
+    pub desktop: Arc<desktop_rpc::SessionStore>,
+    pub(crate) gateway: Arc<Gateway>,
+    pub(crate) outbound: ChatOutboundBuffer,
 }
 
 impl HttpServerState {
@@ -381,6 +383,7 @@ impl HttpServerState {
             tasks: task_api,
             devices: devices::DeviceRegistry::default(),
             cron: CronRuntime::new(),
+            desktop: Arc::new(desktop_rpc::SessionStore::new()),
             gateway,
             outbound,
         };
@@ -1009,7 +1012,7 @@ pub fn build_agent_config(config: &GatewayConfig, model: &str) -> AgentConfig {
     }
 }
 
-fn async_tool_dispatch_for(tools: Arc<ToolRegistry>) -> hermes_agent::AsyncToolDispatch {
+pub(crate) fn async_tool_dispatch_for(tools: Arc<ToolRegistry>) -> hermes_agent::AsyncToolDispatch {
     Arc::new(move |name, params| {
         let tools = tools.clone();
         Box::pin(async move {
@@ -1148,7 +1151,7 @@ fn resolve_model_for_gateway(default_model: &str, ctx: &GatewayRuntimeContext) -
     default_model.to_string()
 }
 
-fn build_agent_for_gateway_context(
+pub(crate) fn build_agent_for_gateway_context(
     config: &GatewayConfig,
     ctx: &GatewayRuntimeContext,
     agent_tools: Arc<hermes_agent::agent_loop::ToolRegistry>,
@@ -1191,7 +1194,7 @@ fn build_agent_for_gateway_context(
     )
 }
 
-fn extract_last_assistant_reply(messages: &[Message]) -> String {
+pub(crate) fn extract_last_assistant_reply(messages: &[Message]) -> String {
     messages
         .iter()
         .rev()
@@ -1432,93 +1435,11 @@ async fn compat_or_multiplex_ws(
 
 async fn compat_ws_upgrade(
     ws: WebSocketUpgrade,
-    Query(params): Query<std::collections::HashMap<String, String>>,
+    Query(_params): Query<std::collections::HashMap<String, String>>,
     State(state): State<HttpServerState>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
 ) -> Response {
-    let session_key = session_key_from_headers(&headers).unwrap_or_else(|| {
-        params
-            .get("token")
-            .cloned()
-            .unwrap_or_else(|| "http".to_string())
-    });
-    let sid = session_key.clone();
-    ws.on_upgrade(move |socket| handle_ws_compat(socket, state, sid))
-}
-
-async fn handle_ws_compat(mut socket: WebSocket, state: HttpServerState, session_key: String) {
-    // Accept connection silently — client will send JSON-RPC requests.
-    // Do NOT send an initial message (Desktop JSON-RPC client doesn't expect one).
-
-    while let Some(msg) = socket.next().await {
-        match msg {
-            Ok(WsMessage::Text(text)) => {
-                // Try to parse as JSON-RPC request first
-                let frame: Result<serde_json::Value, _> = serde_json::from_str(&text);
-                match frame {
-                    Ok(ref f) if f.get("id").is_some() => {
-                        // JSON-RPC request — echo back a stub result
-                        let id = f.get("id").cloned().unwrap_or(serde_json::Value::Null);
-                        let method = f.get("method").and_then(|m| m.as_str()).unwrap_or("");
-                        let response = serde_json::json!({
-                            "id": id,
-                            "result": {
-                                "ok": true,
-                                "method": method
-                            }
-                        });
-                        let _ = socket
-                            .send(WsMessage::Text(response.to_string().into()))
-                            .await;
-                    }
-                    Ok(ref f) if f.get("method").and_then(|m| m.as_str()) == Some("event") => {
-                        // Incoming event — ignore for now
-                    }
-                    _ => {
-                        // Plain text — treat as chat message for /v1/sessions compatibility
-                        let request = SendMessageRequest {
-                            text: text.to_string(),
-                            model: None,
-                            provider: None,
-                            personality: None,
-                            user_id: None,
-                        };
-                        let sid = session_key.clone();
-                        match send_message(
-                            Path(sid),
-                            State(state.clone()),
-                            HeaderMap::new(),
-                            Json(request),
-                        )
-                        .await
-                        {
-                            Ok(resp) => {
-                                let _ = socket
-                                    .send(WsMessage::Text(
-                                        serde_json::json!(resp.0).to_string().into(),
-                                    ))
-                                    .await;
-                            }
-                            Err(e) => {
-                                let _ = socket
-                                    .send(WsMessage::Text(
-                                        serde_json::json!({"error": e.to_string()})
-                                            .to_string()
-                                            .into(),
-                                    ))
-                                    .await;
-                            }
-                        }
-                    }
-                }
-            }
-            Ok(WsMessage::Ping(data)) => {
-                let _ = socket.send(WsMessage::Pong(data)).await;
-            }
-            Ok(WsMessage::Close(_)) | Err(_) => break,
-            _ => {}
-        }
-    }
+    ws.on_upgrade(move |socket| desktop_rpc::handle_desktop_ws(socket, state))
 }
 
 #[cfg(test)]
