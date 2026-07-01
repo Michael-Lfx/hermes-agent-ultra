@@ -27,6 +27,10 @@ impl FlowyVideoGenBackend {
         Self { services }
     }
 
+    pub fn services(&self) -> &FlowyMediaServices {
+        &self.services
+    }
+
     pub async fn is_configured(services: &FlowyMediaServices) -> bool {
         services.is_authenticated().await
     }

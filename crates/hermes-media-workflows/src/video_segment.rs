@@ -63,6 +63,7 @@ pub fn parse_duration_secs_from_text(text: &str) -> Option<u32> {
         }
         let rest = lower[i..].trim_start();
         if rest.starts_with('秒')
+            || rest.starts_with("秒钟")
             || rest.starts_with("s")
             || rest.starts_with("sec")
             || rest.starts_with('-')

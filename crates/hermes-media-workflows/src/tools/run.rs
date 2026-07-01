@@ -7,6 +7,8 @@ use serde_json::{Value, json};
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use crate::delivery::workflow_prompt_json;
+use crate::long_video_plan::resolve_target_duration;
+use crate::video_segment::route_long_video_template;
 use crate::workflows::WorkflowPlan;
 use crate::workflows::runner::WorkflowRunner;
 use crate::workflows::store::WorkflowRunStatus;
@@ -39,10 +41,26 @@ impl ToolHandler for MediaWorkflowRunHandler {
                 .get("prompt")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| ToolError::InvalidParams("missing prompt".into()))?;
-            let def = builtin_template(workflow_id).ok_or_else(|| {
+            let mut workflow_id = workflow_id.to_string();
+            let default_duration = self.runner.executor().services.media.video.default_duration;
+            let target_duration = params
+                .get("duration")
+                .and_then(|v| v.as_u64())
+                .map(|d| d as u32)
+                .unwrap_or_else(|| resolve_target_duration(None, prompt, default_duration));
+            let model = self.runner.executor().services.media.video.model.clone();
+            workflow_id = route_long_video_template(&workflow_id, target_duration, &model);
+            let def = builtin_template(&workflow_id).ok_or_else(|| {
                 ToolError::InvalidParams(format!("unknown workflow_id: {workflow_id}"))
             })?;
-            let inputs = default_template_inputs(workflow_id, prompt, None);
+            let mut inputs = default_template_inputs(&workflow_id, prompt, None);
+            inputs["duration"] = json!(target_duration);
+            if let Some(url) = params.get("image_url") {
+                inputs["image_url"] = url.clone();
+            }
+            if let Some(duration) = params.get("duration") {
+                inputs["duration"] = duration.clone();
+            }
             WorkflowPlan::from_definition(&def, inputs)
         };
 
