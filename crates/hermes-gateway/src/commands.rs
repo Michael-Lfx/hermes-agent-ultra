@@ -786,7 +786,10 @@ pub fn handle_command(input: &str) -> GatewayCommandResult {
                 "run" => {
                     let dry_run = tokens.contains(&"--dry-run");
                     let consolidate = tokens.contains(&"--consolidate");
-                    GatewayCommandResult::CuratorRun { dry_run, consolidate }
+                    GatewayCommandResult::CuratorRun {
+                        dry_run,
+                        consolidate,
+                    }
                 }
                 "pause" => GatewayCommandResult::CuratorPause,
                 "resume" => GatewayCommandResult::CuratorResume,

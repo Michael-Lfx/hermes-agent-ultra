@@ -561,9 +561,7 @@ where
     // umbrella-building, no aux-model cost.
     let llm_review = if let Some(runner) = llm_runner {
         if !config.consolidate {
-            tracing::info!(
-                "curator: consolidation off — skipping LLM review pass (prune-only)"
-            );
+            tracing::info!("curator: consolidation off — skipping LLM review pass (prune-only)");
             None
         } else {
             let prompt = build_curator_prompt(store);

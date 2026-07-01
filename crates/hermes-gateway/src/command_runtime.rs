@@ -717,7 +717,10 @@ async fn apply_curator(
     result: GatewayCommandResult,
 ) -> Result<bool, GatewayError> {
     match result {
-        GatewayCommandResult::CuratorRun { dry_run, consolidate } => {
+        GatewayCommandResult::CuratorRun {
+            dry_run,
+            consolidate,
+        } => {
             // Phase 1: auto transitions (fast, milliseconds)
             let reply = gw.execute_curator_run(dry_run, consolidate);
             gw.send_incoming_reply(incoming, &reply, None).await?;
@@ -727,8 +730,7 @@ async fn apply_curator(
             // When off (the default), the prune-only run is complete after
             // Phase 1 and no aux-model tokens are spent.
             if !dry_run {
-                let effective_consolidate =
-                    consolidate || gw.config.curator.consolidate;
+                let effective_consolidate = consolidate || gw.config.curator.consolidate;
                 if effective_consolidate {
                     gw.spawn_curator_llm_review(incoming, session_key).await;
                 }
