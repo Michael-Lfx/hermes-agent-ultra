@@ -205,7 +205,7 @@ impl WorkflowExecutor {
                 );
             }
 
-            ctx.insert(format!("steps.{step_id}"), output.clone());
+            insert_step_output(&mut ctx, &step_id, output.clone());
             record.step_outputs.insert(step_id.clone(), output);
             self.store.save(&record);
             step_idx += 1;
@@ -925,6 +925,15 @@ async fn ensure_local_video_path(
     Ok(artifact.local_path)
 }
 
+fn insert_step_output(ctx: &mut HashMap<String, Value>, step_id: &str, output: Value) {
+    let steps = ctx
+        .entry("steps".into())
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(map) = steps {
+        map.insert(step_id.to_string(), output);
+    }
+}
+
 fn clear_outputs_from(
     ctx: &mut HashMap<String, Value>,
     record: &mut WorkflowRunRecord,
@@ -932,7 +941,9 @@ fn clear_outputs_from(
     from_idx: usize,
 ) {
     for step_id in order.iter().skip(from_idx) {
-        ctx.remove(&format!("steps.{step_id}"));
+        if let Some(Value::Object(steps)) = ctx.get_mut("steps") {
+            steps.remove(step_id);
+        }
         record.step_outputs.remove(step_id);
     }
 }
@@ -1084,5 +1095,41 @@ mod tests {
             "HTTP 503 temporarily unavailable".into()
         )));
         assert!(!is_retryable_error(&ToolError::InvalidParams("bad".into())));
+    }
+
+    #[test]
+    fn resolve_ref_reads_nested_step_outputs() {
+        let mut ctx = HashMap::new();
+        ctx.insert(
+            "inputs".into(),
+            json!({ "prompt": "promo", "duration": 20 }),
+        );
+        insert_step_output(
+            &mut ctx,
+            "refine_prompt",
+            json!({
+                "video_prompt": "Scene: cat running. Motion: slow pan",
+                "negative_prompt": "blur",
+            }),
+        );
+
+        let resolved = resolve_value(
+            &json!({
+                "prompt": "$steps.refine_prompt.video_prompt",
+                "negative_prompt": "$steps.refine_prompt.negative_prompt",
+                "duration": "$inputs.duration",
+            }),
+            &ctx,
+        );
+
+        assert_eq!(
+            resolved.get("prompt").and_then(|v| v.as_str()),
+            Some("Scene: cat running. Motion: slow pan")
+        );
+        assert_eq!(
+            resolved.get("negative_prompt").and_then(|v| v.as_str()),
+            Some("blur")
+        );
+        assert_eq!(resolved.get("duration").and_then(|v| v.as_u64()), Some(20));
     }
 }

@@ -413,8 +413,8 @@ static CONFIRM_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         // Process killing
         Regex::new(r"(?i)\bkill\s+-9\b").unwrap(),
         Regex::new(r"(?i)\bkillall\s+(?:-[A-Za-z]*9|-[A-Za-z]*KILL|-[A-Za-z]*SIGKILL|-s\s+(?:9|KILL)|-r\b)").unwrap(),
-        // Disk operations
-        Regex::new(r"(?i)\bformat\b").unwrap(),
+        // Disk operations (Windows `format C:` — not ffprobe `-show_entries format=…`)
+        Regex::new(r"(?i)(?:^|\s)format\s+(?:[A-Za-z]:[/\\]?|/dev/)").unwrap(),
         Regex::new(r"(?is)\bdd\s+.*(?:if=/dev/|of=)").unwrap(),
         // Cron modifications
         Regex::new(r"(?i)\bcrontab\s+-r\b").unwrap(),
@@ -1591,6 +1591,12 @@ mod tests {
         assert_eq!(check_approval("echo hello"), ApprovalDecision::Approved);
         assert_eq!(check_approval("cat file.txt"), ApprovalDecision::Approved);
         assert_eq!(check_approval("git status"), ApprovalDecision::Approved);
+        assert_eq!(
+            check_approval(
+                r"C:\Users\scx\.hermes-agent-ultra\bin\ffprobe.exe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 C:\media\clip.mp4"
+            ),
+            ApprovalDecision::Approved
+        );
     }
 
     #[test]
@@ -1635,6 +1641,10 @@ mod tests {
         );
         assert_eq!(
             check_approval("git clean -fdx"),
+            ApprovalDecision::RequiresConfirmation
+        );
+        assert_eq!(
+            check_approval("format C: /fs:ntfs"),
             ApprovalDecision::RequiresConfirmation
         );
     }
