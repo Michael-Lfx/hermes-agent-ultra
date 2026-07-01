@@ -172,10 +172,7 @@ mod tests {
 
     #[test]
     fn test_whitespace_only_request_is_treated_as_empty() {
-        assert_eq!(
-            build_learn_prompt("   \n  "),
-            build_learn_prompt("")
-        );
+        assert_eq!(build_learn_prompt("   \n  "), build_learn_prompt(""));
     }
 
     #[test]
@@ -195,7 +192,11 @@ mod tests {
         assert!(std_lower.contains("never fill it from the host"));
         // Hermes-tool framing names the wrapped tools
         for tool in &["read_file", "search_files", "patch", "write_file"] {
-            assert!(AUTHORING_STANDARDS.contains(tool), "standards should name {}", tool);
+            assert!(
+                AUTHORING_STANDARDS.contains(tool),
+                "standards should name {}",
+                tool
+            );
         }
         // scripts/references/templates layout
         assert!(AUTHORING_STANDARDS.contains("scripts/"));

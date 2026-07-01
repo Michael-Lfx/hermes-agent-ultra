@@ -13,10 +13,7 @@ pub async fn register_push_token(
     platform: String,
     _manufacturer: Option<String>,
 ) -> Result<PushRegisterResult, String> {
-    Ok(PushRegisterResult {
-        ok: true,
-        platform,
-    })
+    Ok(PushRegisterResult { ok: true, platform })
 }
 
 #[tauri::command]

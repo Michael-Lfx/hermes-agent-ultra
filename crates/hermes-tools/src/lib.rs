@@ -71,11 +71,11 @@ pub use equity_slash_delivery::{
     try_equity_slash_delivery, wants_md_only_attachment,
 };
 pub use kanban::{KANBAN_TASK_ENV, kanban_block_reason, kanban_task_from_env};
-pub use learn_prompt::{AUTHORING_STANDARDS, build_learn_prompt};
 pub use kanban_failure::{
     KanbanFailureOptions, KanbanFailureOutcome, record_iteration_budget_exhausted,
     record_task_failure,
 };
+pub use learn_prompt::{AUTHORING_STANDARDS, build_learn_prompt};
 pub use plan_mode::{PlanPhase, ToolRwClass, classify_tool, plan_allows_tool, plan_block_payload};
 pub use task_cleanup::cleanup_task_resources;
 pub use tool_dispatch_helpers::{
