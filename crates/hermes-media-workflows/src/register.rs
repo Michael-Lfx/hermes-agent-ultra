@@ -5,11 +5,12 @@ use std::sync::Arc;
 use hermes_config::{GatewayConfig, flowy_media_exposed};
 use hermes_core::{ToolHandler, ToolSchema};
 use hermes_tools::ToolRegistry;
-use hermes_tools::{ImageGenerateHandler, VideoGenerateHandler};
+use hermes_tools::{ImageGenerateHandler, VideoGenerateBackend, VideoGenerateHandler};
 
 use crate::backends::FlowyMediaServices;
 use crate::backends::flowy_image::FlowyImageGenBackend;
 use crate::backends::flowy_video::FlowyVideoGenBackend;
+use crate::backends::flowy_video_router::FlowyVideoGenerateRouter;
 use crate::tool_schemas::{
     flowy_image_generate_schema, flowy_video_generate_schema, media_workflow_plan_schema,
 };
@@ -56,24 +57,38 @@ pub fn wire_flowy_media(
         Arc::clone(&check),
     );
 
-    register_overwrite(
-        registry,
-        "video_gen",
-        Arc::new(VideoGenerateHandler::new(Arc::new(
-            FlowyVideoGenBackend::new(services.clone()),
-        ))),
-        flowy_video_generate_schema(),
-        "🎞️",
-        Arc::clone(&check),
-    );
-
     if !config.media.workflows.enabled {
-        tracing::info!("Flowy image/video backends registered (workflows disabled)");
+        register_overwrite(
+            registry,
+            "video_gen",
+            Arc::new(VideoGenerateHandler::new(Arc::new(
+                FlowyVideoGenBackend::new(services.clone()),
+            ))),
+            flowy_video_generate_schema(),
+            "🎞️",
+            Arc::clone(&check),
+        );
+        tracing::info!(
+            "Flowy image/video backends registered (workflows disabled — long video unavailable)"
+        );
         return;
     }
 
     let store = Arc::new(WorkflowRunStore::new());
     let runner = Arc::new(WorkflowRunner::new(services.clone(), Arc::clone(&store)));
+    let video_backend: Arc<dyn VideoGenerateBackend> = Arc::new(FlowyVideoGenerateRouter::new(
+        FlowyVideoGenBackend::new(services.clone()),
+        Arc::clone(&runner),
+    ));
+    register_overwrite(
+        registry,
+        "video_gen",
+        Arc::new(VideoGenerateHandler::new(video_backend)),
+        flowy_video_generate_schema(),
+        "🎞️",
+        Arc::clone(&check),
+    );
+
     let plan_handler = Arc::new(MediaWorkflowPlanHandler::new(
         config.media.clone(),
         Some(services.clone()),
@@ -104,7 +119,7 @@ pub fn wire_flowy_media(
         "🎬",
         Arc::clone(&check),
     );
-    let cancel_handler = Arc::new(MediaWorkflowCancelHandler::new(Arc::clone(&runner)));
+    let cancel_handler = Arc::new(MediaWorkflowCancelHandler::new(runner));
     register_overwrite(
         registry,
         "media_workflow",

@@ -48,8 +48,8 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
         json!({
             "type": "integer",
             "minimum": 1,
-            "maximum": 15,
-            "description": "Video length in seconds (config default when omitted)."
+            "maximum": 120,
+            "description": "Video length in seconds. Seedance caps ~10s per clip; values above 10 auto-run long-video segmentation + concat (no extra tool needed)."
         }),
     );
     props.insert(
@@ -113,7 +113,7 @@ pub fn flowy_video_generate_schema() -> ToolSchema {
 
     tool_schema(
         "video_generate",
-        "Generate a video via Flowy Seedance. Returns standardized assets with MEDIA: local path when save_locally is enabled. Response includes user_prompt_block with the exact API prompt — quote it in your reply.",
+        "Generate a video via Flowy Seedance. Duration >10s automatically splits into chained clips and concat (long video). Returns standardized assets with MEDIA: local path when save_locally is enabled. Response includes user_prompt_block with the exact API prompt — quote it in your reply.",
         JsonSchema::object(props, vec!["prompt".into()]),
     )
 }

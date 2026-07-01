@@ -6,6 +6,7 @@ pub mod credits;
 pub mod delivery;
 pub mod flowy_params;
 pub mod llm_refine;
+pub mod long_video_plan;
 pub mod platform;
 pub mod preview;
 pub mod progress;
