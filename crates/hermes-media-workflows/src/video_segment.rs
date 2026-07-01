@@ -189,31 +189,229 @@ pub async fn extract_last_frame_png(video_path: &Path, output_png: &Path) -> Res
             .map_err(|e| ToolError::ExecutionFailed(format!("create frame dir: {e}")))?;
     }
 
-    let output = Command::new(&ffmpeg)
+    let duration_secs = probe_video_duration_secs(video_path, &ffmpeg).await;
+    let mut last_err = None;
+    for (label, args) in frame_extract_attempts(video_path, output_png, duration_secs) {
+        if run_ffmpeg_frame_extract(&ffmpeg, &args).await.is_ok() && frame_png_ready(output_png) {
+            return Ok(());
+        }
+        last_err = Some(format!("ffmpeg {label} did not produce a frame png"));
+        let _ = tokio::fs::remove_file(output_png).await;
+    }
+
+    Err(ToolError::ExecutionFailed(format!(
+        "ffmpeg extract last frame failed for {}: {}",
+        video_path.display(),
+        last_err.unwrap_or_else(|| "unknown".into())
+    )))
+}
+
+fn ffprobe_executable(ffmpeg: &Path) -> PathBuf {
+    ffmpeg
+        .parent()
+        .map(|dir| {
+            #[cfg(windows)]
+            {
+                dir.join("ffprobe.exe")
+            }
+            #[cfg(not(windows))]
+            {
+                dir.join("ffprobe")
+            }
+        })
+        .unwrap_or_else(|| PathBuf::from("ffprobe"))
+}
+
+async fn probe_video_duration_secs(video_path: &Path, ffmpeg: &Path) -> Option<f64> {
+    let ffprobe = ffprobe_executable(ffmpeg);
+    let output = Command::new(&ffprobe)
         .args([
-            "-hide_banner",
-            "-loglevel",
+            "-v",
             "error",
-            "-sseof",
-            "-0.05",
-            "-i",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
         ])
         .arg(video_path)
-        .args(["-vframes", "1", "-q:v", "2", "-y"])
-        .arg(output_png)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|d| *d > 0.0)
+}
+
+fn frame_extract_attempts(
+    video_path: &Path,
+    output_png: &Path,
+    duration_secs: Option<f64>,
+) -> Vec<(&'static str, Vec<std::ffi::OsString>)> {
+    let mut attempts = Vec::new();
+
+    attempts.push((
+        "sseof",
+        vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-sseof".into(),
+            "-0.08".into(),
+            "-i".into(),
+            video_path.as_os_str().to_os_string(),
+            "-vframes".into(),
+            "1".into(),
+            "-q:v".into(),
+            "2".into(),
+            "-y".into(),
+            output_png.as_os_str().to_os_string(),
+        ],
+    ));
+
+    if let Some(duration) = duration_secs {
+        let seek = (duration - 0.12).max(0.0);
+        let seek = format!("{seek:.3}");
+        attempts.push((
+            "duration_seek",
+            vec![
+                "-hide_banner".into(),
+                "-loglevel".into(),
+                "error".into(),
+                "-ss".into(),
+                seek.into(),
+                "-i".into(),
+                video_path.as_os_str().to_os_string(),
+                "-vframes".into(),
+                "1".into(),
+                "-q:v".into(),
+                "2".into(),
+                "-y".into(),
+                output_png.as_os_str().to_os_string(),
+            ],
+        ));
+    }
+
+    attempts.push((
+        "tail_reverse",
+        vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-sseof".into(),
+            "-0.2".into(),
+            "-i".into(),
+            video_path.as_os_str().to_os_string(),
+            "-vframes".into(),
+            "1".into(),
+            "-update".into(),
+            "1".into(),
+            "-q:v".into(),
+            "2".into(),
+            "-y".into(),
+            output_png.as_os_str().to_os_string(),
+        ],
+    ));
+
+    attempts
+}
+
+async fn run_ffmpeg_frame_extract(ffmpeg: &Path, args: &[std::ffi::OsString]) -> Result<(), ToolError> {
+    let output = Command::new(ffmpeg)
+        .args(args)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()
         .await
         .map_err(|e| ToolError::ExecutionFailed(format!("ffmpeg extract frame: {e}")))?;
-
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(ToolError::ExecutionFailed(format!(
-            "ffmpeg extract last frame failed: {err}"
-        )));
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(ToolError::ExecutionFailed(format!(
+            "ffmpeg extract last frame failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
     }
-    Ok(())
+}
+
+fn frame_png_ready(path: &Path) -> bool {
+    path.is_file()
+        && std::fs::metadata(path)
+            .ok()
+            .is_some_and(|meta| meta.len() > 64)
+}
+
+/// Build a first-frame data URL for the next segment; returns None when extraction fails.
+pub async fn build_segment_chain_image_url(
+    video_path: &Path,
+    work_dir: &Path,
+    seg_index: usize,
+) -> Result<Option<String>, ToolError> {
+    let frame_path = work_dir.join(format!("seg_{seg_index}_last.png"));
+    if frame_png_ready(&frame_path) {
+        return Ok(Some(png_file_to_data_url(&frame_path)?));
+    }
+    match extract_last_frame_png(video_path, &frame_path).await {
+        Ok(()) => Ok(Some(png_file_to_data_url(&frame_path)?)),
+        Err(err) => {
+            tracing::warn!(
+                video = %video_path.display(),
+                error = %err,
+                "last-frame extract failed; next segment will continue without first_frame image"
+            );
+            Ok(None)
+        }
+    }
+}
+
+pub fn local_image_path_to_data_url(path: &Path) -> Result<String, ToolError> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| ToolError::ExecutionFailed(format!("read local image: {e}")))?;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        _ => "image/png",
+    };
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{b64}"))
+}
+
+/// Normalize image references for upstream video APIs (never send bare local paths).
+pub fn normalize_video_first_frame_url(url: &str) -> Result<String, ToolError> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err(ToolError::InvalidParams("empty image_url".into()));
+    }
+    if trimmed.starts_with("data:")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+    {
+        return Ok(trimmed.to_string());
+    }
+    let path = if let Some(rest) = trimmed.strip_prefix("file://") {
+        PathBuf::from(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+    if path.is_file() {
+        return local_image_path_to_data_url(&path);
+    }
+    Err(ToolError::ExecutionFailed(format!(
+        "video first_frame image not found locally: {trimmed}"
+    )))
 }
 
 /// Encode PNG bytes as a data URL for Seedance `first_frame` chaining.
@@ -495,6 +693,24 @@ mod tests {
         let p = segment_video_prompt("一只猫在奔跑", 1, 2);
         assert!(p.contains("2"));
         assert!(p.contains("猫"));
+    }
+
+    #[test]
+    fn frame_png_ready_requires_nonempty_file() {
+        let dir = std::env::temp_dir().join(format!("hermes-frame-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("empty.png");
+        std::fs::write(&path, b"").expect("write");
+        assert!(!frame_png_ready(&path));
+        std::fs::write(&path, vec![0u8; 128]).expect("write");
+        assert!(frame_png_ready(&path));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn normalize_video_first_frame_rejects_missing_local_path() {
+        let err = normalize_video_first_frame_url(r"C:\no-such-frame.png").expect_err("missing");
+        assert!(err.to_string().contains("not found"));
     }
 
     #[test]

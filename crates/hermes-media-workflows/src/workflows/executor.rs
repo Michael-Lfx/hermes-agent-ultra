@@ -23,11 +23,10 @@ use crate::progress::{
 use crate::prompt_refine::RefineInput;
 use crate::qa::{qa_check_image, qa_check_video};
 use crate::video_segment::{
-    LongVideoCheckpoint, checkpoint_matches_plan, clear_long_video_checkpoint, concat_videos,
-    extract_last_frame_png, long_video_resume_hint, long_video_work_dir,
-    persist_concatenated_video, plan_segment_durations, png_file_to_data_url,
-    read_long_video_checkpoint, segment_video_file, segment_video_prompt,
-    write_long_video_checkpoint,
+    LongVideoCheckpoint, build_segment_chain_image_url, checkpoint_matches_plan,
+    clear_long_video_checkpoint, concat_videos, long_video_resume_hint, long_video_work_dir,
+    persist_concatenated_video, plan_segment_durations, read_long_video_checkpoint,
+    segment_video_file, segment_video_prompt, write_long_video_checkpoint,
 };
 
 pub struct WorkflowExecutor {
@@ -402,10 +401,16 @@ impl WorkflowExecutor {
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
             model_explicit: input.get("model").is_some(),
-            image_url: input
-                .get("image_url")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            image_url: match input.get("image_url").and_then(|v| v.as_str()) {
+                Some(url) => match crate::video_segment::normalize_video_first_frame_url(url) {
+                    Ok(normalized) => Some(normalized),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "skipping invalid video first_frame image_url");
+                        None
+                    }
+                },
+                None => None,
+            },
             reference_image_urls,
             duration: input
                 .get("duration")
@@ -537,14 +542,11 @@ impl WorkflowExecutor {
                 }
             }
             chain_image_url = checkpoint.chain_image_url.or(chain_image_url);
-            if start_idx > 0
-                && start_idx < segment_total
-                && chain_image_url.is_none()
+            if start_idx > 0 && start_idx < segment_total && chain_image_url.is_none()
                 && let Some(prev) = segment_paths.last()
             {
-                let frame_path = work_dir.join(format!("seg_{}_last.png", start_idx - 1));
-                extract_last_frame_png(prev, &frame_path).await?;
-                chain_image_url = Some(png_file_to_data_url(&frame_path)?);
+                chain_image_url = build_segment_chain_image_url(prev, &work_dir, start_idx - 1)
+                    .await?;
             }
             if start_idx > 0 && start_idx < segment_total {
                 report_media_progress(format!(
@@ -651,26 +653,45 @@ impl WorkflowExecutor {
             }));
 
             let next_index = idx + 1;
-            if next_index < segment_total {
-                let frame_path = work_dir.join(format!("seg_{idx}_last.png"));
-                extract_last_frame_png(&stable_path, &frame_path).await?;
-                chain_image_url = Some(png_file_to_data_url(&frame_path)?);
-            }
+            write_long_video_checkpoint(
+                &work_dir,
+                &LongVideoCheckpoint {
+                    target_duration_secs: plan.target_duration_secs,
+                    max_clip_secs: plan.max_clip_secs,
+                    segment_durations: plan.segment_durations.clone(),
+                    model: model.clone(),
+                    base_prompt: base_prompt.to_string(),
+                    next_segment_index: next_index,
+                    completed_segments: segment_paths
+                        .iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect(),
+                    chain_image_url: chain_image_url.clone(),
+                },
+            )
+            .await?;
 
-            let checkpoint = LongVideoCheckpoint {
-                target_duration_secs: plan.target_duration_secs,
-                max_clip_secs: plan.max_clip_secs,
-                segment_durations: plan.segment_durations.clone(),
-                model: model.clone(),
-                base_prompt: base_prompt.to_string(),
-                next_segment_index: next_index,
-                completed_segments: segment_paths
-                    .iter()
-                    .map(|p| p.to_string_lossy().into_owned())
-                    .collect(),
-                chain_image_url: chain_image_url.clone(),
-            };
-            write_long_video_checkpoint(&work_dir, &checkpoint).await?;
+            if next_index < segment_total {
+                chain_image_url =
+                    build_segment_chain_image_url(&stable_path, &work_dir, idx).await?;
+                write_long_video_checkpoint(
+                    &work_dir,
+                    &LongVideoCheckpoint {
+                        target_duration_secs: plan.target_duration_secs,
+                        max_clip_secs: plan.max_clip_secs,
+                        segment_durations: plan.segment_durations.clone(),
+                        model: model.clone(),
+                        base_prompt: base_prompt.to_string(),
+                        next_segment_index: next_index,
+                        completed_segments: segment_paths
+                            .iter()
+                            .map(|p| p.to_string_lossy().into_owned())
+                            .collect(),
+                        chain_image_url: chain_image_url.clone(),
+                    },
+                )
+                .await?;
+            }
         }
 
         let output_path = work_dir.join("concat_output.mp4");

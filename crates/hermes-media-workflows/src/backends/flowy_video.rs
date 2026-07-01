@@ -16,6 +16,7 @@ use crate::assets::persist_from_url;
 use crate::delivery::{MediaProvenance, VideoTaskMeta, video_generation_response};
 use crate::flowy_params::{normalize_video_duration, normalize_video_resolution};
 use crate::progress::{report_media_progress, video_generate_started};
+use crate::video_segment::normalize_video_first_frame_url;
 use crate::workflows::control::WorkflowRunControl;
 
 pub struct FlowyVideoGenBackend {
@@ -90,13 +91,20 @@ impl FlowyVideoGenBackend {
         let resolution = normalize_video_resolution(&model, resolution_input);
 
         let mut images = Vec::new();
-        if let Some(url) = request
+        if let Some(raw_url) = request
             .image_url
             .as_deref()
             .filter(|u| !u.trim().is_empty())
         {
+            let url = match normalize_video_first_frame_url(raw_url) {
+                Ok(normalized) => normalized,
+                Err(err) => {
+                    tracing::warn!(error = %err, "invalid first_frame image_url for video task");
+                    return Err(err);
+                }
+            };
             images.push(VideoContentImage {
-                url: url.to_string(),
+                url,
                 role: "first_frame".into(),
             });
         }
