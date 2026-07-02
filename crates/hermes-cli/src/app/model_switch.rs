@@ -29,13 +29,22 @@ impl ModelState {
         let agent_config = build_agent_config(&core.config, &self.current_model);
         let agent_tool_registry = Arc::new(bridge_tool_registry(&core.tool_registry));
 
+        // Preserve the async delegation registry across model switches so
+        // running background tasks are not orphaned.
+        let async_delegation_registry = core
+            .agent
+            .async_delegation_registry()
+            .unwrap_or_else(|| {
+                Arc::new(hermes_agent::async_delegation::AsyncDelegationRegistry::new())
+            });
         let agent_inner = hermes_agent::attach_agent_runtime(AgentLoop::new(
             agent_config,
             agent_tool_registry,
             provider,
         ))
         .with_async_tool_dispatch(async_tool_dispatch_for(core.tool_registry.clone()))
-        .with_callbacks(App::stream_callbacks(stream.stream_handle_shared.clone()));
+        .with_callbacks(App::stream_callbacks(stream.stream_handle_shared.clone()))
+        .with_async_delegation_registry(async_delegation_registry);
         let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(
             &agent_inner,
             state_root.to_path_buf(),

@@ -33,7 +33,10 @@ fn build_minimal_test_app() -> App {
         agent_tool_registry,
         provider,
     ))
-    .with_callbacks(App::stream_callbacks(Arc::new(StdMutex::new(None))));
+    .with_callbacks(App::stream_callbacks(Arc::new(StdMutex::new(None))))
+    .with_async_delegation_registry(Arc::new(
+        hermes_agent::async_delegation::AsyncDelegationRegistry::new(),
+    ));
     let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(
         &agent_inner,
         hermes_home_dir(),

@@ -16,6 +16,10 @@ use std::sync::Arc;
 #[async_trait]
 pub trait DelegationBackend: Send + Sync {
     /// Delegate a task to a sub-agent.
+    ///
+    /// When `background` is `true`, the backend should dispatch the subagent
+    /// asynchronously and return a dispatch handle immediately, rather than
+    /// blocking until the child finishes.
     async fn delegate(
         &self,
         task: &str,
@@ -25,6 +29,7 @@ pub trait DelegationBackend: Send + Sync {
         child_depth: Option<u32>,
         max_depth: Option<u32>,
         parent_budget_remaining_usd: Option<f64>,
+        background: bool,
     ) -> Result<String, ToolError>;
 }
 
@@ -65,6 +70,10 @@ impl ToolHandler for DelegateTaskHandler {
         let parent_budget_remaining_usd = params
             .get("parent_budget_remaining_usd")
             .and_then(|v| v.as_f64());
+        let background = params
+            .get("background")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         self.backend
             .delegate(
@@ -75,6 +84,7 @@ impl ToolHandler for DelegateTaskHandler {
                 child_depth,
                 max_depth,
                 parent_budget_remaining_usd,
+                background,
             )
             .await
     }
@@ -130,10 +140,18 @@ impl ToolHandler for DelegateTaskHandler {
                 "description": "Remaining parent budget in USD to propagate to child orchestration"
             }),
         );
+        props.insert(
+            "background".into(),
+            json!({
+                "type": "boolean",
+                "default": false,
+                "description": "When true, the subagent runs in the background and this call returns immediately with a dispatch handle. The subagent's result re-enters the conversation as a new message when it finishes — you and the user can keep working in the meantime. Do not wait or poll; just continue."
+            }),
+        );
 
         tool_schema(
             "delegate_task",
-            "Delegate a task to a sub-agent with an isolated context. The sub-agent will work independently and return results.",
+            "Delegate a task to a sub-agent with an isolated context. The sub-agent will work independently and return results. Set background=true to run the subagent in the background and return immediately; its result will re-enter the conversation when done.",
             JsonSchema::object(props, vec!["task".into()]),
         )
     }
@@ -155,6 +173,7 @@ mod tests {
             _child_depth: Option<u32>,
             _max_depth: Option<u32>,
             _parent_budget_remaining_usd: Option<f64>,
+            _background: bool,
         ) -> Result<String, ToolError> {
             Ok(format!("Delegated task: {}", task))
         }

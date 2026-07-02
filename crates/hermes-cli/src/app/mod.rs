@@ -254,10 +254,14 @@ impl App {
         let agent_config = build_agent_config(&config, &current_model);
         let provider = build_provider(&config, &current_model);
 
+        let async_delegation_registry = Arc::new(
+            hermes_agent::async_delegation::AsyncDelegationRegistry::new(),
+        );
         let agent_inner = hermes_agent::attach_agent_runtime(
             AgentLoop::new(agent_config, agent_tool_registry, provider)
                 .with_async_tool_dispatch(async_tool_dispatch_for(tool_registry.clone()))
-                .with_synced_tools_registry(tool_registry.clone()),
+                .with_synced_tools_registry(tool_registry.clone())
+                .with_async_delegation_registry(async_delegation_registry),
         )
         .with_callbacks(Self::stream_callbacks(stream_handle_shared.clone()));
         let orchestrator = Arc::new(SubAgentOrchestrator::from_parent(

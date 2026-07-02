@@ -32,6 +32,9 @@ use serde_json::json;
 use tokio::time::timeout;
 
 use crate::agent_loop::{AgentConfig, AgentLoop, AsyncToolDispatch, ToolRegistry};
+use crate::async_delegation::{
+    AsyncDelegationRegistry, BackgroundDelegationResult, DispatchOutcome, DispatchParams,
+};
 use crate::credential_pool::CredentialPool;
 use crate::interrupt::InterruptController;
 
@@ -111,6 +114,11 @@ pub struct SubAgentRequest {
     pub max_depth: u32,
     /// Parent budget remaining (USD) — exposed to the child for cost awareness.
     pub parent_budget_remaining_usd: Option<f64>,
+    /// When true, the subagent runs in the background and `execute` returns
+    /// a dispatch handle immediately instead of blocking until the child
+    /// finishes. The result re-enters the conversation as a new message when
+    /// the subagent completes.
+    pub background: bool,
 }
 
 /// Configuration for [`SubAgentOrchestrator`].
@@ -125,6 +133,9 @@ pub struct SubAgentOrchestratorConfig {
     pub parent_session_id: Option<String>,
     pub timeout: Duration,
     pub async_tool_dispatch: Option<AsyncToolDispatch>,
+    /// When set, `delegate_task(background=true)` dispatches the subagent
+    /// through this registry instead of blocking.
+    pub async_registry: Option<Arc<AsyncDelegationRegistry>>,
 }
 
 /// In-process executor for `delegate_task` tool calls.
@@ -154,6 +165,7 @@ impl SubAgentOrchestrator {
                 parent_session_id: parent.config().session_id.clone(),
                 timeout: Duration::from_secs(DEFAULT_SUB_AGENT_TIMEOUT_SECS),
                 async_tool_dispatch: parent.async_tool_dispatch(),
+                async_registry: parent.async_delegation_registry.clone(),
             },
         }
     }
@@ -205,6 +217,24 @@ impl SubAgentOrchestrator {
 
         // Best-effort lineage persistence — failures must never break delegation.
         self.persist_lineage(&lineage).await;
+
+        // ----- Background (async) dispatch -----
+        // When background=true and a registry is available, spawn the child on
+        // a background tokio task and return a dispatch handle immediately.
+        // The child's result re-enters the conversation as a new message when
+        // it finishes (via the registry's completion channel).
+        if req.background {
+            if let Some(registry) = self.cfg.async_registry.clone() {
+                return self
+                    .dispatch_background(registry, req.clone(), lineage, sub_agent_id)
+                    .await;
+            }
+            // No registry available — fall through to sync with a note.
+            tracing::info!(
+                "delegate_task: background=true but no async registry is set; \
+                 running synchronously instead."
+            );
+        }
 
         // Build and run the child.
         let outcome = self.run_child(&req, &sub_agent_id).await;
@@ -291,6 +321,26 @@ impl SubAgentOrchestrator {
             }
         });
 
+        let result = self
+            .run_child_core(req, sub_agent_id, child_interrupt)
+            .await;
+
+        watcher_stop.store(true, std::sync::atomic::Ordering::Release);
+        let _ = watcher.await;
+        result
+    }
+
+    /// Build, spawn, and await the child agent with a given interrupt handle.
+    ///
+    /// This is the shared core used by both the synchronous [`run_child`] path
+    /// (which wires a parent→child interrupt watcher) and the background
+    /// dispatch path (which wires a registry→child interrupt watcher).
+    async fn run_child_core(
+        &self,
+        req: &SubAgentRequest,
+        sub_agent_id: &str,
+        child_interrupt: InterruptController,
+    ) -> Result<hermes_core::AgentResult, SubAgentError> {
         let child_config = self.build_child_config(req, sub_agent_id);
         let child_provider = self.child_llm_provider(&child_config)?;
         let child_interrupt_for_spawn = child_interrupt.clone();
@@ -322,7 +372,7 @@ impl SubAgentOrchestrator {
             child_agent.run(initial, inherited_tools).await
         });
 
-        let result = match timeout(self.cfg.timeout, join).await {
+        match timeout(self.cfg.timeout, join).await {
             Ok(Ok(Ok(result))) if result.interrupted => Err(SubAgentError::Cancelled),
             Ok(Ok(Ok(result))) => Ok(result),
             Ok(Ok(Err(AgentError::Interrupted { .. }))) => Err(SubAgentError::Cancelled),
@@ -337,11 +387,219 @@ impl SubAgentOrchestrator {
                 child_interrupt.interrupt(Some("timeout".to_string()));
                 Err(SubAgentError::Timeout)
             }
+        }
+    }
+
+    /// Dispatch a background (async) delegation.
+    ///
+    /// Spawns the child on a background tokio task via the
+    /// [`AsyncDelegationRegistry`] and returns a dispatch handle JSON
+    /// immediately. When the child finishes, a completion event is pushed onto
+    /// the registry's channel; the CLI/gateway drains it and forges a new turn.
+    ///
+    /// If the async pool is at capacity, falls back to synchronous execution
+    /// and includes a note in the result.
+    async fn dispatch_background(
+        self: Arc<Self>,
+        registry: Arc<AsyncDelegationRegistry>,
+        req: SubAgentRequest,
+        mut lineage: SubAgentLineage,
+        sub_agent_id: String,
+    ) -> String {
+        let session_key = self
+            .cfg
+            .parent_session_id
+            .clone()
+            .unwrap_or_default();
+        let model = clean_config_string(req.model.as_deref())
+            .map(str::to_string)
+            .or_else(|| {
+                clean_config_string(self.cfg.parent_config.delegation_model.as_deref())
+                    .map(str::to_string)
+            });
+
+        let params = DispatchParams {
+            goal: req.task.clone(),
+            context: req.context.clone(),
+            toolset: req.toolset.clone(),
+            model,
+            session_key,
         };
 
-        watcher_stop.store(true, std::sync::atomic::Ordering::Release);
-        let _ = watcher.await;
-        result
+        let orch = self.clone();
+        let req_for_runner = req.clone();
+        let sub_agent_id_for_runner = sub_agent_id.clone();
+        let lineage_for_runner = lineage.clone();
+
+        let make_runner = move |registry_interrupt: InterruptController| {
+            let orch = orch.clone();
+            let req = req_for_runner.clone();
+            let sub_agent_id = sub_agent_id_for_runner.clone();
+            let mut lineage = lineage_for_runner.clone();
+
+            async move {
+                let child_interrupt = InterruptController::new();
+
+                // Forward registry interrupt → child interrupt (detached from
+                // parent so the parent turn's /stop doesn't kill it).
+                let watcher_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let watcher_stop_clone = watcher_stop.clone();
+                let child_ctrl = child_interrupt.clone();
+                let registry_int = registry_interrupt.clone();
+                let watcher = tokio::spawn(async move {
+                    while !watcher_stop_clone.load(std::sync::atomic::Ordering::Acquire) {
+                        if registry_int.is_interrupted() {
+                            child_ctrl.interrupt(Some(
+                                "async delegation cancelled".to_string(),
+                            ));
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                });
+
+                let outcome = orch
+                    .run_child_core(&req, &sub_agent_id, child_interrupt)
+                    .await;
+
+                watcher_stop.store(true, std::sync::atomic::Ordering::Release);
+                let _ = watcher.await;
+
+                match outcome {
+                    Ok(result) => {
+                        lineage.status = SubAgentStatus::Completed;
+                        lineage.total_turns = result.total_turns;
+                        if let Some(usage) = result.usage.as_ref() {
+                            lineage.prompt_tokens = Some(usage.prompt_tokens);
+                            lineage.completion_tokens = Some(usage.completion_tokens);
+                            lineage.estimated_cost_usd = usage.estimated_cost;
+                        }
+                        lineage.ended_at = Some(Utc::now());
+                        orch.persist_lineage(&lineage).await;
+
+                        let final_text =
+                            extract_final_assistant_text(&result.messages);
+                        BackgroundDelegationResult {
+                            status: "completed".to_string(),
+                            summary: Some(final_text),
+                            error: None,
+                            total_turns: result.total_turns,
+                            api_calls: result.api_calls,
+                            usage: result.usage,
+                            sub_agent_id,
+                        }
+                    }
+                    Err(e) => {
+                        let status = match &e {
+                            SubAgentError::Timeout => SubAgentStatus::Timeout,
+                            SubAgentError::Cancelled => SubAgentStatus::Cancelled,
+                            SubAgentError::Agent(_) => SubAgentStatus::Failed,
+                        };
+                        lineage.status = status;
+                        lineage.error = Some(e.to_string());
+                        lineage.ended_at = Some(Utc::now());
+                        orch.persist_lineage(&lineage).await;
+
+                        let status_str = match status {
+                            SubAgentStatus::Timeout => "timeout",
+                            SubAgentStatus::Cancelled => "interrupted",
+                            _ => "error",
+                        };
+                        BackgroundDelegationResult {
+                            status: status_str.to_string(),
+                            summary: None,
+                            error: Some(e.to_string()),
+                            total_turns: 0,
+                            api_calls: 0,
+                            usage: None,
+                            sub_agent_id,
+                        }
+                    }
+                }
+            }
+        };
+
+        match registry.dispatch(params, make_runner) {
+            DispatchOutcome::Dispatched { delegation_id } => {
+                json!({
+                    "status": "dispatched",
+                    "mode": "background",
+                    "delegation_id": delegation_id,
+                    "goal": req.task,
+                    "sub_agent_id": sub_agent_id,
+                    "note": "Subagent is running in the background. You and the user can keep working; its full result re-enters the conversation as a new message when it finishes. Do not wait or poll — just continue.",
+                })
+                .to_string()
+            }
+            DispatchOutcome::Rejected { error } => {
+                tracing::info!(
+                    error = %error,
+                    "delegate_task: async pool rejected; running synchronously instead."
+                );
+                // Fall back to sync — run the child and return the result inline.
+                let outcome = self.run_child(&req, &sub_agent_id).await;
+                match outcome {
+                    Ok(result) => {
+                        lineage.status = SubAgentStatus::Completed;
+                        lineage.total_turns = result.total_turns;
+                        if let Some(usage) = result.usage.as_ref() {
+                            lineage.prompt_tokens = Some(usage.prompt_tokens);
+                            lineage.completion_tokens = Some(usage.completion_tokens);
+                            lineage.estimated_cost_usd = usage.estimated_cost;
+                        }
+                        lineage.ended_at = Some(Utc::now());
+                        self.persist_lineage(&lineage).await;
+
+                        let final_text =
+                            extract_final_assistant_text(&result.messages);
+                        json!({
+                            "sub_agent_id": sub_agent_id,
+                            "status": "completed",
+                            "task": req.task,
+                            "total_turns": result.total_turns,
+                            "finished_naturally": result.finished_naturally,
+                            "result": final_text,
+                            "usage": result.usage.as_ref().map(|u| json!({
+                                "prompt_tokens": u.prompt_tokens,
+                                "completion_tokens": u.completion_tokens,
+                                "total_tokens": u.total_tokens,
+                                "estimated_cost": u.estimated_cost,
+                            })),
+                            "depth": req.child_depth,
+                            "max_depth": req.max_depth,
+                            "note": "background dispatch was rejected (async pool at capacity); the subagent ran synchronously and the result is included above.",
+                        })
+                        .to_string()
+                    }
+                    Err(e) => {
+                        let status = match &e {
+                            SubAgentError::Timeout => SubAgentStatus::Timeout,
+                            SubAgentError::Cancelled => SubAgentStatus::Cancelled,
+                            SubAgentError::Agent(_) => SubAgentStatus::Failed,
+                        };
+                        lineage.status = status;
+                        lineage.error = Some(e.to_string());
+                        lineage.ended_at = Some(Utc::now());
+                        self.persist_lineage(&lineage).await;
+
+                        json!({
+                            "sub_agent_id": sub_agent_id,
+                            "status": match status {
+                                SubAgentStatus::Timeout => "timeout",
+                                SubAgentStatus::Cancelled => "cancelled",
+                                SubAgentStatus::Failed => "failed",
+                                _ => "failed",
+                            },
+                            "task": req.task,
+                            "error": e.to_string(),
+                            "depth": req.child_depth,
+                            "max_depth": req.max_depth,
+                        })
+                        .to_string()
+                    }
+                }
+            }
+        }
     }
 
     fn build_child_config(&self, req: &SubAgentRequest, sub_agent_id: &str) -> AgentConfig {
@@ -613,6 +871,7 @@ mod tests {
             parent_session_id: Some("parent".into()),
             timeout: Duration::from_secs(2),
             async_tool_dispatch: None,
+            async_registry: None,
         }));
 
         let out = orch
@@ -687,6 +946,7 @@ mod tests {
             parent_session_id: Some("parent".into()),
             timeout: Duration::from_millis(50),
             async_tool_dispatch: None,
+            async_registry: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -733,6 +993,7 @@ mod tests {
             parent_session_id: None,
             timeout: Duration::from_secs(2),
             async_tool_dispatch: None,
+            async_registry: None,
         }));
         let out = orch
             .execute(SubAgentRequest {
@@ -769,6 +1030,7 @@ mod tests {
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
             async_tool_dispatch: None,
+            async_registry: None,
         });
         let child = orch.build_child_config(
             &SubAgentRequest {
@@ -813,6 +1075,7 @@ mod tests {
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
             async_tool_dispatch: None,
+            async_registry: None,
         });
 
         let child = orch.build_child_config(
@@ -854,6 +1117,7 @@ mod tests {
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
             async_tool_dispatch: None,
+            async_registry: None,
         });
 
         let child = orch.build_child_config(
@@ -893,6 +1157,7 @@ mod tests {
             parent_session_id: Some("root".into()),
             timeout: Duration::from_secs(1),
             async_tool_dispatch: None,
+            async_registry: None,
         });
 
         let child = orch.build_child_config(

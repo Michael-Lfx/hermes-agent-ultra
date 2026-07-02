@@ -946,6 +946,11 @@ pub struct AgentLoop {
     /// lineage) instead of simply returning a signal envelope.
     pub(crate) sub_agent_orchestrator:
         Option<Arc<crate::sub_agent_orchestrator::SubAgentOrchestrator>>,
+    /// Async delegation registry for `delegate_task(background=true)`. When set,
+    /// background subagents run on detached tokio tasks and their results
+    /// re-enter the conversation via the completion channel.
+    pub(crate) async_delegation_registry:
+        Option<Arc<crate::async_delegation::AsyncDelegationRegistry>>,
     /// Always-on workspace code index + repo-map source.
     code_index: Option<Arc<Mutex<CodeIndex>>>,
     /// LSP-style context injection controls.
@@ -1422,6 +1427,7 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             sub_agent_orchestrator: None,
+            async_delegation_registry: None,
             code_index,
             lsp_context,
             router: crate::smart_router::SmartRouter::new(route_learning, stored_primary_runtime),
@@ -1698,6 +1704,7 @@ impl AgentLoop {
             delegate_depth: 0,
             primary_credential_pool: None,
             sub_agent_orchestrator: None,
+            async_delegation_registry: None,
             code_index: None,
             lsp_context,
             router: crate::smart_router::SmartRouter::new(route_learning, stored_primary_runtime),
@@ -1752,6 +1759,52 @@ impl AgentLoop {
     ) -> Self {
         self.sub_agent_orchestrator = Some(orchestrator);
         self
+    }
+
+    /// Attach the async delegation registry for `delegate_task(background=true)`.
+    /// When set, background subagents run on detached tokio tasks and their
+    /// results re-enter the conversation via the registry's completion channel.
+    /// The CLI / gateway should drain [`AsyncDelegationRegistry::try_recv_event`]
+    /// between turns to inject completion events as new messages.
+    pub fn with_async_delegation_registry(
+        mut self,
+        registry: Arc<crate::async_delegation::AsyncDelegationRegistry>,
+    ) -> Self {
+        self.async_delegation_registry = Some(registry);
+        self
+    }
+
+    /// Drain pending async delegation completion events and return them as
+    /// formatted user-role messages ready for injection into the conversation.
+    ///
+    /// Called automatically by `prepare_turn` between turns.  Gateway / CLI
+    /// integrations can also call this manually at any point to check for
+    /// completions (e.g. during idle polling between user turns).
+    pub fn drain_async_delegation_completions(&self) -> Vec<Message> {
+        let Some(registry) = &self.async_delegation_registry else {
+            return Vec::new();
+        };
+        let mut messages = Vec::new();
+        while let Some(evt) = registry.try_recv_event() {
+            let notification = crate::async_delegation::format_async_delegation_notification(&evt);
+            messages.push(Message::user(notification));
+        }
+        if !messages.is_empty() {
+            tracing::info!(
+                count = messages.len(),
+                "Drained async delegation completion(s) into conversation"
+            );
+        }
+        messages
+    }
+
+    /// Returns a clone of the async delegation registry, if one is attached.
+    /// Used by the CLI to preserve running background tasks across model
+    /// switches.
+    pub fn async_delegation_registry(
+        &self,
+    ) -> Option<Arc<crate::async_delegation::AsyncDelegationRegistry>> {
+        self.async_delegation_registry.clone()
     }
 
     /// Attach the primary runtime credential pool (API key rotation).

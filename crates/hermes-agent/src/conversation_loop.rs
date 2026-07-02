@@ -108,6 +108,13 @@ pub(crate) async fn prepare_turn(
     let history_len = conversation_history.len();
 
     let mut messages: Vec<Message> = conversation_history;
+
+    // Drain async delegation completions — results from background
+    // `delegate_task(background=true)` calls that finished since the
+    // last turn.  Injected as user-role context messages so the agent
+    // sees them alongside the user's latest input.
+    messages.extend(agent.drain_async_delegation_completions());
+
     messages.push(Message::user(user_message));
 
     agent.apply_turn_message_prelude(&mut messages).await;

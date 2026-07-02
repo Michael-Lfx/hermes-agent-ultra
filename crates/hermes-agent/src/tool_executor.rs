@@ -111,6 +111,10 @@ impl AgentLoop {
                     max_depth: max_delegate_depth,
                     parent_budget_remaining_usd,
                     inherited_tool_schemas: Vec::new(),
+                    background: parsed
+                        .get("background")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
                 };
                 pending_ids.push(tc.id.clone());
                 pending_futs.push(orch.execute(req));

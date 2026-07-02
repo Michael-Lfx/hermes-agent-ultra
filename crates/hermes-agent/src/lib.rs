@@ -32,6 +32,7 @@ pub mod api_bridge;
 pub mod api_message_oracle;
 pub mod api_messages;
 pub mod auxiliary_builder;
+pub mod async_delegation;
 pub mod bedrock;
 pub mod budget;
 pub mod cache_diagnostics;
