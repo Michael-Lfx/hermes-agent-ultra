@@ -14,6 +14,7 @@ use crate::backends::FlowyMediaServices;
 use crate::backends::flowy_video::FlowyVideoGenBackend;
 use crate::backends::traits::{FlowyMediaBackend, MediaGenerationBackend, MediaImageRequest};
 use crate::llm_refine::{plan_storyboard, refine_with_llm_or_template};
+use crate::long_video_active::{clear_active_job, register_active_workflow, sync_active_job};
 use crate::progress::{
     WorkflowStepProgress, long_video_concat, long_video_planning, long_video_segment,
     prompt_refine_working, report_intermediate_artifact, report_media_progress,
@@ -23,10 +24,11 @@ use crate::progress::{
 use crate::prompt_refine::RefineInput;
 use crate::qa::{qa_check_image, qa_check_video};
 use crate::video_segment::{
-    LongVideoCheckpoint, build_segment_chain_image_url, checkpoint_matches_plan,
-    clear_long_video_checkpoint, concat_videos, long_video_resume_hint, long_video_work_dir,
-    persist_concatenated_video, plan_segment_durations, read_long_video_checkpoint,
-    segment_video_file, segment_video_prompt, write_long_video_checkpoint,
+    LongVideoCheckpoint, checkpoint_matches_plan, clear_long_video_checkpoint, concat_videos,
+    long_video_resume_hint, long_video_work_dir, persist_concatenated_video,
+    plan_segment_durations, read_long_video_checkpoint, require_segment_anchor_image_url,
+    require_segment_chain_image_url, segment_video_file, segment_video_prompt,
+    write_long_video_checkpoint,
 };
 
 pub struct WorkflowExecutor {
@@ -113,9 +115,16 @@ impl WorkflowExecutor {
         if record.status == WorkflowRunStatus::Succeeded {
             return Ok(record);
         }
-        if record.status == WorkflowRunStatus::Running {
+        if record.status == WorkflowRunStatus::Running
+            && !crate::long_video_active::record_is_resumable(&record, None)
+        {
             return Err(ToolError::ExecutionFailed(format!(
                 "workflow run {run_id} is still running"
+            )));
+        }
+        if record.status == WorkflowRunStatus::Cancelled {
+            return Err(ToolError::ExecutionFailed(format!(
+                "workflow run {run_id} was cancelled"
             )));
         }
         let def = workflow_definition_for_record(&record)?;
@@ -517,6 +526,7 @@ impl WorkflowExecutor {
             .and_then(|v| v.as_str())
             .filter(|s| !s.trim().is_empty())
             .map(str::to_string);
+        let mut anchor_image_url = chain_image_url.clone();
 
         let mut start_idx = 0usize;
         if let Some(checkpoint) = read_long_video_checkpoint(&work_dir)
@@ -542,11 +552,20 @@ impl WorkflowExecutor {
                 }
             }
             chain_image_url = checkpoint.chain_image_url.or(chain_image_url);
-            if start_idx > 0 && start_idx < segment_total && chain_image_url.is_none()
+            anchor_image_url = checkpoint.anchor_image_url.clone().or(anchor_image_url);
+            if start_idx > 0
+                && start_idx < segment_total
+                && chain_image_url.is_none()
                 && let Some(prev) = segment_paths.last()
             {
-                chain_image_url = build_segment_chain_image_url(prev, &work_dir, start_idx - 1)
-                    .await?;
+                chain_image_url =
+                    Some(require_segment_chain_image_url(prev, &work_dir, start_idx - 1).await?);
+            }
+            if start_idx > 0
+                && anchor_image_url.is_none()
+                && let Some(seg0) = segment_paths.first()
+            {
+                anchor_image_url = Some(require_segment_anchor_image_url(seg0, &work_dir).await?);
             }
             if start_idx > 0 && start_idx < segment_total {
                 report_media_progress(format!(
@@ -555,6 +574,13 @@ impl WorkflowExecutor {
             } else if start_idx >= segment_total && segment_paths.len() >= segment_total {
                 report_media_progress("所有分段已就绪，正在拼接长视频…");
             }
+        }
+
+        if segment_total > 1
+            && start_idx == 0
+            && let Some(record) = self.store.get(run_id)
+        {
+            register_active_workflow(&record, plan.target_duration_secs, segment_total);
         }
 
         for idx in start_idx..segment_total {
@@ -580,7 +606,18 @@ impl WorkflowExecutor {
             if let Some(obj) = seg_input.as_object_mut() {
                 obj.insert("prompt".into(), json!(seg_prompt));
                 obj.insert("duration".into(), json!(clip_secs));
-                if let Some(url) = chain_image_url.clone() {
+                if idx > 0 {
+                    if let Some(url) = chain_image_url.clone() {
+                        obj.insert("image_url".into(), json!(url));
+                    } else {
+                        return Err(ToolError::ExecutionFailed(
+                            "long video continuation missing last-frame chain image".into(),
+                        ));
+                    }
+                    if let Some(anchor) = anchor_image_url.clone() {
+                        obj.insert("reference_image_urls".into(), json!([anchor]));
+                    }
+                } else if let Some(url) = chain_image_url.clone() {
                     obj.insert("image_url".into(), json!(url));
                 } else {
                     obj.remove("image_url");
@@ -591,20 +628,19 @@ impl WorkflowExecutor {
             let seg_out = match self.run_video_step(run_id, &seg_input).await {
                 Ok(out) => out,
                 Err(err) => {
-                    let checkpoint = LongVideoCheckpoint {
-                        target_duration_secs: plan.target_duration_secs,
-                        max_clip_secs: plan.max_clip_secs,
-                        segment_durations: plan.segment_durations.clone(),
-                        model: model.clone(),
-                        base_prompt: base_prompt.to_string(),
-                        next_segment_index: idx,
-                        completed_segments: segment_paths
-                            .iter()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .collect(),
-                        chain_image_url: chain_image_url.clone(),
-                    };
+                    let checkpoint = snapshot_long_video_checkpoint(
+                        &plan,
+                        &model,
+                        base_prompt,
+                        idx,
+                        &segment_paths,
+                        &chain_image_url,
+                        &anchor_image_url,
+                    );
                     let _ = write_long_video_checkpoint(&work_dir, &checkpoint).await;
+                    if let Some(record) = self.store.get(run_id) {
+                        sync_active_job(&record, Some(&checkpoint));
+                    }
                     return Err(long_video_resume_hint(run_id, &err));
                 }
             };
@@ -612,20 +648,19 @@ impl WorkflowExecutor {
             let seg_path = match ensure_local_video_path(&seg_out, &model).await {
                 Ok(path) => path,
                 Err(err) => {
-                    let checkpoint = LongVideoCheckpoint {
-                        target_duration_secs: plan.target_duration_secs,
-                        max_clip_secs: plan.max_clip_secs,
-                        segment_durations: plan.segment_durations.clone(),
-                        model: model.clone(),
-                        base_prompt: base_prompt.to_string(),
-                        next_segment_index: idx,
-                        completed_segments: segment_paths
-                            .iter()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .collect(),
-                        chain_image_url: chain_image_url.clone(),
-                    };
+                    let checkpoint = snapshot_long_video_checkpoint(
+                        &plan,
+                        &model,
+                        base_prompt,
+                        idx,
+                        &segment_paths,
+                        &chain_image_url,
+                        &anchor_image_url,
+                    );
                     let _ = write_long_video_checkpoint(&work_dir, &checkpoint).await;
+                    if let Some(record) = self.store.get(run_id) {
+                        sync_active_job(&record, Some(&checkpoint));
+                    }
                     return Err(long_video_resume_hint(run_id, &err));
                 }
             };
@@ -652,45 +687,42 @@ impl WorkflowExecutor {
                 "local_path": stable_path.to_string_lossy(),
             }));
 
+            if idx == 0 && anchor_image_url.is_none() {
+                anchor_image_url =
+                    Some(require_segment_anchor_image_url(&stable_path, &work_dir).await?);
+            }
+
             let next_index = idx + 1;
-            write_long_video_checkpoint(
-                &work_dir,
-                &LongVideoCheckpoint {
-                    target_duration_secs: plan.target_duration_secs,
-                    max_clip_secs: plan.max_clip_secs,
-                    segment_durations: plan.segment_durations.clone(),
-                    model: model.clone(),
-                    base_prompt: base_prompt.to_string(),
-                    next_segment_index: next_index,
-                    completed_segments: segment_paths
-                        .iter()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .collect(),
-                    chain_image_url: chain_image_url.clone(),
-                },
-            )
-            .await?;
+            let checkpoint = snapshot_long_video_checkpoint(
+                &plan,
+                &model,
+                base_prompt,
+                next_index,
+                &segment_paths,
+                &chain_image_url,
+                &anchor_image_url,
+            );
+            write_long_video_checkpoint(&work_dir, &checkpoint).await?;
+            if let Some(record) = self.store.get(run_id) {
+                sync_active_job(&record, Some(&checkpoint));
+            }
 
             if next_index < segment_total {
                 chain_image_url =
-                    build_segment_chain_image_url(&stable_path, &work_dir, idx).await?;
-                write_long_video_checkpoint(
-                    &work_dir,
-                    &LongVideoCheckpoint {
-                        target_duration_secs: plan.target_duration_secs,
-                        max_clip_secs: plan.max_clip_secs,
-                        segment_durations: plan.segment_durations.clone(),
-                        model: model.clone(),
-                        base_prompt: base_prompt.to_string(),
-                        next_segment_index: next_index,
-                        completed_segments: segment_paths
-                            .iter()
-                            .map(|p| p.to_string_lossy().into_owned())
-                            .collect(),
-                        chain_image_url: chain_image_url.clone(),
-                    },
-                )
-                .await?;
+                    Some(require_segment_chain_image_url(&stable_path, &work_dir, idx).await?);
+                let checkpoint = snapshot_long_video_checkpoint(
+                    &plan,
+                    &model,
+                    base_prompt,
+                    next_index,
+                    &segment_paths,
+                    &chain_image_url,
+                    &anchor_image_url,
+                );
+                write_long_video_checkpoint(&work_dir, &checkpoint).await?;
+                if let Some(record) = self.store.get(run_id) {
+                    sync_active_job(&record, Some(&checkpoint));
+                }
             }
         }
 
@@ -708,6 +740,7 @@ impl WorkflowExecutor {
             persist_concatenated_video(&output_path, "flowy", &model, plan.target_duration_secs)
                 .await?;
         clear_long_video_checkpoint(&work_dir).await;
+        clear_active_job(run_id);
 
         let task = VideoTaskMeta {
             local_id: format!("long-{run_id}"),
@@ -1128,6 +1161,31 @@ fn compute_resume_step_index(order: &[String], record: &WorkflowRunRecord) -> us
         return order.len().saturating_sub(1);
     }
     order.len()
+}
+
+fn snapshot_long_video_checkpoint(
+    plan: &crate::video_segment::SegmentPlan,
+    model: &str,
+    base_prompt: &str,
+    next_segment_index: usize,
+    segment_paths: &[std::path::PathBuf],
+    chain_image_url: &Option<String>,
+    anchor_image_url: &Option<String>,
+) -> LongVideoCheckpoint {
+    LongVideoCheckpoint {
+        target_duration_secs: plan.target_duration_secs,
+        max_clip_secs: plan.max_clip_secs,
+        segment_durations: plan.segment_durations.clone(),
+        model: model.to_string(),
+        base_prompt: base_prompt.to_string(),
+        next_segment_index,
+        completed_segments: segment_paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect(),
+        chain_image_url: chain_image_url.clone(),
+        anchor_image_url: anchor_image_url.clone(),
+    }
 }
 
 fn workflow_definition_for_record(

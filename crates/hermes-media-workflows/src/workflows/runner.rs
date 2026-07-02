@@ -107,6 +107,41 @@ impl WorkflowRunner {
         Ok(run_id)
     }
 
+    /// Resume async run; returns same `run_id`.
+    pub fn spawn_resume(self: &Arc<Self>, run_id: &str) -> Result<String, ToolError> {
+        let Some(record) = self.store.get(run_id) else {
+            return Err(ToolError::ExecutionFailed(format!(
+                "workflow run not found: {run_id}"
+            )));
+        };
+        if record.status == WorkflowRunStatus::Running
+            && !crate::long_video_active::record_is_resumable(&record, None)
+        {
+            return Ok(run_id.to_string());
+        }
+        if record.status == WorkflowRunStatus::Succeeded {
+            return Ok(run_id.to_string());
+        }
+
+        let spawn_id = run_id.to_string();
+        let register_id = spawn_id.clone();
+        let runner = Arc::clone(self);
+        let detached = DetachedToolProgressGuard::attach(&spawn_id);
+        let handle = tokio::spawn(async move {
+            let _detached = detached;
+            if let Err(err) = runner.executor.resume_run(&spawn_id).await {
+                if err.to_string().contains("cancelled") {
+                    tracing::info!(run_id = %spawn_id, "async workflow resume cancelled");
+                } else {
+                    tracing::error!(run_id = %spawn_id, error = %err, "async workflow resume failed");
+                }
+            }
+            runner.control.unregister(&spawn_id);
+        });
+        self.control.register(&register_id, handle.abort_handle());
+        Ok(register_id)
+    }
+
     /// Cancel a running workflow by `run_id`.
     pub async fn cancel_run(&self, run_id: &str) -> Result<(), ToolError> {
         let video_id = self.control.cancel(run_id);

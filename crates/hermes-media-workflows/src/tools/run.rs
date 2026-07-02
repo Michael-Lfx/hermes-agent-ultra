@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use hermes_core::{JsonSchema, ToolError, ToolHandler, ToolSchema, tool_schema};
 
 use crate::delivery::workflow_prompt_json;
+use crate::long_video_active::find_resumable_long_video_run;
 use crate::long_video_plan::resolve_target_duration;
 use crate::video_segment::route_long_video_template;
 use crate::workflows::WorkflowPlan;
@@ -74,6 +75,46 @@ impl ToolHandler for MediaWorkflowRunHandler {
             WorkflowPlan::from_definition(&def, inputs)
         };
 
+        let force_new = params
+            .get("force_new")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let target_duration = plan
+            .inputs
+            .get("duration")
+            .and_then(|v| v.as_u64())
+            .map(|d| d as u32)
+            .unwrap_or(self.runner.executor().services.media.video.default_duration);
+
+        if !force_new
+            && plan.workflow_id.starts_with("long_")
+            && let Some(prior) =
+                find_resumable_long_video_run(self.runner.store().as_ref(), Some(target_duration))
+        {
+            hermes_core::report_tool_progress(format!(
+                "检测到未完成的长视频任务（run_id={}），正在续传已保存的分段…",
+                prior.run_id
+            ));
+            let wait = params
+                .get("wait")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(!self.runner.async_execution_enabled());
+            if wait {
+                let record = self.runner.resume_run_sync(&prior.run_id).await?;
+                return Ok(serialize_run_result(&record));
+            }
+            let run_id = self.runner.spawn_resume(&prior.run_id)?;
+            return Ok(json!({
+                "success": true,
+                "run_id": run_id,
+                "status": "running",
+                "async": true,
+                "resumed": true,
+                "hint": "Poll media_workflow_status with run_id until status is succeeded or failed"
+            })
+            .to_string());
+        }
+
         let wait = params
             .get("wait")
             .and_then(|v| v.as_bool())
@@ -101,6 +142,13 @@ impl ToolHandler for MediaWorkflowRunHandler {
 
     fn schema(&self) -> ToolSchema {
         let mut props = IndexMap::new();
+        props.insert(
+            "force_new".into(),
+            json!({
+                "type": "boolean",
+                "description": "When true, start a fresh long-video run even if an incomplete run exists for the same duration."
+            }),
+        );
         props.insert(
             "resume_run_id".into(),
             json!({

@@ -9,14 +9,13 @@ use hermes_tools::tools::video::VideoGenerateRequest;
 use tracing::info;
 
 use super::flowy_video::FlowyVideoGenBackend;
+use crate::long_video_active::find_resumable_long_video_run;
 use crate::long_video_plan::{
     build_long_video_plan_from_request, resolve_target_duration, video_request_needs_long_pipeline,
     video_tool_response_from_workflow,
 };
 use crate::progress::report_media_progress;
-use crate::video_segment::{
-    find_resumable_long_video_run, long_video_work_dir, read_long_video_checkpoint,
-};
+use crate::video_segment::{long_video_work_dir, read_long_video_checkpoint};
 use crate::workflows::runner::WorkflowRunner;
 
 /// Flowy video backend that transparently runs long-video workflows for >10s targets.
@@ -46,7 +45,9 @@ impl VideoGenerateBackend for FlowyVideoGenerateRouter {
         }
 
         let target = resolve_target_duration(request.duration, &request.prompt, default_duration);
-        if let Some(prior) = find_resumable_long_video_run(self.runner.store().as_ref(), target) {
+        if let Some(prior) =
+            find_resumable_long_video_run(self.runner.store().as_ref(), Some(target))
+        {
             info!(
                 run_id = %prior.run_id,
                 target_duration = target,

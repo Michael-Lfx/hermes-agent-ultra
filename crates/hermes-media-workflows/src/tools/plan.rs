@@ -6,6 +6,7 @@ use hermes_core::{ToolError, ToolHandler};
 
 use crate::backends::FlowyMediaServices;
 use crate::credits::estimate_workflow_credits;
+use crate::long_video_active::read_active_job;
 use crate::platform::{default_aspect_for_platform, routing_rationale};
 use crate::preview::build_prompt_preview;
 use crate::video_segment::{
@@ -199,6 +200,12 @@ impl ToolHandler for MediaWorkflowPlanHandler {
             "media_workflow_run"
         };
 
+        let resumable_run_id = read_active_job()
+            .filter(|job| {
+                job.target_duration_secs == target_duration && job.workflow_id == template_id
+            })
+            .map(|job| job.run_id);
+
         Ok(json!({
             "plan": plan,
             "workflow_id": template_id,
@@ -214,8 +221,11 @@ impl ToolHandler for MediaWorkflowPlanHandler {
             "available_templates": list_builtin_templates(),
             "credits": credit_estimate.to_json(balance),
             "prompt_preview": prompt_preview,
+            "resumable_run_id": resumable_run_id,
             "next_tool": next_tool,
-            "hint": if preview_requested {
+            "hint": if resumable_run_id.is_some() {
+                "An incomplete long-video run exists — prefer media_workflow_run with resume_run_id (or same plan without force_new) instead of starting over."
+            } else if preview_requested {
                 "Show prompt_preview.user_prompt_block and credits to the user; run media_workflow_run only after they confirm."
             } else {
                 "Call media_workflow_run with { \"plan\": <plan above> } to execute. Prompts will be refined for rich visual detail and motion."

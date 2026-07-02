@@ -12,8 +12,6 @@ use hermes_core::ToolError;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
-use crate::workflows::store::{WorkflowRunRecord, WorkflowRunStatus, WorkflowRunStore};
-
 use crate::assets::persist_bytes;
 use crate::progress::report_media_progress;
 
@@ -127,14 +125,14 @@ pub fn segment_video_prompt(base: &str, segment_index: usize, total: usize) -> S
     let chinese = base.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
     if chinese {
         format!(
-            "{}。与上一段镜头无缝衔接，主体与场景连续，运动自然流畅（第 {}/{} 段）",
+            "{}。严格保持与上一段及参考图相同的主人公/角色外貌与服装，场景连续，镜头运动自然衔接（第 {}/{} 段）",
             base.trim(),
             segment_index + 1,
             total
         )
     } else {
         format!(
-            "{}. Seamless continuation from the previous clip; consistent subject and scene; smooth motion (part {}/{})",
+            "{}. Strictly preserve the exact same protagonist/character appearance and wardrobe as the previous clip and reference image; seamless scene continuation (part {}/{})",
             base.trim(),
             segment_index + 1,
             total
@@ -322,7 +320,10 @@ fn frame_extract_attempts(
     attempts
 }
 
-async fn run_ffmpeg_frame_extract(ffmpeg: &Path, args: &[std::ffi::OsString]) -> Result<(), ToolError> {
+async fn run_ffmpeg_frame_extract(
+    ffmpeg: &Path,
+    args: &[std::ffi::OsString],
+) -> Result<(), ToolError> {
     let output = Command::new(ffmpeg)
         .args(args)
         .stdout(Stdio::null())
@@ -347,27 +348,59 @@ fn frame_png_ready(path: &Path) -> bool {
             .is_some_and(|meta| meta.len() > 64)
 }
 
-/// Build a first-frame data URL for the next segment; returns None when extraction fails.
-pub async fn build_segment_chain_image_url(
+/// Build a first-frame data URL for the next segment (required for multi-clip consistency).
+pub async fn require_segment_chain_image_url(
     video_path: &Path,
     work_dir: &Path,
     seg_index: usize,
-) -> Result<Option<String>, ToolError> {
+) -> Result<String, ToolError> {
     let frame_path = work_dir.join(format!("seg_{seg_index}_last.png"));
     if frame_png_ready(&frame_path) {
-        return Ok(Some(png_file_to_data_url(&frame_path)?));
+        return png_file_to_data_url(&frame_path);
     }
-    match extract_last_frame_png(video_path, &frame_path).await {
-        Ok(()) => Ok(Some(png_file_to_data_url(&frame_path)?)),
-        Err(err) => {
-            tracing::warn!(
-                video = %video_path.display(),
-                error = %err,
-                "last-frame extract failed; next segment will continue without first_frame image"
-            );
-            Ok(None)
-        }
+    extract_last_frame_png(video_path, &frame_path).await?;
+    if !frame_png_ready(&frame_path) {
+        return Err(ToolError::ExecutionFailed(format!(
+            "last-frame png missing after ffmpeg extract: {}",
+            frame_path.display()
+        )));
     }
+    png_file_to_data_url(&frame_path)
+}
+
+/// Extract the opening frame of a clip as a character anchor for later segments.
+pub async fn require_segment_anchor_image_url(
+    video_path: &Path,
+    work_dir: &Path,
+) -> Result<String, ToolError> {
+    let frame_path = work_dir.join("seg_0_first.png");
+    if frame_png_ready(&frame_path) {
+        return png_file_to_data_url(&frame_path);
+    }
+    let ffmpeg = ensure_ffmpeg_ready().await?;
+    if !video_path.is_file() {
+        return Err(ToolError::ExecutionFailed(format!(
+            "segment video missing: {}",
+            video_path.display()
+        )));
+    }
+    let output = Command::new(&ffmpeg)
+        .args(["-hide_banner", "-loglevel", "error", "-ss", "0", "-i"])
+        .arg(video_path)
+        .args(["-vframes", "1", "-q:v", "2", "-y"])
+        .arg(&frame_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("ffmpeg extract first frame: {e}")))?;
+    if !output.status.success() || !frame_png_ready(&frame_path) {
+        return Err(ToolError::ExecutionFailed(format!(
+            "ffmpeg extract first frame failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    png_file_to_data_url(&frame_path)
 }
 
 pub fn local_image_path_to_data_url(path: &Path) -> Result<String, ToolError> {
@@ -518,6 +551,9 @@ pub struct LongVideoCheckpoint {
     pub completed_segments: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chain_image_url: Option<String>,
+    /// First-frame anchor from segment 0 — keeps character identity across clips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_image_url: Option<String>,
 }
 
 impl LongVideoCheckpoint {
@@ -574,38 +610,12 @@ pub fn checkpoint_matches_plan(
     checkpoint: &LongVideoCheckpoint,
     plan: &SegmentPlan,
     model: &str,
-    base_prompt: &str,
+    _base_prompt: &str,
 ) -> bool {
     checkpoint.target_duration_secs == plan.target_duration_secs
         && checkpoint.max_clip_secs == plan.max_clip_secs
         && checkpoint.segment_durations == plan.segment_durations
         && checkpoint.model == model
-        && checkpoint.base_prompt.trim() == base_prompt.trim()
-}
-
-/// Newest failed long-video run with a resumable on-disk checkpoint for the target duration.
-pub fn find_resumable_long_video_run(
-    store: &WorkflowRunStore,
-    target_duration_secs: u32,
-) -> Option<WorkflowRunRecord> {
-    store
-        .list_records_newest_first()
-        .into_iter()
-        .find(|record| record_is_resumable(record, target_duration_secs))
-}
-
-fn record_is_resumable(record: &WorkflowRunRecord, target_duration_secs: u32) -> bool {
-    if record.status != WorkflowRunStatus::Failed {
-        return false;
-    }
-    if !record.workflow_id.starts_with("long_") {
-        return false;
-    }
-    let work_dir = long_video_work_dir(&record.run_id);
-    let Some(cp) = read_long_video_checkpoint(&work_dir) else {
-        return false;
-    };
-    cp.target_duration_secs == target_duration_secs && !cp.is_complete()
 }
 
 pub fn long_video_resume_hint(run_id: &str, err: &ToolError) -> ToolError {
@@ -724,6 +734,7 @@ mod tests {
             next_segment_index: 1,
             completed_segments: vec!["/tmp/seg_0.mp4".into()],
             chain_image_url: None,
+            anchor_image_url: None,
         };
         assert!(!cp.is_complete());
         let plan = plan_segment_durations(20, 10);
@@ -741,6 +752,7 @@ mod tests {
             next_segment_index: 2,
             completed_segments: vec!["/a.mp4".into(), "/b.mp4".into()],
             chain_image_url: None,
+            anchor_image_url: None,
         };
         assert!(cp.is_complete());
     }
